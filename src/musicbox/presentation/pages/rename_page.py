@@ -192,15 +192,20 @@ class RenamePage(QWidget):
     # --- 設定 ---
     def _apply_settings(self) -> None:
         s = self._settings
+        # 套用期間全部擋信號，避免觸發 reload/persist 而以尚未套用的預設值覆蓋已存設定；
+        # __init__ 末端會顯式呼叫 _reload_from_folder() 做單次正確載入。
+        widgets = (self.dir_edit, self.sep_combo, self.mode_combo, self.pad_spin, self.normalize_check)
+        for w in widgets:
+            w.blockSignals(True)
         self.dir_edit.setText(s.rename_folder)
         sep_idx = next((i for i, (_, c) in enumerate(_SEPARATORS) if c == s.separator), 0)
         self.sep_combo.setCurrentIndex(sep_idx)
         mode_idx = next((i for i, (_, m) in enumerate(_MODES) if m == s.mode), 0)
         self.mode_combo.setCurrentIndex(mode_idx)
         self.pad_spin.setValue(s.padding)
-        self.normalize_check.blockSignals(True)
         self.normalize_check.setChecked(s.normalize)
-        self.normalize_check.blockSignals(False)
+        for w in widgets:
+            w.blockSignals(False)
 
     def _persist(self) -> None:
         self._settings.rename_folder = self.dir_edit.text().strip()
