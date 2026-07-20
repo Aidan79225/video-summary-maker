@@ -27,6 +27,7 @@ class JsonSettingsRepository:
             mode=self._parse_mode(data.get("mode"), default.mode),
             padding=data.get("padding", default.padding),
             normalize=data.get("normalize", default.normalize),
+            write_tags=data.get("write_tags", default.write_tags),
         )
 
     def save(self, settings: Settings) -> None:
@@ -39,6 +40,7 @@ class JsonSettingsRepository:
             "mode": settings.mode.value,
             "padding": settings.padding,
             "normalize": settings.normalize,
+            "write_tags": settings.write_tags,
         }
         os.makedirs(os.path.dirname(os.path.abspath(self._path)), exist_ok=True)
         with open(self._path, "w", encoding="utf-8") as f:
