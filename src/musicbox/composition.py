@@ -6,6 +6,7 @@ import os
 from .domain.entities import Settings
 from .infrastructure.filesystem_renamer import FilesystemGateway
 from .infrastructure.settings_repository import JsonSettingsRepository
+from .infrastructure.tags import MutagenTagGateway
 from .infrastructure.ytdlp_downloader import YtDlpDownloader
 from .presentation.main_window import MainWindow
 from .presentation.pages.download_page import DownloadPage
@@ -39,7 +40,7 @@ def build_main_window() -> MainWindow:
     # usecases
     download_uc = DownloadVideoUseCase(downloader)
     build_uc = BuildRenamePlanUseCase(gateway)
-    apply_uc = ApplyRenamePlanUseCase(gateway)
+    apply_uc = ApplyRenamePlanUseCase(gateway, MutagenTagGateway())
 
     # presentation
     download_page = DownloadPage(download_uc, settings, save)
