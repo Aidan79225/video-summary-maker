@@ -11,7 +11,7 @@ from ..domain.entities import (
     RenameOptions,
     RenamePlan,
 )
-from ..domain.ports import FileSystemGateway, ProgressCallback
+from ..domain.ports import AudioTagGateway, FileSystemGateway, ProgressCallback
 
 # 開頭「數字＋分隔符」：數字後可接空格、-、.、_ 的任意組合
 _PREFIX_RE = re.compile(r"^\s*(\d+)\s*[-._]?\s*")
@@ -190,33 +190,56 @@ class BuildRenamePlanUseCase:
 
 
 class ApplyRenamePlanUseCase:
-    """實際套用改名，採兩階段避免與現有檔名衝突而覆蓋。"""
+    """實際套用改名，採兩階段避免與現有檔名衝突而覆蓋；可選一併寫入 ID3 標題。"""
 
-    def __init__(self, gateway: FileSystemGateway):
+    def __init__(self, gateway: FileSystemGateway, tag_gateway: AudioTagGateway | None = None):
         self._gateway = gateway
+        self._tag_gateway = tag_gateway
 
-    def execute(self, plan: RenamePlan, progress: ProgressCallback | None = None) -> int:
+    def execute(
+        self,
+        plan: RenamePlan,
+        progress: ProgressCallback | None = None,
+        write_tags: bool = False,
+    ) -> int:
         cb: ProgressCallback = progress or (lambda frac, status: None)
         todo = [it for it in plan.items if it.changed]
-        if not todo:
+        do_tags = write_tags and self._tag_gateway is not None
+
+        if not todo and not do_tags:
             cb(1.0, "沒有需要改名的檔案")
             return 0
 
-        total = 2 * len(todo)
+        total = 2 * len(todo) + (len(plan.items) if do_tags else 0)
+        step = 0
+
         # 第一階段：全部改成獨一無二的暫存名
         temps: list[tuple[str, str]] = []
-        for idx, it in enumerate(todo):
-            tmp = f".__rename_tmp_{idx}__{it.new_name}"
+        for it in todo:
+            tmp = f".__rename_tmp_{len(temps)}__{it.new_name}"
             self._gateway.rename(plan.folder, it.old_name, tmp)
             temps.append((tmp, it.new_name))
-            cb((idx + 1) / total, f"準備 {it.old_name}")
+            step += 1
+            cb(step / total, f"準備 {it.old_name}")
 
         # 第二階段：暫存名改成正式新名
-        for idx, (tmp, new) in enumerate(temps):
+        for tmp, new in temps:
             self._gateway.rename(plan.folder, tmp, new)
-            cb((len(todo) + idx + 1) / total, f"改名 {new}")
+            step += 1
+            cb(step / total, f"改名 {new}")
 
-        cb(1.0, f"完成，已改名 {len(todo)} 個檔案")
+        # 第三階段：寫入 ID3 標題（清單每個檔，title = 新檔名去副檔名）
+        if do_tags:
+            for it in plan.items:
+                title = os.path.splitext(it.new_name)[0]
+                self._tag_gateway.write_title(os.path.join(plan.folder, it.new_name), title)
+                step += 1
+                cb(step / total, f"寫入標題 {it.new_name}")
+
+        if do_tags:
+            cb(1.0, f"完成，已改名 {len(todo)} 個檔案，已寫入 {len(plan.items)} 個標題")
+        else:
+            cb(1.0, f"完成，已改名 {len(todo)} 個檔案")
         return len(todo)
 
 

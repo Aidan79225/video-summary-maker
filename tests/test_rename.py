@@ -1,6 +1,8 @@
 """重新編號 use case 的單元測試。"""
 from __future__ import annotations
 
+import os
+
 from musicbox.domain.entities import RenameMode, RenameOptions
 from musicbox.usecases.rename_songs import (
     ApplyRenamePlanUseCase,
@@ -8,7 +10,7 @@ from musicbox.usecases.rename_songs import (
     build_undo_plan,
 )
 
-from .fakes import FakeGateway
+from .fakes import FakeGateway, FakeTagGateway
 
 FOLDER = "/music"
 
@@ -125,3 +127,58 @@ def test_has_illegal_chars():
     from musicbox.usecases.rename_songs import has_illegal_chars
     assert has_illegal_chars("a:b") is True
     assert has_illegal_chars("正常名稱") is False
+
+
+def test_apply_writes_tags_for_all_items_when_enabled():
+    gw = FakeGateway({FOLDER: ["06-b.mp3", "02-a.mp3"]})
+    tags = FakeTagGateway()
+    build = BuildRenamePlanUseCase(gw)
+    apply = ApplyRenamePlanUseCase(gw, tags)
+    plan = build.execute(FOLDER, RenameOptions())      # 兩檔都會改名
+    count = apply.execute(plan, write_tags=True)
+    assert count == 2
+    assert set(tags.writes) == {
+        (os.path.join(FOLDER, "01-a.mp3"), "01-a"),
+        (os.path.join(FOLDER, "02-b.mp3"), "02-b"),
+    }
+
+
+def test_apply_writes_tags_without_renaming():
+    gw = FakeGateway({FOLDER: ["01-a.mp3", "02-b.mp3"]})   # 已是正確編號
+    tags = FakeTagGateway()
+    build = BuildRenamePlanUseCase(gw)
+    apply = ApplyRenamePlanUseCase(gw, tags)
+    plan = build.execute(FOLDER, RenameOptions())
+    count = apply.execute(plan, write_tags=True)
+    assert count == 0
+    assert gw.names(FOLDER) == {"01-a.mp3", "02-b.mp3"}    # 沒改名
+    assert set(tags.writes) == {
+        (os.path.join(FOLDER, "01-a.mp3"), "01-a"),
+        (os.path.join(FOLDER, "02-b.mp3"), "02-b"),
+    }
+
+
+def test_apply_does_not_write_tags_when_disabled():
+    gw = FakeGateway({FOLDER: ["06-b.mp3", "02-a.mp3"]})
+    tags = FakeTagGateway()
+    build = BuildRenamePlanUseCase(gw)
+    apply = ApplyRenamePlanUseCase(gw, tags)
+    plan = build.execute(FOLDER, RenameOptions())
+    apply.execute(plan, write_tags=False)
+    assert tags.writes == []
+
+
+def test_undo_writes_tags_with_old_names():
+    gw = FakeGateway({FOLDER: ["06-b.mp3", "02-a.mp3"]})
+    tags = FakeTagGateway()
+    build = BuildRenamePlanUseCase(gw)
+    apply = ApplyRenamePlanUseCase(gw, tags)
+    plan = build.execute(FOLDER, RenameOptions())
+    apply.execute(plan, write_tags=True)
+    tags.writes.clear()
+    apply.execute(build_undo_plan(plan), write_tags=True)  # 復原
+    assert gw.names(FOLDER) == {"06-b.mp3", "02-a.mp3"}
+    assert set(tags.writes) == {
+        (os.path.join(FOLDER, "06-b.mp3"), "06-b"),
+        (os.path.join(FOLDER, "02-a.mp3"), "02-a"),
+    }
