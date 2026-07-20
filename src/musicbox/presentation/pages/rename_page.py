@@ -70,6 +70,9 @@ class RenamePage(QWidget):
         self._undo_plan: RenamePlan | None = None
         self._worker: RenameApplyWorker | None = None
         self._undoing = False
+        self._applied_write_tags = False    # 記住上次套用時是否寫標籤，供復原沿用
+        self._invalid_count = 0
+        self._changed_count = 0
 
         self._player = None
         self._audio = None
@@ -119,6 +122,9 @@ class RenamePage(QWidget):
         self.normalize_check = QCheckBox("正規化歌名")
         self.normalize_check.toggled.connect(self._on_normalize_toggled)
 
+        self.write_tags_check = QCheckBox("同時寫入 ID3 標題")
+        self.write_tags_check.toggled.connect(self._on_write_tags_toggled)
+
         opt_row.addWidget(QLabel("分隔符"))
         opt_row.addWidget(self.sep_combo)
         opt_row.addSpacing(12)
@@ -129,6 +135,8 @@ class RenamePage(QWidget):
         opt_row.addWidget(self.pad_spin)
         opt_row.addSpacing(12)
         opt_row.addWidget(self.normalize_check)
+        opt_row.addSpacing(12)
+        opt_row.addWidget(self.write_tags_check)
         opt_row.addStretch(1)
         layout.addLayout(opt_row)
 
@@ -196,7 +204,8 @@ class RenamePage(QWidget):
         s = self._settings
         # 套用期間全部擋信號，避免觸發 reload/persist 而以尚未套用的預設值覆蓋已存設定；
         # __init__ 末端會顯式呼叫 _reload_from_folder() 做單次正確載入。
-        widgets = (self.dir_edit, self.sep_combo, self.mode_combo, self.pad_spin, self.normalize_check)
+        widgets = (self.dir_edit, self.sep_combo, self.mode_combo, self.pad_spin,
+                   self.normalize_check, self.write_tags_check)
         for w in widgets:
             w.blockSignals(True)
         self.dir_edit.setText(s.rename_folder)
@@ -206,6 +215,7 @@ class RenamePage(QWidget):
         self.mode_combo.setCurrentIndex(mode_idx)
         self.pad_spin.setValue(s.padding)
         self.normalize_check.setChecked(s.normalize)
+        self.write_tags_check.setChecked(s.write_tags)
         for w in widgets:
             w.blockSignals(False)
 
@@ -215,6 +225,7 @@ class RenamePage(QWidget):
         self._settings.mode = _MODES[self.mode_combo.currentIndex()][1]
         self._settings.padding = self.pad_spin.value()
         self._settings.normalize = self.normalize_check.isChecked()
+        self._settings.write_tags = self.write_tags_check.isChecked()
         self._save()
 
     def _current_options(self) -> RenameOptions:
@@ -309,13 +320,25 @@ class RenamePage(QWidget):
             self.table.setItem(row, 2, new_cell)
         self._loading = False
 
-        changed = self._plan.changed_count if self._plan else 0
+        self._changed_count = self._plan.changed_count if self._plan else 0
+        self._invalid_count = invalid
         if invalid:
             self.summary.setText(f"共 {len(items)} 個檔案；有 {invalid} 列名稱空白、重複或含非法字元，請修正後再套用。")
-            self.apply_btn.setEnabled(False)
         else:
-            self.summary.setText(f"共 {len(items)} 個檔案，其中 {changed} 個需要改名。")
-            self.apply_btn.setEnabled(changed > 0)
+            self.summary.setText(f"共 {len(items)} 個檔案，其中 {self._changed_count} 個需要改名。")
+        self._refresh_apply_enabled()
+
+    def _refresh_apply_enabled(self) -> None:
+        items = self._plan.items if self._plan else ()
+        if self._invalid_count > 0:
+            self.apply_btn.setEnabled(False)
+            return
+        write_tags = self.write_tags_check.isChecked()
+        self.apply_btn.setEnabled(self._changed_count > 0 or (write_tags and len(items) > 0))
+
+    def _on_write_tags_toggled(self) -> None:
+        self._refresh_apply_enabled()
+        self._persist()
 
     def _on_item_changed(self, item: QTableWidgetItem) -> None:
         """使用者在「歌名」欄打字：更新歌名、標記手改（清空則還原自動）。"""
@@ -377,23 +400,27 @@ class RenamePage(QWidget):
             self.dir_edit.setText(chosen)
 
     def _apply(self) -> None:
-        if not self._plan or self._plan.changed_count == 0:
+        if not self._plan:
+            return
+        write_tags = self.write_tags_check.isChecked()
+        if self._plan.changed_count == 0 and not write_tags:
             return
         self._applied = self._plan
+        self._applied_write_tags = write_tags
         self._undoing = False
-        self._run_worker(self._plan, "改名中…")
+        self._run_worker(self._plan, write_tags, "改名中…")
 
     def _undo(self) -> None:
         if not self._undo_plan or not self._undo_plan.items:
             return
         self._undoing = True
-        self._run_worker(self._undo_plan, "復原中…")
+        self._run_worker(self._undo_plan, self._applied_write_tags, "復原中…")
 
-    def _run_worker(self, plan: RenamePlan, busy_text: str) -> None:
+    def _run_worker(self, plan: RenamePlan, write_tags: bool, busy_text: str) -> None:
         self._set_busy(True)
         self.progress.setValue(0)
         self.status.setText(busy_text)
-        self._worker = RenameApplyWorker(self._apply_usecase, plan)
+        self._worker = RenameApplyWorker(self._apply_usecase, plan, write_tags)
         self._worker.progress.connect(self._on_progress)
         self._worker.finished_ok.connect(self._on_done)
         self._worker.failed.connect(self._on_fail)
