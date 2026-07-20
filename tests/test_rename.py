@@ -182,3 +182,18 @@ def test_undo_writes_tags_with_old_names():
         (os.path.join(FOLDER, "06-b.mp3"), "06-b"),
         (os.path.join(FOLDER, "02-a.mp3"), "02-a"),
     }
+
+
+def test_undo_writes_tags_only_for_files_that_changed():
+    # 一改一不改：01-b 已正確不動、03-a → 02-a。復原計畫只含有變動的檔，
+    # 故復原時只寫回 03-a 的標題，未變動的 01-b 不再被寫。
+    gw = FakeGateway({FOLDER: ["03-a.mp3", "01-b.mp3"]})
+    tags = FakeTagGateway()
+    build = BuildRenamePlanUseCase(gw)
+    apply = ApplyRenamePlanUseCase(gw, tags)
+    plan = build.execute(FOLDER, RenameOptions())
+    apply.execute(plan, write_tags=True)
+    tags.writes.clear()
+    apply.execute(build_undo_plan(plan), write_tags=True)
+    assert set(tags.writes) == {(os.path.join(FOLDER, "03-a.mp3"), "03-a")}
+    assert gw.names(FOLDER) == {"03-a.mp3", "01-b.mp3"}

@@ -434,11 +434,19 @@ class RenamePage(QWidget):
     def _on_done(self, count: int) -> None:
         self.progress.setValue(100)
         if self._undoing:
-            self.status.setText(f"✅ 已復原 {count} 個檔案。")
+            if self._applied_write_tags:
+                self.status.setText(f"✅ 已復原 {count} 個檔案，標題已改回。")
+            else:
+                self.status.setText(f"✅ 已復原 {count} 個檔案。")
             self._undo_plan = None
             self.undo_btn.setEnabled(False)
         else:
-            self.status.setText(f"✅ 完成，已改名 {count} 個檔案。")
+            if self._applied_write_tags and self._applied:
+                self.status.setText(
+                    f"✅ 完成，已改名 {count} 個檔案，已寫入 {len(self._applied.items)} 個標題。"
+                )
+            else:
+                self.status.setText(f"✅ 完成，已改名 {count} 個檔案。")
             self._undo_plan = build_undo_plan(self._applied) if self._applied else None
             self.undo_btn.setEnabled(bool(self._undo_plan and self._undo_plan.items))
         self._set_busy(False)
