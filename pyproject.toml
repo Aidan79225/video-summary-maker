@@ -6,6 +6,7 @@ readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
     "imageio-ffmpeg>=0.6.0",
+    "opencc-python-reimplemented>=0.1.7",
     "pyside6>=6.11.1",
     "yt-dlp>=2026.7.4",
 ]

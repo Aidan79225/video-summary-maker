@@ -30,6 +30,96 @@ def _clean_title(stem: str) -> str:
     return _PREFIX_RE.sub("", stem, count=1)
 
 
+# --- 歌名正規化 ---
+
+# 已知雜訊關鍵字。拉丁詞：整個括號內容的每個詞都是雜訊詞才移除。
+_LATIN_NOISE = {
+    "official", "music", "video", "audio", "lyric", "lyrics",
+    "mv", "m/v", "hd", "hq", "4k",
+}
+# CJK 雜訊詞：括號內容包含即移除。
+_CJK_NOISE = ("高畫質", "中文字幕", "歌詞", "動態歌詞")
+
+# 括號群組：() [] 【】 {}（全形括號會先被轉成半形）
+_BRACKET_RE = re.compile(r"[(\[【{]([^()\[\]【】{}]*)[)\]】}]")
+# Windows 非法檔名字元與控制字元
+_ILLEGAL_RE = re.compile(r'[\\/:*?"<>|\x00-\x1f]')
+
+# OpenCC 簡轉繁：延遲載入，缺套件時降級。
+_opencc_converter = None
+_opencc_tried = False
+OPENCC_AVAILABLE = False
+
+
+def _fullwidth_to_halfwidth(s: str) -> str:
+    """全形英數與標點轉半形，全形空格轉半形空格。"""
+    out = []
+    for ch in s:
+        code = ord(ch)
+        if code == 0x3000:
+            out.append(" ")
+        elif 0xFF01 <= code <= 0xFF5E:
+            out.append(chr(code - 0xFEE0))
+        else:
+            out.append(ch)
+    return "".join(out)
+
+
+def _is_noise_bracket(inner: str) -> bool:
+    t = inner.strip().lower()
+    if not t:
+        return False
+    for kw in _CJK_NOISE:
+        if kw in t:
+            return True
+    tokens = re.findall(r"[a-z0-9/]+", t)
+    return bool(tokens) and all(tok in _LATIN_NOISE for tok in tokens)
+
+
+def _strip_noise_brackets(s: str) -> str:
+    return _BRACKET_RE.sub(lambda m: "" if _is_noise_bracket(m.group(1)) else m.group(0), s)
+
+
+def _to_traditional(s: str) -> str:
+    """簡體轉繁體（台灣慣用詞）；OpenCC 不可用時原樣回傳。"""
+    global _opencc_converter, _opencc_tried, OPENCC_AVAILABLE
+    if not _opencc_tried:
+        _opencc_tried = True
+        try:
+            from opencc import OpenCC
+            _opencc_converter = OpenCC("s2twp")
+            OPENCC_AVAILABLE = True
+        except Exception:  # noqa: BLE001 缺套件或初始化失敗都降級
+            _opencc_converter = None
+            OPENCC_AVAILABLE = False
+    if _opencc_converter is None:
+        return s
+    try:
+        return _opencc_converter.convert(s)
+    except Exception:  # noqa: BLE001
+        return s
+
+
+def normalize_title(title: str) -> str:
+    """依序：全形轉半形 → 移除已知雜訊括號 → 簡轉繁 → 去非法字元 → 整理空白。"""
+    s = _fullwidth_to_halfwidth(title)
+    s = _strip_noise_brackets(s)
+    s = _to_traditional(s)
+    s = _ILLEGAL_RE.sub("", s)
+    s = s.replace("_", " ")
+    s = re.sub(r"\s+", " ", s).strip()
+    return s
+
+
+def derive_title(old_name: str, normalize: bool) -> str:
+    """由舊檔名推導歌名：去掉開頭舊號碼，視開關套用正規化。"""
+    stem = os.path.splitext(old_name)[0]
+    title = _clean_title(stem)
+    if normalize:
+        title = normalize_title(title)
+    return title
+
+
 def build_undo_plan(applied: RenamePlan) -> RenamePlan:
     """把已套用的計畫反轉，用來復原（new_name 改回 old_name）。"""
     reversed_items = tuple(
