@@ -46,3 +46,12 @@ def test_partial_file_falls_back_per_field(tmp_path):
     assert loaded.padding == 4
     assert loaded.output_dir == "/music"  # 其餘沿用預設
     assert loaded.fmt == DownloadFormat.MP4
+
+
+def test_normalize_defaults_false_and_round_trips(tmp_path):
+    path = str(tmp_path / "settings.json")
+    repo = JsonSettingsRepository(path)
+    assert _default().normalize is False           # 預設關閉
+    saved = Settings(output_dir="/dl", rename_folder="/songs", normalize=True)
+    repo.save(saved)
+    assert repo.load(_default()).normalize is True  # 存得回、讀得到

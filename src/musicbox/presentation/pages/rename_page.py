@@ -4,9 +4,10 @@ from __future__ import annotations
 import os
 from collections.abc import Callable
 
-from PySide6.QtCore import QUrl
+from PySide6.QtCore import Qt, QUrl
 from PySide6.QtGui import QBrush, QColor
 from PySide6.QtWidgets import (
+    QCheckBox,
     QComboBox,
     QFileDialog,
     QHBoxLayout,
@@ -27,7 +28,11 @@ from ...usecases.rename_songs import (
     ApplyRenamePlanUseCase,
     BuildRenamePlanUseCase,
     build_undo_plan,
+    derive_title,
+    duplicate_new_names,
+    has_illegal_chars,
 )
+from ...usecases import rename_songs as _rename_songs
 from ..workers import RenameApplyWorker
 
 try:
@@ -56,6 +61,10 @@ class RenamePage(QWidget):
         self._save = save
 
         self._order: list[str] = []
+        self._titles: dict[str, str] = {}   # old_name → 目前歌名
+        self._manual: set[str] = set()      # 被手動編輯過的 old_name
+        self._loading = False               # 程式化更新表格時避免 itemChanged 遞迴
+        self._opencc_hint_shown = False   # 只在缺 OpenCC 時提示一次
         self._plan: RenamePlan | None = None
         self._applied: RenamePlan | None = None
         self._undo_plan: RenamePlan | None = None
@@ -107,6 +116,9 @@ class RenamePage(QWidget):
         self.pad_spin.setRange(1, 5)
         self.pad_spin.valueChanged.connect(self._on_option_changed)
 
+        self.normalize_check = QCheckBox("正規化歌名")
+        self.normalize_check.toggled.connect(self._on_normalize_toggled)
+
         opt_row.addWidget(QLabel("分隔符"))
         opt_row.addWidget(self.sep_combo)
         opt_row.addSpacing(12)
@@ -115,17 +127,24 @@ class RenamePage(QWidget):
         opt_row.addSpacing(12)
         opt_row.addWidget(QLabel("補零位數"))
         opt_row.addWidget(self.pad_spin)
+        opt_row.addSpacing(12)
+        opt_row.addWidget(self.normalize_check)
         opt_row.addStretch(1)
         layout.addLayout(opt_row)
 
         # 表格 + 右側按鈕列
         table_row = QHBoxLayout()
-        self.table = QTableWidget(0, 2)
-        self.table.setHorizontalHeaderLabels(["舊檔名", "新檔名"])
+        self.table = QTableWidget(0, 3)
+        self.table.setHorizontalHeaderLabels(["舊檔名", "歌名", "新檔名"])
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         self.table.verticalHeader().setVisible(False)
-        self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.table.setEditTriggers(
+            QTableWidget.EditTrigger.DoubleClicked
+            | QTableWidget.EditTrigger.EditKeyPressed
+            | QTableWidget.EditTrigger.AnyKeyPressed
+        )
         self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self.table.itemChanged.connect(self._on_item_changed)
         table_row.addWidget(self.table, 1)
 
         side = QVBoxLayout()
@@ -175,18 +194,27 @@ class RenamePage(QWidget):
     # --- 設定 ---
     def _apply_settings(self) -> None:
         s = self._settings
+        # 套用期間全部擋信號，避免觸發 reload/persist 而以尚未套用的預設值覆蓋已存設定；
+        # __init__ 末端會顯式呼叫 _reload_from_folder() 做單次正確載入。
+        widgets = (self.dir_edit, self.sep_combo, self.mode_combo, self.pad_spin, self.normalize_check)
+        for w in widgets:
+            w.blockSignals(True)
         self.dir_edit.setText(s.rename_folder)
         sep_idx = next((i for i, (_, c) in enumerate(_SEPARATORS) if c == s.separator), 0)
         self.sep_combo.setCurrentIndex(sep_idx)
         mode_idx = next((i for i, (_, m) in enumerate(_MODES) if m == s.mode), 0)
         self.mode_combo.setCurrentIndex(mode_idx)
         self.pad_spin.setValue(s.padding)
+        self.normalize_check.setChecked(s.normalize)
+        for w in widgets:
+            w.blockSignals(False)
 
     def _persist(self) -> None:
         self._settings.rename_folder = self.dir_edit.text().strip()
         self._settings.separator = _SEPARATORS[self.sep_combo.currentIndex()][1]
         self._settings.mode = _MODES[self.mode_combo.currentIndex()][1]
         self._settings.padding = self.pad_spin.value()
+        self._settings.normalize = self.normalize_check.isChecked()
         self._save()
 
     def _current_options(self) -> RenameOptions:
@@ -196,47 +224,115 @@ class RenamePage(QWidget):
 
     # --- 預覽 ---
     def _reload_from_folder(self) -> None:
-        """資料夾改變：重新讀取並依數字排序，重設順序。"""
+        """資料夾改變：重讀、依數字排序、重設歌名與手改狀態。"""
         folder = self.dir_edit.text().strip()
         try:
             plan = self._build_usecase.execute(folder, self._current_options())
         except Exception as e:  # noqa: BLE001
             self._order = []
+            self._titles = {}
+            self._manual = set()
             self._plan = None
+            self._loading = True
             self.table.setRowCount(0)
+            self._loading = False
             self.summary.setText(f"無法讀取資料夾：{e}")
             self.apply_btn.setEnabled(False)
             self._persist()
             return
         self._order = [it.old_name for it in plan.items]
+        self._manual = set()
+        on = self.normalize_check.isChecked()
+        self._titles = {old: derive_title(old, on) for old in self._order}
         self._recompute()
         self._persist()
 
     def _on_option_changed(self) -> None:
-        """設定改變：保留目前（可能手動調整過的）順序，只重算名稱。"""
+        """分隔符／模式／補零改變：保留順序與歌名，只重算號碼。"""
+        self._recompute()
+        self._persist()
+
+    def _on_normalize_toggled(self) -> None:
+        """切換正規化：只重算非手改檔案的歌名，手改保留。"""
+        on = self.normalize_check.isChecked()
+        for old in self._order:
+            if old not in self._manual:
+                self._titles[old] = derive_title(old, on)
         self._recompute()
         self._persist()
 
     def _recompute(self) -> None:
         folder = self.dir_edit.text().strip()
-        self._plan = self._build_usecase.plan_from_order(folder, self._order, self._current_options())
+        ordered = [(old, self._titles.get(old, "")) for old in self._order]
+        self._plan = self._build_usecase.plan_from_titles(folder, ordered, self._current_options())
         self._render()
+        self._maybe_opencc_hint()
+
+    def _maybe_opencc_hint(self) -> None:
+        """正規化開啟但 OpenCC 不可用時，提示一次（其餘規則照常）。"""
+        if (
+            self.normalize_check.isChecked()
+            and not _rename_songs.OPENCC_AVAILABLE
+            and not self._opencc_hint_shown
+        ):
+            self._opencc_hint_shown = True
+            self.status.setText("提示：未啟用簡繁轉換（缺 OpenCC），其餘正規化規則照常運作。")
 
     def _render(self) -> None:
+        self._loading = True
         items = self._plan.items if self._plan else ()
-        self.table.setRowCount(len(items))
+        dups = duplicate_new_names(self._plan) if self._plan else set()
         gray = QBrush(QColor(150, 150, 150))
+        red = QBrush(QColor(220, 80, 80))
+        self.table.setRowCount(len(items))
+        invalid = 0
         for row, it in enumerate(items):
+            old = self._order[row]
+            title = self._titles.get(old, "")
             old_cell = QTableWidgetItem(it.old_name)
+            old_cell.setFlags(old_cell.flags() & ~Qt.ItemFlag.ItemIsEditable)
+            title_cell = QTableWidgetItem(title)  # 預設含 ItemIsEditable → 可編輯
             new_cell = QTableWidgetItem(it.new_name)
-            if not it.changed:
+            new_cell.setFlags(new_cell.flags() & ~Qt.ItemFlag.ItemIsEditable)
+
+            bad = not title.strip() or has_illegal_chars(title) or it.new_name in dups
+            if bad:
+                invalid += 1
+                for c in (old_cell, title_cell, new_cell):
+                    c.setForeground(red)
+            elif not it.changed:
                 old_cell.setForeground(gray)
                 new_cell.setForeground(gray)
+
             self.table.setItem(row, 0, old_cell)
-            self.table.setItem(row, 1, new_cell)
+            self.table.setItem(row, 1, title_cell)
+            self.table.setItem(row, 2, new_cell)
+        self._loading = False
+
         changed = self._plan.changed_count if self._plan else 0
-        self.summary.setText(f"共 {len(items)} 個檔案，其中 {changed} 個需要改名。")
-        self.apply_btn.setEnabled(changed > 0)
+        if invalid:
+            self.summary.setText(f"共 {len(items)} 個檔案；有 {invalid} 列名稱空白、重複或含非法字元，請修正後再套用。")
+            self.apply_btn.setEnabled(False)
+        else:
+            self.summary.setText(f"共 {len(items)} 個檔案，其中 {changed} 個需要改名。")
+            self.apply_btn.setEnabled(changed > 0)
+
+    def _on_item_changed(self, item: QTableWidgetItem) -> None:
+        """使用者在「歌名」欄打字：更新歌名、標記手改（清空則還原自動）。"""
+        if self._loading or item.column() != 1:
+            return
+        row = item.row()
+        if row < 0 or row >= len(self._order):
+            return
+        old = self._order[row]
+        text = item.text().strip()
+        if text:
+            self._titles[old] = text
+            self._manual.add(old)
+        else:
+            self._manual.discard(old)
+            self._titles[old] = derive_title(old, self.normalize_check.isChecked())
+        self._recompute()
 
     # --- 手動排序 ---
     def _move(self, delta: int) -> None:

@@ -92,3 +92,36 @@ def test_apply_then_undo_restores_original_names():
     undo = build_undo_plan(plan)
     apply.execute(undo)
     assert gw.names(FOLDER) == {"06-b.mp3", "02-a.mp3"}
+
+
+def test_plan_from_titles_numbers_and_assembles():
+    gw = FakeGateway({FOLDER: []})
+    uc = BuildRenamePlanUseCase(gw)
+    ordered = [("x.mp3", "告白氣球"), ("y.mp3", "晴天")]
+    plan = uc.plan_from_titles(FOLDER, ordered, RenameOptions())
+    assert _mapping(plan) == {"x.mp3": "01-告白氣球.mp3", "y.mp3": "02-晴天.mp3"}
+
+
+def test_plan_from_titles_keep_mode_uses_original_number():
+    gw = FakeGateway({FOLDER: []})
+    uc = BuildRenamePlanUseCase(gw)
+    ordered = [("05-a.mp3", "Alpha")]
+    plan = uc.plan_from_titles(FOLDER, ordered, RenameOptions(mode=RenameMode.KEEP))
+    assert _mapping(plan) == {"05-a.mp3": "05-Alpha.mp3"}
+
+
+def test_duplicate_new_names_detects_collisions():
+    from musicbox.domain.entities import RenameItem, RenamePlan
+    from musicbox.usecases.rename_songs import duplicate_new_names
+    plan = RenamePlan(folder=FOLDER, items=(
+        RenameItem("a.mp3", "01-x.mp3"),
+        RenameItem("b.mp3", "01-x.mp3"),
+        RenameItem("c.mp3", "02-y.mp3"),
+    ))
+    assert duplicate_new_names(plan) == {"01-x.mp3"}
+
+
+def test_has_illegal_chars():
+    from musicbox.usecases.rename_songs import has_illegal_chars
+    assert has_illegal_chars("a:b") is True
+    assert has_illegal_chars("正常名稱") is False
