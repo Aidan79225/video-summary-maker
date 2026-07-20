@@ -162,6 +162,22 @@ class BuildRenamePlanUseCase:
             items.append(RenameItem(old_name=old, new_name=new))
         return RenamePlan(folder=folder, items=tuple(items))
 
+    def plan_from_titles(
+        self,
+        folder: str,
+        ordered: Sequence[tuple[str, str]],
+        options: RenameOptions,
+    ) -> RenamePlan:
+        """依給定的 (舊檔名, 歌名) 序列組出計畫；歌名已由呼叫端決定，不再 clean。"""
+        width = max(options.padding, len(str(len(ordered))))
+        items: list[RenameItem] = []
+        for i, (old, title) in enumerate(ordered, start=1):
+            stem, ext = os.path.splitext(old)
+            num = self._number_for(stem, i, width, options.mode)
+            new = f"{num}{options.separator}{title}{ext}"
+            items.append(RenameItem(old_name=old, new_name=new))
+        return RenamePlan(folder=folder, items=tuple(items))
+
     @staticmethod
     def _number_for(stem: str, index: int, width: int, mode: RenameMode) -> str:
         if mode == RenameMode.RENUMBER:
@@ -202,3 +218,19 @@ class ApplyRenamePlanUseCase:
 
         cb(1.0, f"完成，已改名 {len(todo)} 個檔案")
         return len(todo)
+
+
+def duplicate_new_names(plan: RenamePlan) -> set[str]:
+    """找出計畫中重複的新檔名（手動編輯後可能撞名）。"""
+    seen: set[str] = set()
+    dups: set[str] = set()
+    for it in plan.items:
+        if it.new_name in seen:
+            dups.add(it.new_name)
+        seen.add(it.new_name)
+    return dups
+
+
+def has_illegal_chars(title: str) -> bool:
+    """歌名是否含 Windows 非法檔名字元或控制字元。"""
+    return bool(_ILLEGAL_RE.search(title))
