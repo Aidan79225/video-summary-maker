@@ -32,6 +32,7 @@ from ...usecases.rename_songs import (
     duplicate_new_names,
     has_illegal_chars,
 )
+from ...usecases import rename_songs as _rename_songs
 from ..workers import RenameApplyWorker
 
 try:
@@ -63,6 +64,7 @@ class RenamePage(QWidget):
         self._titles: dict[str, str] = {}   # old_name → 目前歌名
         self._manual: set[str] = set()      # 被手動編輯過的 old_name
         self._loading = False               # 程式化更新表格時避免 itemChanged 遞迴
+        self._opencc_hint_shown = False   # 只在缺 OpenCC 時提示一次
         self._plan: RenamePlan | None = None
         self._applied: RenamePlan | None = None
         self._undo_plan: RenamePlan | None = None
@@ -264,6 +266,17 @@ class RenamePage(QWidget):
         ordered = [(old, self._titles.get(old, "")) for old in self._order]
         self._plan = self._build_usecase.plan_from_titles(folder, ordered, self._current_options())
         self._render()
+        self._maybe_opencc_hint()
+
+    def _maybe_opencc_hint(self) -> None:
+        """正規化開啟但 OpenCC 不可用時，提示一次（其餘規則照常）。"""
+        if (
+            self.normalize_check.isChecked()
+            and not _rename_songs.OPENCC_AVAILABLE
+            and not self._opencc_hint_shown
+        ):
+            self._opencc_hint_shown = True
+            self.status.setText("提示：未啟用簡繁轉換（缺 OpenCC），其餘正規化規則照常運作。")
 
     def _render(self) -> None:
         self._loading = True
@@ -282,7 +295,7 @@ class RenamePage(QWidget):
             new_cell = QTableWidgetItem(it.new_name)
             new_cell.setFlags(new_cell.flags() & ~Qt.ItemFlag.ItemIsEditable)
 
-            bad = has_illegal_chars(title) or it.new_name in dups
+            bad = not title.strip() or has_illegal_chars(title) or it.new_name in dups
             if bad:
                 invalid += 1
                 for c in (old_cell, title_cell, new_cell):
@@ -298,7 +311,7 @@ class RenamePage(QWidget):
 
         changed = self._plan.changed_count if self._plan else 0
         if invalid:
-            self.summary.setText(f"共 {len(items)} 個檔案；有 {invalid} 列名稱重複或含非法字元，請修正後再套用。")
+            self.summary.setText(f"共 {len(items)} 個檔案；有 {invalid} 列名稱空白、重複或含非法字元，請修正後再套用。")
             self.apply_btn.setEnabled(False)
         else:
             self.summary.setText(f"共 {len(items)} 個檔案，其中 {changed} 個需要改名。")
