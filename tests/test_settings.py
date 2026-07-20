@@ -55,3 +55,12 @@ def test_normalize_defaults_false_and_round_trips(tmp_path):
     saved = Settings(output_dir="/dl", rename_folder="/songs", normalize=True)
     repo.save(saved)
     assert repo.load(_default()).normalize is True  # 存得回、讀得到
+
+
+def test_write_tags_defaults_false_and_round_trips(tmp_path):
+    path = str(tmp_path / "settings.json")
+    repo = JsonSettingsRepository(path)
+    assert _default().write_tags is False
+    saved = Settings(output_dir="/dl", rename_folder="/songs", write_tags=True)
+    repo.save(saved)
+    assert repo.load(_default()).write_tags is True

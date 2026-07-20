@@ -44,3 +44,9 @@ class SettingsRepository(Protocol):
     def save(self, settings: Settings) -> None:
         """寫入設定。"""
         ...
+
+
+class AudioTagGateway(Protocol):
+    def write_title(self, path: str, title: str) -> None:
+        """把 title 寫入該音檔的標題標籤；無標籤時建立。失敗時 raise。"""
+        ...

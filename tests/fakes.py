@@ -27,6 +27,16 @@ class FakeGateway:
         return set(self._files.get(folder, []))
 
 
+class FakeTagGateway:
+    """記錄 write_title 呼叫（path, title），不碰真實檔案。"""
+
+    def __init__(self):
+        self.writes: list[tuple[str, str]] = []
+
+    def write_title(self, path: str, title: str) -> None:
+        self.writes.append((path, title))
+
+
 class FakeDownloader:
     """記錄呼叫參數；可設定成尊重取消旗標。"""
 

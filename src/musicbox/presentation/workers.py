@@ -45,16 +45,18 @@ class RenameApplyWorker(QThread):
     finished_ok = Signal(int)        # 實際改名數
     failed = Signal(str)
 
-    def __init__(self, usecase: ApplyRenamePlanUseCase, plan: RenamePlan):
+    def __init__(self, usecase: ApplyRenamePlanUseCase, plan: RenamePlan, write_tags: bool = False):
         super().__init__()
         self._usecase = usecase
         self._plan = plan
+        self._write_tags = write_tags
 
     def run(self) -> None:
         try:
             count = self._usecase.execute(
                 self._plan,
                 lambda frac, status: self.progress.emit(frac, status),
+                self._write_tags,
             )
             self.finished_ok.emit(count)
         except Exception as e:  # noqa: BLE001

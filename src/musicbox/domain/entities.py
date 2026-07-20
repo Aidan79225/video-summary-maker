@@ -64,3 +64,4 @@ class Settings:
     mode: RenameMode = RenameMode.RENUMBER
     padding: int = 2
     normalize: bool = False
+    write_tags: bool = False
