@@ -63,3 +63,4 @@ class Settings:
     separator: str = "-"
     mode: RenameMode = RenameMode.RENUMBER
     padding: int = 2
+    normalize: bool = False
