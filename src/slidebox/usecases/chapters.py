@@ -7,8 +7,9 @@ from __future__ import annotations
 import html
 import re
 from collections.abc import Mapping, Sequence
+from dataclasses import replace
 
-from ..domain.entities import Cue
+from ..domain.entities import Cue, Slide
 from ..domain.errors import NoSubtitlesAvailable
 
 
@@ -157,3 +158,42 @@ def compress_cues(cues: Sequence[Cue], char_budget: int, window: float = 15.0) -
         keep *= char_budget / len(text) * 0.98
         text = _group(pairs, window, keep)
     return text
+
+
+# --- 投影片驗證 ---
+
+
+def clamp_timestamps(slides: Sequence[Slide], duration: float) -> tuple[Slide, ...]:
+    """把越界的時間戳夾回 [0, duration)。
+
+    時間戳越界是小模型的常見小毛病，夾回去就好，不值得為此重跑整次摘要。
+    duration <= 0（yt-dlp 給不出長度）時只夾負值。
+    """
+    out: list[Slide] = []
+    for slide in slides:
+        ts = slide.timestamp
+        if ts < 0:
+            ts = 0.0
+        elif duration > 0 and ts >= duration:
+            ts = max(0.0, duration - 1.0)
+        out.append(slide if ts == slide.timestamp else replace(slide, timestamp=ts))
+    return tuple(out)
+
+
+def validate_slides(slides: Sequence[Slide], min_slides: int, max_slides: int) -> list[str]:
+    """回傳問題描述清單；空清單表示通過。
+
+    不檢查時間戳——那一律由 clamp_timestamps 先處理掉。這裡抓的是
+    「模型沒照指示做」的問題，需要重試才能修正。
+    """
+    problems: list[str] = []
+    if len(slides) < min_slides:
+        problems.append(f"只產出 {len(slides)} 頁，少於下限 {min_slides} 頁")
+    if len(slides) > max_slides:
+        problems.append(f"產出 {len(slides)} 頁，超過上限 {max_slides} 頁")
+    for slide in slides:
+        if not slide.title.strip():
+            problems.append(f"第 {slide.index} 頁的標題是空白")
+        if not slide.bullets:
+            problems.append(f"第 {slide.index} 頁沒有任何重點條列")
+    return problems
