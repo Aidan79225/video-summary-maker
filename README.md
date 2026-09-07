@@ -88,3 +88,58 @@ YouTube 偶爾改版，下載失敗時先更新：
 uv lock --upgrade-package yt-dlp
 uv sync
 ```
+
+---
+
+# SlideBox
+
+同一個 repo 裡的第二個 app：給一個 YouTube 網址，用字幕加影片截圖產出**單一 HTML 檔的投影片摘要**。
+
+```powershell
+uv run slides.py
+```
+
+貼上網址 → 選模型 → 按「生成摘要」。流程是：抓字幕 → 本機 LLM 切章節寫摘要 → 只下載那幾個時間點的影片片段 → 抽幀縮成 WebP → 全部 base64 內嵌成一個 HTML 檔。
+
+## 前置需求
+
+需要本機跑 [Ollama](https://ollama.com/)，並先下載模型：
+
+```powershell
+ollama pull qwen3.5:9b
+```
+
+模型可以在介面上換（下拉會列出 `ollama list` 的結果）。16 GB VRAM 建議用 `qwen3.5:9b`（6.6 GB）；27B 以上裝不下，會溢到 CPU 而慢到不能用。
+
+## 設定
+
+- **模型**：任何本機有的 Ollama 模型
+- **畫質**：最高／1080p／720p／480p——只影響截圖來源畫質，因為只下載片段，1080p 的下載量也只有數十 MB
+- **頁數**：下限與上限，實際頁數由模型依內容決定
+
+設定記在專案根目錄的 `slidebox_settings.json`。
+
+## 已知限制
+
+- **沒有字幕的影片不支援**（不做語音轉錄），會直接告訴你
+- 只處理單一影片，忽略播放清單
+- 部分截圖失敗時仍會出片，缺圖的那幾頁會標示出來
+- **目前 YouTube 對本機環境的影片片段下載回傳 403**，這是 YouTube 端對下載請求的攔阻，不是本程式的臭蟲，也不保證所有環境都會遇到。發生時字幕與摘要仍照常運作：投影片會完整產出（每頁標題、重點都在），只是缺圖的頁面會顯示「沒有截圖」而不是壞掉的圖片，狀態列也會回報缺圖頁數。如果之後 YouTube 那邊解除限制，截圖會自動恢復正常，不需要改任何設定。
+
+## 架構
+
+與 `musicbox` 平行的獨立 app，同樣的 Clean Architecture 分層：
+
+```
+slides.py                    進入點
+src/slidebox/
+├─ domain/                   實體與 port
+├─ usecases/
+│  ├─ chapters.py            純邏輯：挑軌、VTT 解析、壓縮、驗證
+│  └─ build_deck.py          pipeline 編排
+├─ infrastructure/           yt-dlp／ffmpeg／Ollama／HTML 的實作
+├─ presentation/             PySide6 UI
+└─ composition.py            composition root
+```
+
+設計文件在 `docs/superpowers/specs/2026-09-07-slidebox-youtube-slide-summary-design.md`。

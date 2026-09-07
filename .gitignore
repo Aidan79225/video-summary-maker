@@ -11,4 +11,5 @@ wheels/
 
 # App runtime files
 settings.json
+slidebox_settings.json
 .bin/
