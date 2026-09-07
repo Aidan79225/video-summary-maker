@@ -55,7 +55,12 @@ class VideoSectionGateway(Protocol):
         ...
 
     def cleanup(self, dest_dir: str) -> None:
-        """刪除暫存片段目錄。由 use case 在 finally 裡呼叫。"""
+        """刪除暫存片段目錄。由 use case 在 finally 裡呼叫。
+
+        **必須容忍目錄不存在，且絕不可 raise。** 取消發生在摘要階段時，
+        這個目錄根本還沒被建立；此時若拋出例外，會從 finally 取代掉正在
+        傳播的 OperationCancelled，讓使用者的「取消」變成檔案系統錯誤。
+        """
         ...
 
 

@@ -36,6 +36,9 @@ class FakeSummarizer:
     def summarize(self, compressed, duration, min_slides, max_slides, hint, progress):
         self.compressed.append(compressed)
         self.hints.append(hint)
+        progress(0.0, "開始")
+        progress(0.5, "一半")
+        progress(None, "長度未知")
         return self._batches.pop(0) if self._batches else ()
 
 

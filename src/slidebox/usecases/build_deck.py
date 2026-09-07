@@ -147,7 +147,9 @@ class BuildDeckUseCase:
             if clip is None:
                 filled.append(slide)
             else:
-                dest = os.path.join(out_dir, f"{slide.index:02d}.webp")
+                # 檔名取自迴圈位置，不是 slide.index——index 來自模型輸出，
+                # 不保證唯一或連續，不能拿來決定檔案系統路徑。
+                dest = os.path.join(out_dir, f"{i + 1:02d}.webp")
                 try:
                     self._frames.extract(clip, dest, settings.image_width)
                     filled.append(replace(slide, image_path=dest))

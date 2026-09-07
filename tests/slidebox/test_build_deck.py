@@ -160,3 +160,28 @@ def test_progress_reaches_one():
     seen: list[float | None] = []
     _build().execute("URL", _settings(), lambda f, s: seen.append(f), None)
     assert seen[-1] == 1.0
+
+
+def test_sub_step_progress_is_mapped_into_the_summary_band():
+    """子步驟的 0..1 進度要映射到整條 pipeline 的 5%..40% 區間。"""
+    seen: list[float | None] = []
+    _build().execute("URL", _settings(), lambda f, s: seen.append(f), None)
+    assert 0.05 in seen                              # 子步驟 0.0 → 區間下緣
+    assert any(v == pytest.approx(0.225) for v in seen if v is not None)  # 子步驟 0.5 → 區間中點
+    assert None in seen          # 不確定進度原樣傳遞，不得被算成數字
+
+
+def test_cancel_during_frame_attachment_still_cleans_up():
+    """取消發生在抽幀迴圈時，clips 已經落地，cleanup 才真的有事情要做。"""
+    secs = FakeSectionGateway()
+    frames = FakeFrameExtractor()
+    calls = {"n": 0}
+
+    def cancel():
+        calls["n"] += 1
+        return calls["n"] > 5      # 通過下載，進到抽幀迴圈才取消
+
+    with pytest.raises(OperationCancelled):
+        _build(secs=secs, frames=frames).execute("URL", _settings(), None, cancel)
+    assert len(secs.cleaned) == 1
+    assert len(frames.calls) < 3   # 沒有把三張圖都做完
