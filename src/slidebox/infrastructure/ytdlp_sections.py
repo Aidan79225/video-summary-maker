@@ -23,12 +23,14 @@ class YtDlpSectionGateway:
     def __init__(self, clip_seconds: float = 4.0):
         self._clip_seconds = clip_seconds
         self._ffmpeg_dir = get_ffmpeg_dir()
-        # yt-dlp 在啟用 download_ranges（片段下載）時，會先用「ffmpeg 是否在
-        # PATH 上」做前置檢查，這個檢查不會讀取 ffmpeg_location 選項（yt-dlp
-        # 已知限制，見其原始碼 downloader/external.py 的 TODO 註解）。若使用者
-        # 電腦沒有另外安裝 ffmpeg，僅設定 ffmpeg_location 並不夠，必須把內建
-        # ffmpeg 所在資料夾加進 PATH，否則片段下載一律回報「ffmpeg 未安裝」。
-        if self._ffmpeg_dir not in os.environ.get("PATH", "").split(os.pathsep):
+        # yt-dlp 的 download_ranges 前置檢查（FFmpegFD.available()）只查 PATH、
+        # 完全無視 ffmpeg_location（其原始碼留有 TODO: Fix path for ffmpeg），
+        # 所以 PATH 上找不到 ffmpeg 時整個分段下載會直接中止。
+        #
+        # 但 PATH 只用來過這個布林檢查——真正執行的仍是 ffmpeg_location 指定的
+        # 內建版本。因此使用者已經有 ffmpeg 時就不必動環境變數，避免永久遮蔽
+        # 他自己的安裝。
+        if shutil.which("ffmpeg") is None:
             os.environ["PATH"] = self._ffmpeg_dir + os.pathsep + os.environ.get("PATH", "")
 
     def download_sections(
