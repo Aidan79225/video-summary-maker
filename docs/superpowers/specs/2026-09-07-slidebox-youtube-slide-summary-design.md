@@ -97,6 +97,12 @@ class Deck:
     @property
     def missing_images(self) -> int:
         return sum(1 for s in self.slides if s.image_path is None)
+
+@dataclass(frozen=True)
+class DeckResult:
+    """use case 的回傳：成品與它的落點。UI 需要路徑才能提供「開啟」。"""
+    deck: Deck
+    html_path: str
 ```
 
 `Slide.image_path` 預設 `None` 是刻意的設計：**LLM 產出的是沒有圖的 Slide，抽幀是後續獨立的一步**。摘要邏輯因此完全不需要知道 ffmpeg 存在，而「重跑摘要」與「重抽圖」可以分開進行。
@@ -132,9 +138,15 @@ class SubtitleGateway(Protocol):
         """抓字幕並解析。找不到任何可用字幕時 raise NoSubtitlesAvailable。"""
 
 class Summarizer(Protocol):
-    def summarize(self, transcript: Transcript, min_slides: int, max_slides: int,
+    def summarize(self, compressed: str, duration: float,
+                  min_slides: int, max_slides: int, hint: str,
                   progress: ProgressCallback) -> tuple[Slide, ...]:
-        """回傳 image_path 皆為 None 的 Slide 序列。"""
+        """回傳 image_path 皆為 None 的 Slide 序列。
+
+        compressed 是 compress_cues() 的產出——壓縮是純邏輯，不是
+        summarizer 的責任。hint 為空字串表示首次嘗試，非空時是上一次
+        的驗證錯誤，會附進提示裡要求模型修正。
+        """
 
 class VideoSectionGateway(Protocol):
     def download_sections(self, url: str, timestamps: Sequence[float],
@@ -143,9 +155,16 @@ class VideoSectionGateway(Protocol):
                           is_cancelled: CancelCheck) -> list[str | None]:
         """每個時間點回傳一個本地片段檔路徑；該點失敗則該位置為 None。"""
 
+    def cleanup(self, dest_dir: str) -> None:
+        """刪除暫存片段目錄。由 use case 在 finally 裡呼叫。"""
+
 class FrameExtractor(Protocol):
     def extract(self, section_path: str, dest_path: str, width: int) -> None:
-        """取片段中間那一格，縮到 width，存成 WebP。失敗時 raise。"""
+        """取片段中間那一格，縮到 width，存成 WebP。失敗時 raise。
+
+        自行建立 dest_path 的上層目錄——use case 只做路徑字串運算，
+        不碰檔案系統，這樣它才能完全用假物件測試。
+        """
 
 class DeckRenderer(Protocol):
     def render(self, deck: Deck, dest_path: str) -> None: ...
@@ -171,15 +190,17 @@ class ModelCatalog(Protocol):
 
 **`compress_cues(cues, char_budget) -> str`**
 
-把數千句字幕壓成帶時間戳的段落文字，格式 `[MM:SS] 文字`。
+把數千句字幕壓成帶秒數標記的段落文字，格式 `[1234] 文字`。
 
-自動字幕是**滾動式**的——同一句話會在連續數個 cue 裡逐字重複出現，直接丟給 LLM 會浪費一半以上的 context。壓縮流程：先移除與前一句重疊的前綴，再依時間窗合併成段落。
+**標記用「秒數」而非 `MM:SS`**：模型被要求輸出的 `timestamp` 是秒數，讓它直接從標記裡抄一個數字，遠比要求它做 `MM:SS` → 秒的換算可靠。9B 模型做算術是常見的出錯點，這裡用格式設計避開它。
 
-**窗口是自適應的**：先用 15 秒窗合併，若結果超過 `char_budget` 就加大窗口重算，直到符合預算。**不截斷**——截斷會讓影片後半段完全消失在摘要裡，加大窗口只是讓每段更粗，全片仍有涵蓋。
+自動字幕是**滾動式**的——同一句話會在連續數個 cue 裡逐字重複出現，直接丟給 LLM 會浪費一半以上的 context。壓縮流程：先移除與前一句重疊的前綴，再依 15 秒窗合併成段落。
 
-**`validate_slides(slides, duration, min_slides, max_slides) -> list[str]`** 與 **`clamp_timestamps(slides, duration) -> tuple[Slide, ...]`**
+**超出 `char_budget` 時，對每一段的本文等比例截短，而不是丟棄整段。** 每個時間窗都仍然貢獻開頭的內容，所以影片後半段不會整塊消失在摘要裡。（早期版本寫的是「加大時間窗重算」，那是錯的——加大窗口只減少秒數標記的數量，字幕本文一個字都沒少，壓不下來。）
 
-前者回傳問題描述清單（數量超出範圍、標題空白、bullets 為空）；後者把超出 `[0, duration)` 的時間戳夾回範圍內。
+**`validate_slides(slides, min_slides, max_slides) -> list[str]`** 與 **`clamp_timestamps(slides, duration) -> tuple[Slide, ...]`**
+
+前者回傳問題描述清單（數量超出範圍、標題空白、bullets 為空）；後者把超出 `[0, duration)` 的時間戳夾回範圍內。`validate_slides` 不收 `duration`——時間戳一律由 `clamp_timestamps` 先處理掉，驗證階段不會再看到越界值。
 
 兩者分工的理由：時間戳越界是 9B 模型的常見小毛病，**夾回去就好，不值得重跑**；數量或標題不對則是模型沒照指示做，需要重試。
 
@@ -268,7 +289,9 @@ tests/slidebox/
 └─ test_settings.py        設定 round-trip（照 musicbox 的形狀）
 ```
 
-未涵蓋於自動化測試者：`ollama_summarizer` 的 HTTP 呼叫、`ytdlp_*` 的實際網路存取、`ffmpeg_frames` 的實際轉檔。這些以一次手動端到端驗證確認（跑一支真實的短影片，確認 HTML 產出正確）。
+`ffmpeg_frames` 有真實整合測試：比照 musicbox `test_tags.py` 以內建 ffmpeg 合成素材的先例，用 `lavfi` 產生一段 4 秒測試圖樣影片，抽幀後斷言 WebP 檔存在且尺寸合理；ffmpeg 不可用時 skip。
+
+未涵蓋於自動化測試者：`ollama_summarizer` 的 HTTP 呼叫、`ytdlp_*` 的實際網路存取。這兩者以一次手動端到端驗證確認（跑一支真實的短影片，確認 HTML 產出正確）。
 
 ## 新增依賴
 
