@@ -1,0 +1,105 @@
+"""HTML 產出：base64 內嵌、跳脫、無圖降級。"""
+from __future__ import annotations
+
+import base64
+
+from slidebox.domain.entities import Deck, Slide
+from slidebox.infrastructure.html_renderer import HtmlDeckRenderer
+
+IMAGE_BYTES = b"\x00\x01fake-webp\xff"
+
+
+def _write_image(tmp_path, name="1.webp"):
+    p = tmp_path / name
+    p.write_bytes(IMAGE_BYTES)
+    return str(p)
+
+
+def _render(tmp_path, deck) -> str:
+    dest = tmp_path / "out" / "slides.html"
+    HtmlDeckRenderer().render(deck, str(dest))
+    return dest.read_text(encoding="utf-8")
+
+
+def test_embeds_the_image_as_base64_data_uri(tmp_path):
+    deck = Deck("https://x", "影片", (
+        Slide(1, "標題", ("重點",), 0.0, _write_image(tmp_path)),
+    ))
+    html = _render(tmp_path, deck)
+    assert "data:image/webp;base64," in html
+    assert base64.b64encode(IMAGE_BYTES).decode("ascii") in html
+
+
+def test_creates_parent_directory(tmp_path):
+    """use case 只做路徑運算，建立目錄是 adapter 的責任。"""
+    deck = Deck("https://x", "影片", (Slide(1, "標題", ("重點",), 0.0),))
+    dest = tmp_path / "deep" / "nested" / "slides.html"
+    HtmlDeckRenderer().render(deck, str(dest))
+    assert dest.exists()
+
+
+def test_escapes_script_tags_from_the_model(tmp_path):
+    """標題來自 LLM，LLM 讀的是任何人都能上傳的字幕。"""
+    deck = Deck("https://x", "影片", (
+        Slide(1, "<script>alert(1)</script>", ("<img onerror=x>",), 0.0),
+    ))
+    html = _render(tmp_path, deck)
+    assert "<script>alert(1)</script>" not in html
+    assert "&lt;script&gt;" in html
+    assert "<img onerror=x>" not in html
+
+
+def test_escapes_the_video_title(tmp_path):
+    deck = Deck("https://x", "<b>粗體</b>", (Slide(1, "T", ("b",), 0.0),))
+    html = _render(tmp_path, deck)
+    assert "<b>粗體</b>" not in html
+    assert "&lt;b&gt;" in html
+
+
+def test_escapes_the_source_url_in_the_href(tmp_path):
+    deck = Deck('https://x/"onmouseover="evil()', "影片", (Slide(1, "T", ("b",), 0.0),))
+    html = _render(tmp_path, deck)
+    assert 'onmouseover="evil()"' not in html
+    assert "&quot;" in html
+
+
+def test_renders_a_slide_without_an_image(tmp_path):
+    deck = Deck("https://x", "影片", (Slide(1, "沒圖的一頁", ("重點",), 0.0),))
+    html = _render(tmp_path, deck)
+    assert "沒圖的一頁" in html
+    assert "data:image/webp" not in html
+
+
+def test_missing_image_file_degrades_instead_of_raising(tmp_path):
+    """image_path 指向不存在的檔案時不該炸掉整份成品。"""
+    deck = Deck("https://x", "影片", (
+        Slide(1, "標題", ("重點",), 0.0, str(tmp_path / "gone.webp")),
+    ))
+    html = _render(tmp_path, deck)
+    assert "標題" in html
+    assert "data:image/webp" not in html
+
+
+def test_includes_every_slide_and_bullet(tmp_path):
+    deck = Deck("https://x", "影片", (
+        Slide(1, "第一頁", ("甲", "乙"), 0.0),
+        Slide(2, "第二頁", ("丙",), 30.0),
+    ))
+    html = _render(tmp_path, deck)
+    for text in ("第一頁", "第二頁", "甲", "乙", "丙"):
+        assert text in html
+
+
+def test_shows_a_readable_timestamp(tmp_path):
+    deck = Deck("https://x", "影片", (Slide(1, "T", ("b",), 125.0),))
+    assert "02:05" in _render(tmp_path, deck)
+
+
+def test_is_self_contained(tmp_path):
+    """單一 HTML 檔不該引用任何外部資源。"""
+    deck = Deck("https://x", "影片", (
+        Slide(1, "標題", ("重點",), 0.0, _write_image(tmp_path)),
+    ))
+    html = _render(tmp_path, deck)
+    assert "<link" not in html
+    assert "<script" not in html

@@ -1,0 +1,91 @@
+"""DeckRenderer 的 HTML 實作：自包含的單一檔案，圖片以 base64 內嵌。"""
+from __future__ import annotations
+
+import base64
+import html
+import os
+
+from ..domain.entities import Deck, Slide
+
+_CSS = """
+:root { color-scheme: light dark; }
+* { box-sizing: border-box; }
+body {
+  margin: 0; padding: 32px 16px;
+  background: #f5f6f8; color: #1c1f26;
+  font-family: "Noto Sans TC", "Microsoft JhengHei", system-ui, sans-serif;
+  line-height: 1.7;
+}
+header { max-width: 900px; margin: 0 auto 32px; }
+header h1 { font-size: 26px; margin: 0 0 6px; }
+header a { color: #4a6fa5; font-size: 13px; word-break: break-all; }
+.slide {
+  max-width: 900px; margin: 0 auto 28px; padding: 24px;
+  background: #fff; border-radius: 12px;
+  box-shadow: 0 1px 3px rgba(0,0,0,.08);
+}
+.meta { font-size: 12px; color: #8a90a0; letter-spacing: .04em; }
+.slide h2 { font-size: 20px; margin: 4px 0 16px; }
+.slide img { width: 100%; border-radius: 8px; display: block; margin-bottom: 16px; }
+.slide ul { margin: 0; padding-left: 20px; }
+.slide li { margin-bottom: 6px; }
+.noimg { font-size: 12px; color: #a8adba; margin-bottom: 12px; }
+@media (prefers-color-scheme: dark) {
+  body { background: #14161a; color: #e3e6ec; }
+  .slide { background: #1e2128; box-shadow: none; }
+  header a { color: #7aa2d8; }
+}
+"""
+
+
+def _mmss(seconds: float) -> str:
+    total = max(0, int(seconds))
+    return f"{total // 60:02d}:{total % 60:02d}"
+
+
+def _data_uri(path: str | None) -> str | None:
+    """讀圖轉成 data URI；檔案不存在或讀不到就回 None（該頁降級成無圖）。"""
+    if not path:
+        return None
+    try:
+        with open(path, "rb") as f:
+            payload = base64.b64encode(f.read()).decode("ascii")
+    except OSError:
+        return None
+    return f"data:image/webp;base64,{payload}"
+
+
+def _render_slide(slide: Slide) -> str:
+    # 標題與條列來自 LLM，而 LLM 讀的是任何人都能上傳的 YouTube 字幕。
+    # 不跳脫等於把第三方內容當程式碼執行。
+    title = html.escape(slide.title)
+    bullets = "".join(f"<li>{html.escape(b)}</li>" for b in slide.bullets)
+    uri = _data_uri(slide.image_path)
+    image = (
+        f'<img src="{uri}" alt="{title}">' if uri
+        else '<p class="noimg">（這一頁沒有截圖）</p>'
+    )
+    return (
+        '<section class="slide">'
+        f'<div class="meta">{slide.index:02d} · {_mmss(slide.timestamp)}</div>'
+        f"<h2>{title}</h2>{image}<ul>{bullets}</ul>"
+        "</section>"
+    )
+
+
+class HtmlDeckRenderer:
+    def render(self, deck: Deck, dest_path: str) -> None:
+        title = html.escape(deck.video_title)
+        url = html.escape(deck.source_url, quote=True)
+        body = "".join(_render_slide(s) for s in deck.slides)
+        document = (
+            '<!DOCTYPE html>\n<html lang="zh-Hant">\n<head>\n'
+            '<meta charset="utf-8">\n'
+            '<meta name="viewport" content="width=device-width, initial-scale=1">\n'
+            f"<title>{title}</title>\n<style>{_CSS}</style>\n</head>\n<body>\n"
+            f'<header><h1>{title}</h1><a href="{url}">{url}</a></header>\n'
+            f"{body}\n</body>\n</html>\n"
+        )
+        os.makedirs(os.path.dirname(os.path.abspath(dest_path)), exist_ok=True)
+        with open(dest_path, "w", encoding="utf-8") as f:
+            f.write(document)
