@@ -103,3 +103,18 @@ def test_is_self_contained(tmp_path):
     html = _render(tmp_path, deck)
     assert "<link" not in html
     assert "<script" not in html
+
+
+def test_escapes_a_hostile_title_inside_the_image_alt_attribute(tmp_path):
+    """有圖時標題會進 alt="..."，屬性脈絡的跳脫必須有測試釘住。
+
+    目前的安全性只來自 html.escape 的 quote 預設值；沒有這個測試，
+    把它改成 quote=False 的重構不會被任何測試攔下來。
+    """
+    deck = Deck("https://x", "影片", (
+        Slide(1, 'x" onmouseover="evil()', ("重點",), 0.0, _write_image(tmp_path)),
+    ))
+    html = _render(tmp_path, deck)
+    assert 'onmouseover="evil()"' not in html
+    assert "&quot;" in html
+    assert "data:image/webp;base64," in html      # 確實走到了有圖的分支
