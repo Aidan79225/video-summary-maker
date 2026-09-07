@@ -72,3 +72,46 @@ def test_a_failing_download_does_not_abort_the_batch(tmp_path, monkeypatch):
         "URL", [10.0, 20.0], 1080, str(tmp_path), _noop_progress, lambda: False
     )
     assert out == [None, None]
+
+
+class _CapturingYDL:
+    """攔下 yt-dlp 收到的 opts，不做任何實際下載。"""
+
+    captured: list[dict] = []
+
+    def __init__(self, params):
+        _CapturingYDL.captured.append(params)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def download(self, urls):
+        pass
+
+
+def _capture_opts(monkeypatch, tmp_path, max_height):
+    _CapturingYDL.captured = []
+    monkeypatch.setattr(ytdlp_sections.yt_dlp, "YoutubeDL", _CapturingYDL)
+    gw = YtDlpSectionGateway(ffmpeg_dir=str(tmp_path))
+    gw.download_sections(
+        "URL", [10.0], max_height, str(tmp_path), _noop_progress, lambda: False
+    )
+    return _CapturingYDL.captured[0]
+
+
+def test_format_excludes_hls_streams(tmp_path, monkeypatch):
+    """格式選擇必須限定 http(s) 協定，排除 HLS。
+
+    HLS 不支援任意位置的分段抽取：選到它時下載會回報成功，卻產出一個
+    約 250 bytes、沒有影像的容器，抽幀必然失敗且症狀難以追查。這個測試
+    擋的是「日後有人把選擇字串簡化回去」的回歸。
+    """
+    assert "protocol^=http" in _capture_opts(monkeypatch, tmp_path, 1080)["format"]
+
+
+def test_format_excludes_hls_streams_without_a_height_cap(tmp_path, monkeypatch):
+    """未設畫質上限時同樣要限定協定。"""
+    assert "protocol^=http" in _capture_opts(monkeypatch, tmp_path, None)["format"]
