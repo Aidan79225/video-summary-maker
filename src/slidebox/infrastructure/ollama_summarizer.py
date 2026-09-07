@@ -175,6 +175,14 @@ class OllamaSummarizer:
             raise SummarizerUnavailable(
                 f"連不上 Ollama（{self._host}），請確認它正在執行。原因：{e.reason}"
             ) from e
+        except (json.JSONDecodeError, OSError) as e:
+            # urlopen 只會把「連線建立階段」的錯誤包成 URLError；進入串流
+            # 迭代之後的讀取逾時、連線重置、或格式壞掉的 NDJSON 行都會以
+            # 原始例外外拋。長時間生成中途斷線是常態，必須轉譯成同樣可
+            # 行動的訊息，而不是讓 traceback 冒到 UI。
+            raise SummarizerUnavailable(
+                f"與 Ollama（{self._host}）的連線在生成途中中斷：{e}"
+            ) from e
 
         return parse_summary_response("".join(chunks))
 
