@@ -54,3 +54,28 @@ def test_partial_file_falls_back_per_field(tmp_path):
     assert loaded.output_dir == "E:/only"
     assert loaded.model == _default().model
     assert loaded.num_ctx == _default().num_ctx
+
+
+def test_empty_subtitle_langs_falls_back_to_default(tmp_path):
+    """空的偏好語言清單會讓字幕挑軌永遠失敗，退回預設值才有用。"""
+    p = tmp_path / "s.json"
+    p.write_text(json.dumps({"subtitle_langs": []}), encoding="utf-8")
+    assert JsonSettingsRepository(str(p)).load(_default()).subtitle_langs == (
+        _default().subtitle_langs
+    )
+
+
+def test_non_list_subtitle_langs_falls_back_to_default(tmp_path):
+    """手改壞的設定檔不該讓 app 拿到怪型別。"""
+    p = tmp_path / "s.json"
+    p.write_text(json.dumps({"subtitle_langs": "zh-TW"}), encoding="utf-8")
+    assert JsonSettingsRepository(str(p)).load(_default()).subtitle_langs == (
+        _default().subtitle_langs
+    )
+
+
+def test_top_level_non_dict_returns_default(tmp_path):
+    """JSON 合法但不是物件（例如一個陣列）時整份退回預設值。"""
+    p = tmp_path / "s.json"
+    p.write_text(json.dumps(["not", "a", "dict"]), encoding="utf-8")
+    assert JsonSettingsRepository(str(p)).load(_default()) == _default()

@@ -31,8 +31,13 @@ class JsonSettingsRepository:
             image_width=data.get("image_width", default.image_width),
             num_ctx=data.get("num_ctx", default.num_ctx),
             char_budget=data.get("char_budget", default.char_budget),
-            # JSON 只有 list，還原成 tuple 才能與預設值比較相等
-            subtitle_langs=tuple(langs) if langs else default.subtitle_langs,
+            # 空清單或型別不對都視同未設定：偏好語言全空會讓字幕挑軌永遠
+            # 失敗，而且症狀會顯示成「這部影片沒有字幕」，是誤導使用者的
+            # 錯誤訊息。退回預設值比忠實還原一個會讓 app 不可用的值有用。
+            subtitle_langs=(
+                tuple(langs) if isinstance(langs, list) and langs
+                else default.subtitle_langs
+            ),
         )
 
     def save(self, settings: Settings) -> None:
