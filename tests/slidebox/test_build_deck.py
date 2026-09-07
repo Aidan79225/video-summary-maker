@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import pytest
 
-from slidebox.domain.entities import Settings, Slide
+from slidebox.domain.entities import Cue, Settings, Slide, Transcript
 from slidebox.domain.errors import (
     NoSubtitlesAvailable,
     OperationCancelled,
@@ -17,6 +17,7 @@ from .fakes import (
     FakeSectionGateway,
     FakeSubtitleGateway,
     FakeSummarizer,
+    RaisingThenSucceedingSummarizer,
     make_slides,
 )
 
@@ -169,6 +170,37 @@ def test_sub_step_progress_is_mapped_into_the_summary_band():
     assert 0.05 in seen                              # 子步驟 0.0 → 區間下緣
     assert any(v == pytest.approx(0.225) for v in seen if v is not None)  # 子步驟 0.5 → 區間中點
     assert None in seen          # 不確定進度原樣傳遞，不得被算成數字
+
+
+def test_automatic_transcript_warns_about_quality_in_progress_status():
+    """FakeSubtitleGateway 的預設 transcript 是 is_automatic=True。"""
+    seen: list[str] = []
+    _build().execute("URL", _settings(), lambda f, s: seen.append(s), None)
+    assert any("自動字幕" in s for s in seen)
+
+
+def test_manual_transcript_does_not_warn_in_progress_status():
+    manual = Transcript(
+        video_id="vid1",
+        title="測試影片",
+        duration=600.0,
+        cues=(Cue(0.0, 3.0, "第一句"), Cue(30.0, 33.0, "第二句")),
+        language="zh-TW",
+        is_automatic=False,
+    )
+    seen: list[str] = []
+    _build(subs=FakeSubtitleGateway(transcript=manual)).execute(
+        "URL", _settings(), lambda f, s: seen.append(s), None
+    )
+    assert not any("自動字幕" in s for s in seen)
+
+
+def test_retries_once_when_summarizer_output_is_not_json():
+    """完全不是 JSON 的回應（SummarizerOutputInvalid）跟驗證失敗一樣要拿到重試。"""
+    summ = RaisingThenSucceedingSummarizer(make_slides(3))
+    result = _build(summ=summ).execute("URL", _settings())
+    assert len(result.deck.slides) == 3
+    assert summ.calls == 2
 
 
 def test_cancel_during_frame_attachment_still_cleans_up():

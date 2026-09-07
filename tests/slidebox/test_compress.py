@@ -64,3 +64,23 @@ def test_truncation_keeps_whole_video_coverage():
 
 def test_empty_input_returns_empty_string():
     assert compress_cues((), 1000) == ""
+
+
+def test_single_character_overlap_between_sentences_is_not_trimmed():
+    """相鄰中文句子的單字重疊是正常巧合，不是滾動字幕殘留，不該被修剪。"""
+    cues = (Cue(0.0, 2.0, "今天天氣很好"), Cue(3.0, 5.0, "好的我們開始吧"))
+    assert compress_cues(cues, 10000) == "[0] 今天天氣很好 好的我們開始吧"
+
+
+def test_short_standalone_cue_survives():
+    """對／好／是啊這類短句本身就是內容，不能被當成重複整句丟掉。"""
+    cues = (Cue(0.0, 2.0, "我覺得這樣做是對的"), Cue(3.0, 5.0, "對"), Cue(6.0, 8.0, "我們繼續"))
+    out = compress_cues(cues, 10000)
+    assert out == "[0] 我覺得這樣做是對的 對 我們繼續"
+
+
+def test_manual_subtitles_skip_rolling_dedupe():
+    """is_automatic=False：手動字幕不滾動，滾動去重只會誤刪內容。"""
+    cues = (Cue(0.0, 2.0, "我們今天要講的是"), Cue(1.0, 3.0, "我們今天要"))
+    out = compress_cues(cues, 1000, is_automatic=False)
+    assert out == "[0] 我們今天要講的是 我們今天要"

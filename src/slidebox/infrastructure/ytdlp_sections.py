@@ -20,9 +20,9 @@ class YtDlpSectionGateway:
     符合「部分截圖失敗仍然出片」的策略。代價是重複的 info extraction。
     """
 
-    def __init__(self, clip_seconds: float = 4.0):
+    def __init__(self, clip_seconds: float = 4.0, ffmpeg_dir: str | None = None):
         self._clip_seconds = clip_seconds
-        self._ffmpeg_dir = get_ffmpeg_dir()
+        self._ffmpeg_dir = ffmpeg_dir or get_ffmpeg_dir()
         # yt-dlp 的 download_ranges 前置檢查（FFmpegFD.available()）只查 PATH、
         # 完全無視 ffmpeg_location（其原始碼留有 TODO: Fix path for ffmpeg），
         # 所以 PATH 上找不到 ffmpeg 時整個分段下載會直接中止。
@@ -45,6 +45,9 @@ class YtDlpSectionGateway:
         os.makedirs(dest_dir, exist_ok=True)
         total = max(1, len(timestamps))
         results: list[str | None] = []
+        # 每次呼叫重置：本欄位記錄「這一輪」第一個失敗原因。靜默的
+        # 「沒有截圖」跟真的有 bug 看起來一模一樣，第一個成因必須傳到使用者眼前。
+        self._first_error: str | None = None
 
         for i, start in enumerate(timestamps):
             if is_cancelled():
@@ -52,7 +55,11 @@ class YtDlpSectionGateway:
             progress(i / total, f"下載片段 {i + 1}/{total}")
             results.append(self._one(url, start, max_height, dest_dir, i))
 
-        progress(1.0, f"片段下載完成（{sum(r is not None for r in results)}/{total}）")
+        ok = sum(r is not None for r in results)
+        if self._first_error and ok < total:
+            progress(1.0, f"片段下載完成（{ok}/{total}）；失敗原因：{self._first_error[:120]}")
+        else:
+            progress(1.0, f"片段下載完成（{ok}/{total}）")
         return results
 
     def cleanup(self, dest_dir: str) -> None:
@@ -81,7 +88,9 @@ class YtDlpSectionGateway:
         try:
             with yt_dlp.YoutubeDL(opts) as ydl:
                 ydl.download([url])
-        except Exception:  # noqa: BLE001 單點失敗只讓該頁沒圖
+        except Exception as e:  # noqa: BLE001 單點失敗只讓該頁沒圖
+            if self._first_error is None:
+                self._first_error = str(e)
             return None
         for name in sorted(os.listdir(dest_dir)):
             if name.startswith(os.path.basename(stem)):

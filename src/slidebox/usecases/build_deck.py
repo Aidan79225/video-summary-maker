@@ -62,8 +62,14 @@ class BuildDeckUseCase:
         transcript = self._subtitles.fetch(url, settings.subtitle_langs)
 
         check()
-        cb(_P_SUBTITLES, "整理字幕…")
-        compressed = compress_cues(transcript.cues, settings.char_budget)
+        # 自動字幕品質較差，在狀態列提示使用者——這是 is_automatic 唯一被讀取的地方
+        subtitle_status = (
+            "整理字幕…（使用自動字幕，品質可能較差）" if transcript.is_automatic else "整理字幕…"
+        )
+        cb(_P_SUBTITLES, subtitle_status)
+        compressed = compress_cues(
+            transcript.cues, settings.char_budget, is_automatic=transcript.is_automatic
+        )
 
         slides = self._summarize(compressed, transcript, settings, cb, check)
 
@@ -111,14 +117,24 @@ class BuildDeckUseCase:
         for attempt in (1, 2):
             check()
             cb(_P_SUBTITLES, "產生摘要…" if attempt == 1 else "摘要不合要求，重試一次…")
-            slides = self._summarizer.summarize(
-                compressed,
-                transcript.duration,
-                settings.min_slides,
-                settings.max_slides,
-                hint,
-                self._scaled(cb, _P_SUBTITLES, _P_SUMMARY),
-            )
+            try:
+                slides = self._summarizer.summarize(
+                    compressed,
+                    transcript.duration,
+                    settings.min_slides,
+                    settings.max_slides,
+                    hint,
+                    self._scaled(cb, _P_SUBTITLES, _P_SUMMARY),
+                )
+            except SummarizerOutputInvalid as e:
+                # 完全不是 JSON 的回應和「JSON 但欄位不合格」一樣值得重試一次；
+                # 把錯誤內容當成 hint 回饋給模型，第二次仍失敗才真的放棄。
+                if attempt == 2:
+                    raise SummarizerOutputInvalid(
+                        f"模型輸出重試後仍不符合要求（{e}）。可以試試換一個模型。"
+                    ) from e
+                hint = f"上一次的輸出有這個問題，請修正後重新產出：{e}"
+                continue
             # 時間戳越界是小毛病，夾回去即可，不算驗證失敗
             slides = clamp_timestamps(slides, transcript.duration)
             problems = validate_slides(slides, settings.min_slides, settings.max_slides)

@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from slidebox.domain.entities import Cue, Slide, Transcript
-from slidebox.domain.errors import NoSubtitlesAvailable
+from slidebox.domain.errors import NoSubtitlesAvailable, SummarizerOutputInvalid
 
 
 class FakeSubtitleGateway:
@@ -40,6 +40,22 @@ class FakeSummarizer:
         progress(0.5, "一半")
         progress(None, "長度未知")
         return self._batches.pop(0) if self._batches else ()
+
+
+class RaisingThenSucceedingSummarizer:
+    """第一次呼叫 raise SummarizerOutputInvalid（模擬完全不是 JSON 的回應），
+    第二次才回傳合格結果——用來驗證這種失敗也會拿到重試機會。"""
+
+    def __init__(self, slides: tuple[Slide, ...], error: str = "模型回應不是合法的 JSON"):
+        self._slides = slides
+        self._error = error
+        self.calls = 0
+
+    def summarize(self, compressed, duration, min_slides, max_slides, hint, progress):
+        self.calls += 1
+        if self.calls == 1:
+            raise SummarizerOutputInvalid(self._error)
+        return self._slides
 
 
 class FakeSectionGateway:

@@ -89,23 +89,36 @@ def parse_vtt(text: str) -> tuple[Cue, ...]:
 
 # --- 字幕壓縮 ---
 
+# 少於這個長度的重疊視為巧合而非滾動重複。中文相鄰句子單字重疊很常見
+# （「…很好」接「好的…」），沒有這道門檻就會把正常內容當成重複刪掉。
+_MIN_OVERLAP = 3
 
-def _dedupe(cues: Sequence[Cue]) -> list[tuple[float, str]]:
+
+def _dedupe(cues: Sequence[Cue], is_automatic: bool = True) -> list[tuple[float, str]]:
     """移除滾動字幕的重複內容，回傳 (起始秒數, 新增文字)。
 
     自動字幕是滾動式的：同一句話會在連續數個 cue 裡逐字重複出現。
     直接丟給 LLM 會浪費一半以上的 context。
+
+    is_automatic 為 False（手動字幕）時完全略過這套滾動去重：手動字幕
+    不會滾動，去重只有壞處，只濾掉空白 cue。
     """
+    if not is_automatic:
+        return [(cue.start, " ".join(cue.text.split())) for cue in cues
+                if " ".join(cue.text.split())]
     out: list[tuple[float, str]] = []
     prev = ""
     for cue in cues:
         text = " ".join(cue.text.split())
-        if not text or text in prev:
+        # 只有夠長的重複才視為滾動字幕的殘留；短句（對／好／是啊）本身就是內容
+        if not text or (len(text) >= _MIN_OVERLAP and text in prev):
             continue
         # 找出 prev 的最長結尾，同時是 text 的開頭
         k = min(len(prev), len(text))
         while k > 0 and prev[-k:] != text[:k]:
             k -= 1
+        if k < _MIN_OVERLAP:
+            k = 0          # 巧合等級的重疊不修剪
         new = text[k:].strip()
         prev = text
         if new:
@@ -143,13 +156,18 @@ def _group(pairs: Sequence[tuple[float, str]], window: float, keep: float = 1.0)
     return "\n".join(lines)
 
 
-def compress_cues(cues: Sequence[Cue], char_budget: int, window: float = 15.0) -> str:
+def compress_cues(
+    cues: Sequence[Cue], char_budget: int, window: float = 15.0, is_automatic: bool = True
+) -> str:
     """把數千句字幕壓成帶秒數標記的段落文字，長度不超過 char_budget。
 
     標記用秒數而非 MM:SS：模型被要求輸出的 timestamp 是秒數，讓它直接
     從標記抄一個數字，遠比要求它做換算可靠。
+
+    is_automatic 為 False 時（手動字幕）略過滾動去重——手動字幕不會
+    滾動，去重只會誤刪正常的相鄰句重疊或短句。
     """
-    pairs = _dedupe(cues)
+    pairs = _dedupe(cues, is_automatic)
     text = _group(pairs, window)
     keep = 1.0
     # 超出預算：等比例截短每一段（而非丟棄整段），保留全片涵蓋。
