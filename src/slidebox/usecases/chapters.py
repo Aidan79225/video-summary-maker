@@ -84,3 +84,76 @@ def parse_vtt(text: str) -> tuple[Cue, ...]:
             text=body,
         ))
     return tuple(cues)
+
+
+# --- 字幕壓縮 ---
+
+
+def _dedupe(cues: Sequence[Cue]) -> list[tuple[float, str]]:
+    """移除滾動字幕的重複內容，回傳 (起始秒數, 新增文字)。
+
+    自動字幕是滾動式的：同一句話會在連續數個 cue 裡逐字重複出現。
+    直接丟給 LLM 會浪費一半以上的 context。
+    """
+    out: list[tuple[float, str]] = []
+    prev = ""
+    for cue in cues:
+        text = " ".join(cue.text.split())
+        if not text or text in prev:
+            continue
+        # 找出 prev 的最長結尾，同時是 text 的開頭
+        k = min(len(prev), len(text))
+        while k > 0 and prev[-k:] != text[:k]:
+            k -= 1
+        new = text[k:].strip()
+        prev = text
+        if new:
+            out.append((cue.start, new))
+    return out
+
+
+def _group(pairs: Sequence[tuple[float, str]], window: float, keep: float = 1.0) -> str:
+    """把 (秒數, 文字) 依時間窗合併成 `[秒數] 文字` 的行。
+
+    keep < 1.0 時，每一段的本文只保留開頭該比例的字元——這樣每個時間窗
+    都仍有代表，影片後半段不會整塊消失。
+    """
+    if not pairs:
+        return ""
+    lines: list[str] = []
+    bucket_start = pairs[0][0]
+    parts: list[str] = []
+
+    def flush() -> None:
+        if not parts:
+            return
+        body = " ".join(parts)
+        if keep < 1.0:
+            body = body[:max(1, int(len(body) * keep))]
+        lines.append(f"[{int(bucket_start)}] {body}")
+
+    for start, text in pairs:
+        if parts and start - bucket_start >= window:
+            flush()
+            bucket_start = start
+            parts = []
+        parts.append(text)
+    flush()
+    return "\n".join(lines)
+
+
+def compress_cues(cues: Sequence[Cue], char_budget: int, window: float = 15.0) -> str:
+    """把數千句字幕壓成帶秒數標記的段落文字，長度不超過 char_budget。
+
+    標記用秒數而非 MM:SS：模型被要求輸出的 timestamp 是秒數，讓它直接
+    從標記抄一個數字，遠比要求它做換算可靠。
+    """
+    pairs = _dedupe(cues)
+    text = _group(pairs, window)
+    keep = 1.0
+    # 超出預算：等比例截短每一段（而非丟棄整段），保留全片涵蓋。
+    # 乘 0.98 留一點餘裕，讓迴圈快速收斂。
+    while len(text) > char_budget and keep > 0.02:
+        keep *= char_budget / len(text) * 0.98
+        text = _group(pairs, window, keep)
+    return text
