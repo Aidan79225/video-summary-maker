@@ -4,8 +4,11 @@
 """
 from __future__ import annotations
 
+import html
+import re
 from collections.abc import Mapping, Sequence
 
+from ..domain.entities import Cue
 from ..domain.errors import NoSubtitlesAvailable
 
 
@@ -41,3 +44,43 @@ def pick_subtitle_track(
     if hit is not None:
         return hit, True
     raise NoSubtitlesAvailable("這部影片沒有可用的字幕")
+
+
+# --- WebVTT 解析 ---
+
+_TIME_RE = re.compile(r"(\d{2,}):(\d{2}):(\d{2})[.,](\d{3})")
+_TAG_RE = re.compile(r"<[^>]*>")
+# 區塊開頭若是這些關鍵字，整塊不是字幕內容
+_HEADER_PREFIXES = ("WEBVTT", "NOTE", "STYLE", "REGION")
+
+
+def _to_seconds(h: str, m: str, s: str, ms: str) -> float:
+    return int(h) * 3600 + int(m) * 60 + int(s) + int(ms) / 1000.0
+
+
+def parse_vtt(text: str) -> tuple[Cue, ...]:
+    """解析 WebVTT 成 Cue 序列。無法解析的區塊靜默略過。"""
+    text = text.lstrip("﻿").replace("\r\n", "\n").replace("\r", "\n")
+    cues: list[Cue] = []
+    for block in text.split("\n\n"):
+        lines = [ln for ln in block.split("\n") if ln.strip()]
+        if not lines or lines[0].startswith(_HEADER_PREFIXES):
+            continue
+        timing_idx = next((i for i, ln in enumerate(lines) if "-->" in ln), None)
+        if timing_idx is None:
+            continue
+        times = _TIME_RE.findall(lines[timing_idx])
+        if len(times) < 2:
+            continue
+        body = " ".join(lines[timing_idx + 1:])
+        body = _TAG_RE.sub("", body)          # <c>、<00:00:01.100> 等
+        body = html.unescape(body)
+        body = re.sub(r"\s+", " ", body).strip()
+        if not body:
+            continue
+        cues.append(Cue(
+            start=_to_seconds(*times[0]),
+            end=_to_seconds(*times[1]),
+            text=body,
+        ))
+    return tuple(cues)
