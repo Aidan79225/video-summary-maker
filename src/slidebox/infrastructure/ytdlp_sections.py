@@ -69,9 +69,19 @@ class YtDlpSectionGateway:
              dest_dir: str, index: int) -> str | None:
         stem = os.path.join(dest_dir, f"clip{index:03d}")
         opts = {
-            # 只要視訊，不要音訊也不要合併——較快且檔案較小
-            "format": (f"bestvideo[height<={max_height}]/bestvideo/best"
-                       if max_height else "bestvideo/best"),
+            # 只要視訊，不要音訊也不要合併——較快且檔案較小。
+            #
+            # protocol^=http 是必要的：同一畫質常同時有 https(DASH) 與
+            # m3u8_native(HLS) 兩種串流，而 HLS 不支援任意位置的分段抽取，
+            # 選到它時 ffmpeg 會產出一個沒有影像的空容器（約 250 bytes），
+            # 下載「成功」但抽幀必然失敗。實測同一支影片：不限定協定得
+            # 257 bytes，限定 http 得 473,425 bytes。
+            "format": (
+                f"bestvideo[height<={max_height}][protocol^=http]/"
+                f"bestvideo[protocol^=http]/bestvideo[height<={max_height}]/best"
+                if max_height else
+                "bestvideo[protocol^=http]/bestvideo/best"
+            ),
             "download_ranges": download_range_func(
                 None, [(start, start + self._clip_seconds)]
             ),
