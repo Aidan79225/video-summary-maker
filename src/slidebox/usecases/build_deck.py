@@ -9,7 +9,12 @@ import os
 from dataclasses import replace
 
 from ..domain.entities import Deck, DeckResult, Settings, Slide, Transcript
-from ..domain.errors import NoSubtitlesAvailable, OperationCancelled, SummarizerOutputInvalid
+from ..domain.errors import (
+    NoSubtitlesAvailable,
+    OperationCancelled,
+    SubtitleDownloadFailed,
+    SummarizerOutputInvalid,
+)
 from ..domain.ports import (
     AudioGateway,
     CancelCheck,
@@ -69,9 +74,13 @@ class BuildDeckUseCase:
             transcript = self._subtitles.fetch(url, settings.subtitle_langs)
             # 自動字幕品質較差，在狀態列提示使用者
             note = "（使用自動字幕，品質可能較差）" if transcript.is_automatic else ""
+        except SubtitleDownloadFailed:
+            # 字幕存在但這次下載失敗（例如 HTTP 429）：這是暫時性問題，原樣
+            # 告知使用者稍後重試。改走語音會把品質最好的人工字幕無聲地換成
+            # 較差的語音辨識，而且把「請過幾分鐘再試」的提示吞掉。
+            raise
         except NoSubtitlesAvailable:
-            # 也涵蓋「字幕存在但下載失敗」（例如 HTTP 429）——那種情況改走語音
-            # 一樣拿得到結果，而音訊走的是不同端點，不受字幕限流影響。
+            # 影片真的沒有可用字幕，才改用語音辨識
             if self._audio is None or self._transcriber is None:
                 raise
             transcript = self._transcribe(url, settings, cb, check, cancelled)

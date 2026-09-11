@@ -6,7 +6,7 @@ import os
 import pytest
 import yt_dlp.utils
 
-from slidebox.domain.errors import NoSubtitlesAvailable
+from slidebox.domain.errors import NoSubtitlesAvailable, SubtitleDownloadFailed
 from slidebox.infrastructure import ytdlp_subtitles
 from slidebox.infrastructure.ytdlp_subtitles import YtDlpSubtitleGateway
 
@@ -86,7 +86,9 @@ def test_a_subtitle_download_error_becomes_a_domain_error(monkeypatch):
     monkeypatch.setattr(
         ytdlp_subtitles.yt_dlp, "YoutubeDL", _fake_ydl(info, download_error=err)
     )
-    with pytest.raises(NoSubtitlesAvailable) as exc:
+    # 必須是 SubtitleDownloadFailed 而非一般的 NoSubtitlesAvailable：否則 use
+    # case 會把暫時性的限流當成「沒有字幕」，改走較差的語音辨識。
+    with pytest.raises(SubtitleDownloadFailed) as exc:
         YtDlpSubtitleGateway().fetch("URL", PREFER)
     assert "429" in str(exc.value)
     assert "en-orig" in str(exc.value)

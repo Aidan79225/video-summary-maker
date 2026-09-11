@@ -6,6 +6,7 @@ import pytest
 from slidebox.domain.entities import Cue, Settings, Slide, Transcript
 from slidebox.domain.errors import (
     NoSubtitlesAvailable,
+    SubtitleDownloadFailed,
     OperationCancelled,
     SummarizerOutputInvalid,
 )
@@ -321,3 +322,17 @@ def test_speech_progress_never_moves_the_bar():
     seen: list[float | None] = []
     _build_speech().execute("URL", _settings(), lambda f, s: seen.append(f), None)
     assert 0.5 not in seen
+
+
+
+def test_a_transient_subtitle_failure_is_reported_not_transcribed():
+    """攔的 bug：字幕存在但暫時下載失敗（HTTP 429）時也走語音備援——有人工中文
+    字幕的影片被無聲地降級成較慢、較差的語音辨識，而且「請過幾分鐘再試」的
+    提示被吞掉。使用者要的是「沒有字幕」的影片才改用語音。"""
+    err = SubtitleDownloadFailed("字幕軌 zh-TW 下載失敗：YouTube 暫時限制了請求頻率（HTTP 429），請過幾分鐘再試。")
+    trans = FakeTranscriber()
+    uc = _build_speech(subs=FakeSubtitleGateway(error=err), transcriber=trans)
+    with pytest.raises(SubtitleDownloadFailed) as exc:
+        uc.execute("URL", _settings())
+    assert "請過幾分鐘再試" in str(exc.value)
+    assert trans.calls == []

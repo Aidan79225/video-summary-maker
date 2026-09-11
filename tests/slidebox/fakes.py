@@ -6,7 +6,8 @@ from slidebox.domain.errors import NoSubtitlesAvailable, SummarizerOutputInvalid
 
 
 class FakeSubtitleGateway:
-    def __init__(self, transcript: Transcript | None = None, fail: bool = False):
+    def __init__(self, transcript: Transcript | None = None, fail: bool = False,
+                 error: Exception | None = None):
         self._transcript = transcript or Transcript(
             video_id="vid1",
             title="測試影片",
@@ -16,10 +17,13 @@ class FakeSubtitleGateway:
             is_automatic=True,
         )
         self._fail = fail
+        self._error = error
         self.calls: list[tuple[str, tuple[str, ...]]] = []
 
     def fetch(self, url, langs):
         self.calls.append((url, tuple(langs)))
+        if self._error is not None:
+            raise self._error
         if self._fail:
             raise NoSubtitlesAvailable("沒有字幕")
         return self._transcript
