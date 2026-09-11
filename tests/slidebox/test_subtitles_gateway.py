@@ -6,7 +6,7 @@ import os
 import pytest
 import yt_dlp.utils
 
-from slidebox.domain.errors import NoSubtitlesAvailable, SubtitleDownloadFailed
+from slidebox.domain.errors import SubtitleDownloadFailed
 from slidebox.infrastructure import ytdlp_subtitles
 from slidebox.infrastructure.ytdlp_subtitles import YtDlpSubtitleGateway
 
