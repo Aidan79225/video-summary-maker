@@ -8,6 +8,8 @@ from .infrastructure.ffmpeg_frames import FfmpegFrameExtractor
 from .infrastructure.html_renderer import HtmlDeckRenderer
 from .infrastructure.ollama_summarizer import OllamaModelCatalog, OllamaSummarizer
 from .infrastructure.settings_repository import JsonSettingsRepository
+from .infrastructure.whisper_transcriber import FasterWhisperTranscriber
+from .infrastructure.ytdlp_audio import YtDlpAudioGateway
 from .infrastructure.ytdlp_sections import YtDlpSectionGateway
 from .infrastructure.ytdlp_subtitles import YtDlpSubtitleGateway
 from .presentation.deck_page import DeckPage
@@ -47,6 +49,10 @@ def build_main_window() -> MainWindow:
         YtDlpSectionGateway(),
         FfmpegFrameExtractor(),
         HtmlDeckRenderer(),
+        # 沒有字幕時的語音辨識備援。模型在第一次需要時才載入（約 40 秒）並
+        # 快取在這個實例裡；改 whisper_model 需重開 app，與其他設定一致。
+        audio=YtDlpAudioGateway(),
+        transcriber=FasterWhisperTranscriber(settings.whisper_model),
     )
     page = DeckPage(usecase, OllamaModelCatalog(settings.ollama_host), settings, save)
     return MainWindow(page)
