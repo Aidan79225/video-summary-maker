@@ -12,11 +12,13 @@ from slidebox.domain.errors import (
 from slidebox.usecases.build_deck import BuildDeckUseCase
 
 from .fakes import (
+    FakeAudioGateway,
     FakeFrameExtractor,
     FakeRenderer,
     FakeSectionGateway,
     FakeSubtitleGateway,
     FakeSummarizer,
+    FakeTranscriber,
     RaisingThenSucceedingSummarizer,
     make_slides,
 )
@@ -217,3 +219,96 @@ def test_cancel_during_frame_attachment_still_cleans_up():
         _build(secs=secs, frames=frames).execute("URL", _settings(), None, cancel)
     assert len(secs.cleaned) == 1
     assert len(frames.calls) < 3   # 沒有把三張圖都做完
+
+
+# --- 沒有字幕時改用語音辨識 ---
+
+
+def _build_speech(subs=None, audio=None, transcriber=None, summ=None, rend=None):
+    return BuildDeckUseCase(
+        subs or FakeSubtitleGateway(fail=True),
+        summ or FakeSummarizer([make_slides(3)]),
+        FakeSectionGateway(),
+        FakeFrameExtractor(),
+        rend or FakeRenderer(),
+        audio=audio or FakeAudioGateway(),
+        transcriber=transcriber or FakeTranscriber(),
+    )
+
+
+def test_missing_subtitles_fall_back_to_speech():
+    """攔的 bug：沒有字幕時直接失敗，語音辨識根本沒被用上。"""
+    summ = FakeSummarizer([make_slides(3)])
+    trans = FakeTranscriber()
+    result = _build_speech(summ=summ, transcriber=trans).execute("URL", _settings())
+    assert len(result.deck.slides) == 3
+    assert trans.calls == [("OUT/_audio/audio.webm", 120.0)]
+    assert "よろしくお願いします" in summ.compressed[0]
+
+
+def test_speech_metadata_names_the_deck_and_its_folder():
+    """攔的 bug：語音路徑沒有字幕 gateway 的 metadata，標題與輸出資料夾只能
+    取自音訊 gateway；取錯會寫到錯的資料夾、投影片標題也錯。"""
+    result = _build_speech().execute("URL", _settings(output_dir="OUT"))
+    assert result.deck.video_title == "沒有字幕的影片"
+    assert "spk1" in result.html_path
+
+
+def test_speech_path_status_says_it_was_transcribed():
+    """攔的 bug：使用者不知道這份摘要來自語音辨識，以為字幕品質就是這樣。"""
+    seen: list[str] = []
+    _build_speech().execute("URL", _settings(), lambda f, s: seen.append(s), None)
+    assert any("語音辨識產生" in s for s in seen)
+
+
+def test_speech_transcript_is_not_rolling_deduped():
+    """攔的 bug：語音轉錄被當成 YouTube 滾動字幕去重。Whisper 的輸出是獨立的
+    句子，套用滾動去重會把正常的重複內容剪掉。
+
+    刻意選重疊 6 個字的兩句：少於 3 個字的重疊會被 _MIN_OVERLAP 門檻保護，
+    那樣的測試區辨不出 is_automatic 的真假。
+    """
+    cues = (Cue(0.0, 4.0, "今天天氣真好我們出去走走"), Cue(4.0, 8.0, "我們出去走走吧"))
+    summ = FakeSummarizer([make_slides(3)])
+    _build_speech(summ=summ, transcriber=FakeTranscriber(cues=cues)).execute("URL", _settings())
+    assert "我們出去走走吧" in summ.compressed[0]
+
+
+def test_audio_is_removed_after_transcription():
+    """攔的 bug：暫存音訊留在輸出資料夾裡越積越多。"""
+    audio = FakeAudioGateway()
+    _build_speech(audio=audio).execute("URL", _settings())
+    assert audio.cleaned == audio.dest_dirs
+
+
+def test_audio_is_removed_when_cancelled_during_transcription():
+    """攔的 bug：cleanup 不在 finally 裡，取消時暫存音訊殘留。"""
+    audio = FakeAudioGateway()
+    trans = FakeTranscriber(error=OperationCancelled())
+    with pytest.raises(OperationCancelled):
+        _build_speech(audio=audio, transcriber=trans).execute("URL", _settings())
+    assert audio.cleaned == audio.dest_dirs
+
+
+def test_no_detected_speech_is_a_clear_error():
+    """攔的 bug：空的轉錄一路流進摘要，在很後面才以難懂的方式失敗。
+    典型例子是純音樂或動畫，例如 Big Buck Bunny。"""
+    with pytest.raises(NoSubtitlesAvailable) as exc:
+        _build_speech(transcriber=FakeTranscriber(cues=())).execute("URL", _settings())
+    assert "沒有偵測到語音" in str(exc.value)
+
+
+def test_an_audio_failure_keeps_its_own_reason():
+    """攔的 bug：音訊下載失敗時丟出原本的「沒有字幕」，把真正的原因藏起來。"""
+    audio = FakeAudioGateway(error=NoSubtitlesAvailable("這部影片沒有字幕，音訊也下載失敗：HTTP 403"))
+    with pytest.raises(NoSubtitlesAvailable) as exc:
+        _build_speech(audio=audio).execute("URL", _settings())
+    assert "403" in str(exc.value)
+
+
+def test_speech_progress_never_moves_the_bar():
+    """攔的 bug：音訊下載的 50% 直接進了進度條，接著摘要從 5% 開始，進度條倒退。
+    語音路徑只回報文字，進度條顯示忙碌。"""
+    seen: list[float | None] = []
+    _build_speech().execute("URL", _settings(), lambda f, s: seen.append(f), None)
+    assert 0.5 not in seen

@@ -9,12 +9,14 @@ import os
 from dataclasses import replace
 
 from ..domain.entities import Deck, DeckResult, Settings, Slide, Transcript
-from ..domain.errors import OperationCancelled, SummarizerOutputInvalid
+from ..domain.errors import NoSubtitlesAvailable, OperationCancelled, SummarizerOutputInvalid
 from ..domain.ports import (
+    AudioGateway,
     CancelCheck,
     DeckRenderer,
     FrameExtractor,
     ProgressCallback,
+    SpeechTranscriber,
     SubtitleGateway,
     Summarizer,
     VideoSectionGateway,
@@ -36,7 +38,11 @@ class BuildDeckUseCase:
         sections: VideoSectionGateway,
         frames: FrameExtractor,
         renderer: DeckRenderer,
+        audio: AudioGateway | None = None,
+        transcriber: SpeechTranscriber | None = None,
     ):
+        self._audio = audio
+        self._transcriber = transcriber
         self._subtitles = subtitles
         self._summarizer = summarizer
         self._sections = sections
@@ -59,14 +65,20 @@ class BuildDeckUseCase:
 
         check()
         cb(0.0, "取得字幕…")
-        transcript = self._subtitles.fetch(url, settings.subtitle_langs)
+        try:
+            transcript = self._subtitles.fetch(url, settings.subtitle_langs)
+            # 自動字幕品質較差，在狀態列提示使用者
+            note = "（使用自動字幕，品質可能較差）" if transcript.is_automatic else ""
+        except NoSubtitlesAvailable:
+            # 也涵蓋「字幕存在但下載失敗」（例如 HTTP 429）——那種情況改走語音
+            # 一樣拿得到結果，而音訊走的是不同端點，不受字幕限流影響。
+            if self._audio is None or self._transcriber is None:
+                raise
+            transcript = self._transcribe(url, settings, cb, check, cancelled)
+            note = "（由語音辨識產生，可能有辨識錯誤）"
 
         check()
-        # 自動字幕品質較差，在狀態列提示使用者——這是 is_automatic 唯一被讀取的地方
-        subtitle_status = (
-            "整理字幕…（使用自動字幕，品質可能較差）" if transcript.is_automatic else "整理字幕…"
-        )
-        cb(_P_SUBTITLES, subtitle_status)
+        cb(_P_SUBTITLES, "整理字幕…" + note)
         compressed = compress_cues(
             transcript.cues, settings.char_budget, is_automatic=transcript.is_automatic
         )
@@ -102,6 +114,50 @@ class BuildDeckUseCase:
         return DeckResult(deck=deck, html_path=html_path)
 
     # --- 內部 ---
+
+    def _transcribe(
+        self,
+        url: str,
+        settings: Settings,
+        cb: ProgressCallback,
+        check,
+        cancelled: CancelCheck,
+    ) -> Transcript:
+        """沒有字幕時：下載音訊 → 語音辨識 → 組成 Transcript。
+
+        音訊放在固定的 output_dir/_audio：此時還不知道 video_id，無法放進
+        影片自己的資料夾。app 一次只跑一個生成，不會撞名。
+        """
+        audio_dir = os.path.join(settings.output_dir, "_audio")
+
+        # 語音路徑只回報文字、進度條顯示忙碌：音訊下載的 50% 若直接進度條，
+        # 接著摘要從 5% 開始，進度條會倒退。
+        def speech_cb(frac: float | None, status: str) -> None:
+            cb(None, status)
+
+        try:
+            check()
+            cb(None, "無法取得字幕，改用語音辨識…")
+            clip = self._audio.download_audio(url, audio_dir, speech_cb, cancelled)
+            check()
+            cues, language = self._transcriber.transcribe(
+                clip.path, clip.duration, speech_cb, cancelled
+            )
+        finally:
+            self._audio.cleanup(audio_dir)
+
+        if not cues:
+            raise NoSubtitlesAvailable("這部影片沒有字幕，也沒有偵測到語音")
+        # is_automatic=False：Whisper 的輸出是一句一句的獨立段落，不是 YouTube
+        # 的滾動字幕，套用滾動去重只會誤刪內容。
+        return Transcript(
+            video_id=clip.video_id,
+            title=clip.title,
+            duration=clip.duration,
+            cues=cues,
+            language=language,
+            is_automatic=False,
+        )
 
     def _summarize(
         self,

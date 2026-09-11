@@ -1,7 +1,7 @@
 """測試用的記憶體假實作（不碰真實磁碟／網路）。"""
 from __future__ import annotations
 
-from slidebox.domain.entities import Cue, Slide, Transcript
+from slidebox.domain.entities import AudioClip, Cue, Slide, Transcript
 from slidebox.domain.errors import NoSubtitlesAvailable, SummarizerOutputInvalid
 
 
@@ -100,3 +100,43 @@ def make_slides(n: int) -> tuple[Slide, ...]:
         Slide(index=i, title=f"第 {i} 段", bullets=(f"重點 {i}",), timestamp=float(i * 30))
         for i in range(1, n + 1)
     )
+
+
+class FakeAudioGateway:
+    """回傳固定的 AudioClip；下載時回報一個非 None 的進度，用來確認 use case
+    不會把它直接丟給進度條。"""
+
+    def __init__(self, clip: AudioClip | None = None, error: Exception | None = None):
+        self._clip = clip or AudioClip(
+            path="OUT/_audio/audio.webm", video_id="spk1", title="沒有字幕的影片", duration=120.0
+        )
+        self._error = error
+        self.dest_dirs: list[str] = []
+        self.cleaned: list[str] = []
+
+    def download_audio(self, url, dest_dir, progress, is_cancelled):
+        self.dest_dirs.append(dest_dir)
+        progress(0.5, "下載音訊…")
+        if self._error is not None:
+            raise self._error
+        return self._clip
+
+    def cleanup(self, dest_dir):
+        self.cleaned.append(dest_dir)
+
+
+class FakeTranscriber:
+    def __init__(self, cues=None, language: str = "ja", error: Exception | None = None):
+        self._cues = cues if cues is not None else (
+            Cue(0.0, 4.0, "こんにちは"), Cue(30.0, 34.0, "よろしくお願いします"),
+        )
+        self._language = language
+        self._error = error
+        self.calls: list[tuple[str, float]] = []
+
+    def transcribe(self, audio_path, duration, progress, is_cancelled):
+        self.calls.append((audio_path, duration))
+        progress(None, "語音辨識中… 0:30 / 2:00")
+        if self._error is not None:
+            raise self._error
+        return tuple(self._cues), self._language
