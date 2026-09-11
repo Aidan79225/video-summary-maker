@@ -121,17 +121,31 @@ ollama pull qwen3.5:9b
 
 第 2 層是關鍵：YouTube 提供的「自動字幕中文」其實是對原文語音辨識結果再做機器翻譯，辨識錯誤加翻譯錯誤兩層損失。直接給模型原文，它帶著全文脈絡翻譯，品質明顯較好。實測日文、韓文影片產出的標題裡沒有任何假名或韓文字。
 
+內容來源會寫在成品的標題區與完成訊息裡，例如「使用 YouTube 自動字幕，品質可能較差」。
+
+## 沒有字幕的影片（語音辨識）
+
+影片完全沒有字幕時，會自動改用 [faster-whisper](https://github.com/SYSTRAN/faster-whisper) 從語音產生字幕，其後流程不變。成品會註明「由語音辨識產生，可能有辨識錯誤」。
+
+- **只用 CPU**（本機沒有 CUDA，且 RTX 5060 Ti 的 Blackwell 架構支援不確定）。預設模型 `large-v3-turbo`，實測約 **4 倍即時**：10 分鐘影片約 2.5 分鐘，1 小時約 15 分鐘
+- **首次使用**會從 Hugging Face 下載約 1.6 GB 的模型，之後離線可用；每次開 app 後第一次辨識要載入 12～40 秒
+- 模型載入與「解碼整個音訊檔」這兩段**無法中斷**，按取消會在該步驟完成後才停止
+- 純音樂、動畫等沒有人聲的影片會回報「沒有偵測到語音」
+- **字幕存在但暫時下載失敗**（YouTube 限流 HTTP 429）時**不會**改用語音——會請你過幾分鐘再試，因為人工字幕永遠比語音辨識好
+
+實測同一支日文影片，語音辨識版與字幕版的投影片主題、順序一致；日文辨識的詞錯不影響摘要。
+
 ## 設定
 
 - **模型**：任何本機有的 Ollama 模型
 - **畫質**：最高／1080p／720p／480p——只影響截圖來源畫質，因為只下載片段，1080p 的下載量也只有數十 MB
 - **頁數**：下限與上限，實際頁數由模型依內容決定
 
-設定記在專案根目錄的 `slidebox_settings.json`。
+設定記在專案根目錄的 `slidebox_settings.json`。語音辨識模型只能在設定檔改（`whisper_model`，例如改成 `small` 約快兩成但日文明顯較差），改完需重開 app。
 
 ## 已知限制
 
-- **沒有字幕的影片不支援**（不做語音轉錄），會直接告訴你
+- 背景音樂很重、多人同時說話的影片，語音辨識品質會明顯下降；**歌詞會被當成內容**摘要進投影片
 - 只處理單一影片，忽略播放清單
 - 部分截圖失敗時仍會出片，缺圖的那幾頁會標示出來
 
@@ -146,9 +160,11 @@ src/slidebox/
 ├─ usecases/
 │  ├─ chapters.py            純邏輯：挑軌、VTT 解析、壓縮、驗證
 │  └─ build_deck.py          pipeline 編排
-├─ infrastructure/           yt-dlp／ffmpeg／Ollama／HTML 的實作
+├─ infrastructure/           yt-dlp／ffmpeg／Ollama／faster-whisper／HTML 的實作
 ├─ presentation/             PySide6 UI
 └─ composition.py            composition root
 ```
 
-設計文件在 `docs/superpowers/specs/2026-09-07-slidebox-youtube-slide-summary-design.md`。
+設計文件：
+- `docs/superpowers/specs/2026-09-07-slidebox-youtube-slide-summary-design.md`（整體）
+- `docs/superpowers/specs/2026-09-12-slidebox-speech-transcription-design.md`（語音辨識，含所有裁定與實測數據）
