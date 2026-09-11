@@ -175,11 +175,17 @@ def test_sub_step_progress_is_mapped_into_the_summary_band():
     assert None in seen          # 不確定進度原樣傳遞，不得被算成數字
 
 
-def test_automatic_transcript_warns_about_quality_in_progress_status():
-    """FakeSubtitleGateway 的預設 transcript 是 is_automatic=True。"""
+def test_automatic_transcript_warns_about_quality_where_the_user_can_see_it():
+    """攔的 bug：提示只在中途送出一次，幾毫秒後就被「產生摘要…」蓋掉，完成後
+    沒有人看得出這份投影片來自品質較差的自動字幕。斷言的是使用者最後看到的
+    狀態與成品本身，而不是「曾經送出過」。
+
+    FakeSubtitleGateway 的預設 transcript 是 is_automatic=True。
+    """
     seen: list[str] = []
-    _build().execute("URL", _settings(), lambda f, s: seen.append(s), None)
-    assert any("自動字幕" in s for s in seen)
+    result = _build().execute("URL", _settings(), lambda f, s: seen.append(s), None)
+    assert "自動字幕" in result.deck.source_note
+    assert "自動字幕" in seen[-1]
 
 
 def test_manual_transcript_does_not_warn_in_progress_status():
@@ -192,9 +198,10 @@ def test_manual_transcript_does_not_warn_in_progress_status():
         is_automatic=False,
     )
     seen: list[str] = []
-    _build(subs=FakeSubtitleGateway(transcript=manual)).execute(
+    result = _build(subs=FakeSubtitleGateway(transcript=manual)).execute(
         "URL", _settings(), lambda f, s: seen.append(s), None
     )
+    assert result.deck.source_note == ""
     assert not any("自動字幕" in s for s in seen)
 
 
@@ -255,11 +262,13 @@ def test_speech_metadata_names_the_deck_and_its_folder():
     assert "spk1" in result.html_path
 
 
-def test_speech_path_status_says_it_was_transcribed():
-    """攔的 bug：使用者不知道這份摘要來自語音辨識，以為字幕品質就是這樣。"""
+def test_speech_path_is_labelled_where_the_user_can_see_it():
+    """攔的 bug：使用者不知道這份摘要來自語音辨識，以為字幕品質就是這樣。只在
+    中途送出一次的提示會被後續狀態蓋掉，所以斷言最後的狀態與成品本身。"""
     seen: list[str] = []
-    _build_speech().execute("URL", _settings(), lambda f, s: seen.append(s), None)
-    assert any("語音辨識產生" in s for s in seen)
+    result = _build_speech().execute("URL", _settings(), lambda f, s: seen.append(s), None)
+    assert "語音辨識" in result.deck.source_note
+    assert "語音辨識" in seen[-1]
 
 
 def test_speech_transcript_is_not_rolling_deduped():

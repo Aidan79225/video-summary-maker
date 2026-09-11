@@ -118,3 +118,19 @@ def test_escapes_a_hostile_title_inside_the_image_alt_attribute(tmp_path):
     assert 'onmouseover="evil()"' not in html
     assert "&quot;" in html
     assert "data:image/webp;base64," in html      # 確實走到了有圖的分支
+
+
+
+def test_the_source_note_travels_with_the_deck(tmp_path):
+    """攔的 bug：成品完全沒提內容來源。HTML 會被分享、會被日後重看，那時已經
+    沒有狀態列可看——「由語音辨識產生」必須寫在成品裡。"""
+    deck = Deck("https://x", "影片", (Slide(1, "T", ("b",), 0.0),),
+                source_note="由語音辨識產生，可能有辨識錯誤")
+    assert "由語音辨識產生，可能有辨識錯誤" in _render(tmp_path, deck)
+
+
+def test_the_source_note_is_escaped(tmp_path):
+    deck = Deck("https://x", "影片", (Slide(1, "T", ("b",), 0.0),), source_note="<b>x</b>")
+    html = _render(tmp_path, deck)
+    assert "<b>x</b>" not in html
+    assert "&lt;b&gt;" in html

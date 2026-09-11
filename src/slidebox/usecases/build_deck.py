@@ -72,8 +72,8 @@ class BuildDeckUseCase:
         cb(0.0, "取得字幕…")
         try:
             transcript = self._subtitles.fetch(url, settings.subtitle_langs)
-            # 自動字幕品質較差，在狀態列提示使用者
-            note = "（使用自動字幕，品質可能較差）" if transcript.is_automatic else ""
+            # 自動字幕品質較差，要讓使用者知道
+            note = "使用 YouTube 自動字幕，品質可能較差" if transcript.is_automatic else ""
         except SubtitleDownloadFailed:
             # 字幕存在但這次下載失敗（例如 HTTP 429）：這是暫時性問題，原樣
             # 告知使用者稍後重試。改走語音會把品質最好的人工字幕無聲地換成
@@ -84,10 +84,10 @@ class BuildDeckUseCase:
             if self._audio is None or self._transcriber is None:
                 raise
             transcript = self._transcribe(url, settings, cb, check, cancelled)
-            note = "（由語音辨識產生，可能有辨識錯誤）"
+            note = "由語音辨識產生，可能有辨識錯誤"
 
         check()
-        cb(_P_SUBTITLES, "整理字幕…" + note)
+        cb(_P_SUBTITLES, "整理字幕…" + (f"（{note}）" if note else ""))
         compressed = compress_cues(
             transcript.cues, settings.char_budget, is_automatic=transcript.is_automatic
         )
@@ -113,13 +113,16 @@ class BuildDeckUseCase:
 
         check()
         cb(_P_FRAMES, "產生 HTML…")
-        deck = Deck(source_url=url, video_title=transcript.title, slides=slides)
+        deck = Deck(source_url=url, video_title=transcript.title, slides=slides,
+                    source_note=note)
         html_path = os.path.join(out_dir, "slides.html")
         self._renderer.render(deck, html_path)
 
         missing = deck.missing_images
         done = f"完成，共 {len(slides)} 頁"
-        cb(1.0, done + (f"，其中 {missing} 頁沒有截圖" if missing else ""))
+        # 來源註記放進最後一則狀態：中途的提示會被後續狀態蓋掉
+        done += f"，其中 {missing} 頁沒有截圖" if missing else ""
+        cb(1.0, done + (f"（{note}）" if note else ""))
         return DeckResult(deck=deck, html_path=html_path)
 
     # --- 內部 ---

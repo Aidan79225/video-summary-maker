@@ -233,7 +233,11 @@ class DeckPage(QWidget):
         self.open_btn.setEnabled(True)
         missing = result.deck.missing_images
         note = f"，其中 {missing} 頁沒有截圖" if missing else ""
-        self.status.setText(f"✅ 完成，共 {len(result.deck.slides)} 頁{note}。\n{result.html_path}")
+        # 內容來源（例如「由語音辨識產生」）留在完成訊息裡，否則做完就看不出來
+        source = f"\n{result.deck.source_note}" if result.deck.source_note else ""
+        self.status.setText(
+            f"✅ 完成，共 {len(result.deck.slides)} 頁{note}。{source}\n{result.html_path}"
+        )
         self._set_busy(False)
 
     def _on_fail(self, message: str) -> None:

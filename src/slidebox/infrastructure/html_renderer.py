@@ -19,6 +19,7 @@ body {
 header { max-width: 900px; margin: 0 auto 32px; }
 header h1 { font-size: 26px; margin: 0 0 6px; }
 header a { color: #4a6fa5; font-size: 13px; word-break: break-all; }
+header .source { font-size: 13px; color: #8a6d3b; margin: 8px 0 0; }
 .slide {
   max-width: 900px; margin: 0 auto 28px; padding: 24px;
   background: #fff; border-radius: 12px;
@@ -77,13 +78,16 @@ class HtmlDeckRenderer:
     def render(self, deck: Deck, dest_path: str) -> None:
         title = html.escape(deck.video_title)
         url = html.escape(deck.source_url, quote=True)
+        # 內容來源（例如「由語音辨識產生」）跟著成品走——HTML 會被分享與重看
+        source = (f'<p class="source">{html.escape(deck.source_note)}</p>'
+                  if deck.source_note else "")
         body = "".join(_render_slide(s) for s in deck.slides)
         document = (
             '<!DOCTYPE html>\n<html lang="zh-Hant">\n<head>\n'
             '<meta charset="utf-8">\n'
             '<meta name="viewport" content="width=device-width, initial-scale=1">\n'
             f"<title>{title}</title>\n<style>{_CSS}</style>\n</head>\n<body>\n"
-            f'<header><h1>{title}</h1><a href="{url}">{url}</a></header>\n'
+            f'<header><h1>{title}</h1><a href="{url}">{url}</a>{source}</header>\n'
             f"{body}\n</body>\n</html>\n"
         )
         os.makedirs(os.path.dirname(os.path.abspath(dest_path)), exist_ok=True)

@@ -52,6 +52,9 @@ class Deck:
     source_url: str
     video_title: str
     slides: tuple[Slide, ...]
+    # 內容來源的註記，例如「由語音辨識產生」。寫在成品裡而不只是狀態列：
+    # 狀態列幾毫秒後就被蓋掉，而 HTML 會被分享、會被日後重看。
+    source_note: str = ""
 
     @property
     def missing_images(self) -> int:
