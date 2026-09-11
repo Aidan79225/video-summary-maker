@@ -21,6 +21,12 @@ def _default_model_factory(name: str):
     return WhisperModel(name, device="cpu", compute_type="int8")
 
 
+def _brief(error: Exception) -> str:
+    """Hugging Face、PyAV 的錯誤動輒數百字英文，截短後再放進狀態列。"""
+    text = " ".join(str(error).split())
+    return text if len(text) <= 160 else text[:157] + "…"
+
+
 def _mmss(seconds: float) -> str:
     total = max(0, int(seconds))
     return f"{total // 60}:{total % 60:02d}"
@@ -50,6 +56,10 @@ class FasterWhisperTranscriber:
 
         total = f" / {_mmss(duration)}" if duration > 0 else ""
         cues: list[Cue] = []
+        # faster-whisper 在回傳 generator 之前會一次解碼整個檔、跑完 VAD、偵測
+        # 語言——長影片要幾十秒且無法中斷。先更新狀態列，否則會一直停在上一步
+        # 的「下載音訊…」。
+        progress(None, "準備語音辨識…（解碼音訊、偵測人聲）")
         try:
             # vad_filter 跳過靜音與純音樂段：Whisper 在沒有人聲的地方會幻覺出
             # 「Thanks for watching」之類的句子，而那些句子會被寫進投影片。
@@ -62,7 +72,10 @@ class FasterWhisperTranscriber:
                 if is_cancelled():
                     raise OperationCancelled()
                 text = seg.text.strip()
-                if text:
+                # 略過空白段，以及緊接著的重複句：Whisper large 家族偶爾會卡在
+                # 同一句話上重複輸出（幻覺迴圈），而語音結果不走滾動去重，這些
+                # 重複會原封不動變成投影片內容。隔開出現的相同句子照常保留。
+                if text and not (cues and cues[-1].text == text):
                     cues.append(Cue(start=float(seg.start), end=float(seg.end), text=text))
                 # 段落時間戳可能略超過影片長度（turbo 以 4 秒對齊），夾住以免顯示
                 # 「0:20 / 0:19」這種看起來像算錯的進度。
@@ -71,7 +84,7 @@ class FasterWhisperTranscriber:
         except OperationCancelled:
             raise
         except Exception as e:  # noqa: BLE001 底層錯誤一律轉成可讀訊息
-            raise NoSubtitlesAvailable(f"這部影片沒有字幕，語音辨識也失敗：{e}") from e
+            raise NoSubtitlesAvailable(f"這部影片沒有字幕，語音辨識也失敗：{_brief(e)}") from e
         return tuple(cues), info.language
 
     def _load(self, progress: ProgressCallback):
@@ -81,11 +94,14 @@ class FasterWhisperTranscriber:
         try:
             self._model = self._model_factory(self._model_name)
         except ImportError as e:
+            # 不只「沒安裝」會走到這裡，ctranslate2 的 DLL 載入失敗也是 ImportError，
+            # 所以帶上原因，不要一律叫使用者 uv sync。
             raise NoSubtitlesAvailable(
-                "這部影片沒有字幕；語音辨識需要 faster-whisper 套件，請執行 uv sync"
+                f"這部影片沒有字幕；語音辨識套件 faster-whisper 無法載入（{_brief(e)}），"
+                "若未安裝請執行 uv sync"
             ) from e
         except Exception as e:  # noqa: BLE001 例如首次使用時無法下載模型
             raise NoSubtitlesAvailable(
-                f"這部影片沒有字幕，語音辨識模型 {self._model_name} 也無法載入：{e}"
+                f"這部影片沒有字幕，語音辨識模型 {self._model_name} 也無法載入：{_brief(e)}"
             ) from e
         return self._model

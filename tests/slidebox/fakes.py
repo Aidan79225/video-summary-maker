@@ -2,7 +2,11 @@
 from __future__ import annotations
 
 from slidebox.domain.entities import AudioClip, Cue, Slide, Transcript
-from slidebox.domain.errors import NoSubtitlesAvailable, SummarizerOutputInvalid
+from slidebox.domain.errors import (
+    NoSubtitlesAvailable,
+    OperationCancelled,
+    SummarizerOutputInvalid,
+)
 
 
 class FakeSubtitleGateway:
@@ -110,7 +114,10 @@ class FakeAudioGateway:
     """回傳固定的 AudioClip；下載時回報一個非 None 的進度，用來確認 use case
     不會把它直接丟給進度條。"""
 
-    def __init__(self, clip: AudioClip | None = None, error: Exception | None = None):
+    def __init__(self, clip: AudioClip | None = None, error: Exception | None = None,
+                 on_download=None):
+        self._on_download = on_download
+        self.saw_cancel = False
         self._clip = clip or AudioClip(
             path="OUT/_audio/audio.webm", video_id="spk1", title="沒有字幕的影片", duration=120.0
         )
@@ -123,6 +130,13 @@ class FakeAudioGateway:
         self.events.append("download")
         self.dest_dirs.append(dest_dir)
         progress(0.5, "下載音訊…")
+        # 比照真實 adapter 在下載途中檢查取消。saw_cancel 記錄 adapter 自己是否
+        # 看到取消——use case 若傳進來的是死的取消函式，這裡永遠是 False。
+        if self._on_download is not None:
+            self._on_download()
+        self.saw_cancel = is_cancelled()
+        if self.saw_cancel:
+            raise OperationCancelled()
         if self._error is not None:
             raise self._error
         return self._clip
@@ -133,7 +147,10 @@ class FakeAudioGateway:
 
 
 class FakeTranscriber:
-    def __init__(self, cues=None, language: str = "ja", error: Exception | None = None):
+    def __init__(self, cues=None, language: str = "ja", error: Exception | None = None,
+                 on_transcribe=None):
+        self._on_transcribe = on_transcribe
+        self.saw_cancel = False
         self._cues = cues if cues is not None else (
             Cue(0.0, 4.0, "こんにちは"), Cue(30.0, 34.0, "よろしくお願いします"),
         )
@@ -144,6 +161,11 @@ class FakeTranscriber:
     def transcribe(self, audio_path, duration, progress, is_cancelled):
         self.calls.append((audio_path, duration))
         progress(None, "語音辨識中… 0:30 / 2:00")
+        if self._on_transcribe is not None:
+            self._on_transcribe()
+        self.saw_cancel = is_cancelled()
+        if self.saw_cancel:
+            raise OperationCancelled()
         if self._error is not None:
             raise self._error
         return tuple(self._cues), self._language

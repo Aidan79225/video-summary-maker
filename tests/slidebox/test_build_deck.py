@@ -316,12 +316,50 @@ def test_an_audio_failure_keeps_its_own_reason():
     assert "403" in str(exc.value)
 
 
-def test_speech_progress_never_moves_the_bar():
-    """攔的 bug：音訊下載的 50% 直接進了進度條，接著摘要從 5% 開始，進度條倒退。
+def test_speech_progress_never_moves_the_bar_backwards():
+    """攔的 bug：音訊下載的進度直接進了進度條，接著摘要從 5% 開始，進度條倒退。
     語音路徑只回報文字，進度條顯示忙碌。"""
     seen: list[float | None] = []
     _build_speech().execute("URL", _settings(), lambda f, s: seen.append(f), None)
-    assert 0.5 not in seen
+    fractions = [f for f in seen if f is not None]
+    assert fractions == sorted(fractions)
+
+
+class _Flag:
+    def __init__(self):
+        self.on = False
+
+    def set(self):
+        self.on = True
+
+    def __call__(self):
+        return self.on
+
+
+def test_cancelling_during_the_audio_download_reaches_the_adapter():
+    """攔的 bug：use case 傳給音訊 adapter 的不是自己的取消函式（例如寫成
+    lambda: False）。那樣下載途中按取消毫無作用，要等整段下載完。
+
+    斷言 adapter 自己看到了取消，而不只是「最後有拋出 OperationCancelled」——
+    後者在接線壞掉時照樣成立，因為 use case 下載完後自己的 check() 也會拋。
+    """
+    flag = _Flag()
+    audio = FakeAudioGateway(on_download=flag.set)
+    with pytest.raises(OperationCancelled):
+        _build_speech(audio=audio).execute("URL", _settings(), None, flag)
+    assert audio.saw_cancel
+    assert audio.events[-1] == "cleanup"
+
+
+def test_cancelling_during_transcription_reaches_the_adapter():
+    """攔的 bug：同上，但發生在語音辨識——10 分鐘影片要白等 2 分半。"""
+    flag = _Flag()
+    audio = FakeAudioGateway()
+    trans = FakeTranscriber(on_transcribe=flag.set)
+    with pytest.raises(OperationCancelled):
+        _build_speech(audio=audio, transcriber=trans).execute("URL", _settings(), None, flag)
+    assert trans.saw_cancel
+    assert audio.events[-1] == "cleanup"
 
 
 
