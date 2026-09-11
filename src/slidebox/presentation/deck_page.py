@@ -192,7 +192,7 @@ class DeckPage(QWidget):
     def _on_action(self) -> None:
         if self._worker is not None and self._worker.isRunning():
             self._worker.cancel()
-            self.status.setText("取消中…")
+            self.status.setText("取消中…（部分步驟無法中斷，會在該步驟完成後停止）")
             return
         self._start()
 

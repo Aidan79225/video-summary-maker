@@ -50,7 +50,7 @@ def build_main_window() -> MainWindow:
         FfmpegFrameExtractor(),
         HtmlDeckRenderer(),
         # 沒有字幕時的語音辨識備援。模型在第一次需要時才載入（約 40 秒）並
-        # 快取在這個實例裡；改 whisper_model 需重開 app，與其他設定一致。
+        # 快取在這個實例裡；改 whisper_model 需重開 app（語言模型與 host 則每次生成時即時讀取）。
         audio=YtDlpAudioGateway(),
         transcriber=FasterWhisperTranscriber(settings.whisper_model),
     )
