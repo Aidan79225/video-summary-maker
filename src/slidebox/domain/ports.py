@@ -15,7 +15,12 @@ CancelCheck = Callable[[], bool]
 
 class SubtitleGateway(Protocol):
     def fetch(self, url: str, langs: Sequence[str]) -> Transcript:
-        """抓字幕並解析。找不到任何可用字幕時 raise NoSubtitlesAvailable。"""
+        """抓字幕並解析。
+
+        拿不到可用字幕時 raise NoSubtitlesAvailable——包含影片根本沒有字幕、
+        以及字幕存在但下載失敗（例如 HTTP 429）。對呼叫端而言兩者結局相同：
+        這部影片的字幕無法取得，該改走其他來源（例如語音辨識）。
+        """
         ...
 
 

@@ -62,4 +62,7 @@ class Settings:
     image_width: int = 1280
     num_ctx: int = 32768
     char_budget: int = 20000
-    subtitle_langs: tuple[str, ...] = ("zh-TW", "zh-Hant", "zh-HK", "zh", "en")
+    # 簡中排在繁中之後、英文之前：輸出是繁體，但人工簡中已經是中文，比英文好。
+    subtitle_langs: tuple[str, ...] = (
+        "zh-TW", "zh-Hant", "zh-HK", "zh", "zh-Hans", "zh-CN", "en",
+    )

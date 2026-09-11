@@ -15,7 +15,7 @@ from ..usecases.chapters import parse_vtt, pick_subtitle_track
 
 def _describe_download_error(lang: str, error: Exception) -> str:
     cause = str(error).removeprefix("ERROR: ").strip()
-    if "429" in cause:
+    if "HTTP Error 429" in cause:
         return (f"字幕軌 {lang} 下載失敗：YouTube 暫時限制了請求頻率（HTTP 429），"
                 "請過幾分鐘再試。")
     return f"字幕軌 {lang} 下載失敗：{cause[:160]}"

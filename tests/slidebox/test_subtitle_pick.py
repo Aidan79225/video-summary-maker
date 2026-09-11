@@ -100,3 +100,26 @@ def test_original_language_without_a_matching_track_falls_back():
     """攔的 bug：原始語言層找不到時沒有往下退，而是回傳錯誤的值或拋例外。"""
     auto = {"zh-Hant": [], "en": []}
     assert pick_subtitle_track({}, auto, PREFER, "ja") == ("zh-Hant", True)
+
+
+# --- 預設偏好序：輸出是繁體中文 ---
+
+from slidebox.domain.entities import Settings  # noqa: E402
+
+DEFAULT = Settings(output_dir="X").subtitle_langs
+
+
+def test_default_prefers_human_simplified_chinese_over_human_english():
+    """攔的 bug：人工簡中字幕排不進偏好序，輸給人工英文。
+
+    精確比對會先把整份偏好序跑完才做前綴比對，所以 zh-CN 只能靠前綴命中，
+    而 en 是精確命中——不列入偏好序的話，已經是中文的人工字幕反而落選，
+    模型得從英文重新翻譯。
+    """
+    assert pick_subtitle_track({"zh-CN": [], "en": []}, {}, DEFAULT) == ("zh-CN", False)
+
+
+def test_default_still_prefers_traditional_over_simplified():
+    """攔的 bug：為了讓簡中勝過英文，把簡中排到繁中前面。輸出是繁體。"""
+    manual = {"zh-CN": [], "zh-Hant": []}
+    assert pick_subtitle_track(manual, {}, DEFAULT) == ("zh-Hant", False)
