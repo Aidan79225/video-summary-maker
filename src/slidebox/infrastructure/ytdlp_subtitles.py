@@ -13,12 +13,23 @@ from ..domain.errors import NoSubtitlesAvailable
 from ..usecases.chapters import parse_vtt, pick_subtitle_track
 
 
+def _describe_download_error(lang: str, error: Exception) -> str:
+    cause = str(error).removeprefix("ERROR: ").strip()
+    if "429" in cause:
+        return (f"字幕軌 {lang} 下載失敗：YouTube 暫時限制了請求頻率（HTTP 429），"
+                "請過幾分鐘再試。")
+    return f"字幕軌 {lang} 下載失敗：{cause[:160]}"
+
+
 class YtDlpSubtitleGateway:
     def fetch(self, url: str, langs: Sequence[str]) -> Transcript:
         with tempfile.TemporaryDirectory(prefix="slidebox_subs_") as tmp:
             info = self._probe(url)
             lang, is_auto = pick_subtitle_track(
-                info.get("subtitles"), info.get("automatic_captions"), langs
+                info.get("subtitles"),
+                info.get("automatic_captions"),
+                langs,
+                info.get("language"),   # 讓自動字幕優先選原文而非機器翻譯
             )
             vtt_text = self._download_track(url, lang, is_auto, tmp)
 
@@ -55,8 +66,13 @@ class YtDlpSubtitleGateway:
             "no_warnings": True,
             "noplaylist": True,
         }
-        with yt_dlp.YoutubeDL(opts) as ydl:
-            ydl.download([url])
+        try:
+            with yt_dlp.YoutubeDL(opts) as ydl:
+                ydl.download([url])
+        except yt_dlp.utils.DownloadError as e:
+            # 不讓 yt-dlp 的英文錯誤原封不動冒到 UI。原因要保留：被限流跟
+            # 影片沒字幕是兩回事，使用者需要知道該等一下還是換一支影片。
+            raise NoSubtitlesAvailable(_describe_download_error(lang, e)) from e
         # yt-dlp 會寫成 <id>.<lang>.vtt，語言後綴可能與請求的鍵略有出入
         files = glob.glob(os.path.join(tmp_dir, "*.vtt"))
         if not files:
