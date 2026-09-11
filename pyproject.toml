@@ -5,6 +5,7 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
+    "faster-whisper>=1.2.1",
     "imageio-ffmpeg>=0.6.0",
     "mutagen>=1.48.1",
     "opencc-python-reimplemented>=0.1.7",

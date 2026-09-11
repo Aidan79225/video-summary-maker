@@ -24,6 +24,7 @@ def test_round_trip(tmp_path):
         num_ctx=8192,
         char_budget=5000,
         subtitle_langs=("en", "zh"),
+        whisper_model="small",
     )
     repo.save(s)
     assert repo.load(_default()) == s

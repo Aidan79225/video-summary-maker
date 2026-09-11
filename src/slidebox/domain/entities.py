@@ -19,7 +19,22 @@ class Transcript:
     duration: float
     cues: tuple[Cue, ...]
     language: str
-    is_automatic: bool = False   # 自動字幕品質較差，UI 會提示
+    # 是否為 YouTube 的滾動式自動字幕：決定是否做滾動去重、以及是否提示品質。
+    # 語音辨識的結果不是滾動字幕，設 False——套用滾動去重只會誤刪內容。
+    is_automatic: bool = False
+
+
+@dataclass(frozen=True)
+class AudioClip:
+    """下載好的音訊檔與其影片資訊。
+
+    語音路徑是在字幕 gateway 失敗之後才走的，拿不到它原本提供的 metadata，
+    所以由音訊 gateway 一併帶回。
+    """
+    path: str
+    video_id: str
+    title: str
+    duration: float
 
 
 @dataclass(frozen=True)
@@ -66,3 +81,6 @@ class Settings:
     subtitle_langs: tuple[str, ...] = (
         "zh-TW", "zh-Hant", "zh-HK", "zh", "zh-Hans", "zh-CN", "en",
     )
+    # 沒有字幕時的語音辨識模型。large-v3-turbo 在 CPU 上比 medium 還快、品質
+    # 最佳；實測日韓 3.9～4.9 倍即時。改 small 約快兩成，但日文明顯較差。
+    whisper_model: str = "large-v3-turbo"

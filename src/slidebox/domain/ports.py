@@ -4,7 +4,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Callable, Protocol
 
-from .entities import Deck, Slide, Transcript
+from .entities import AudioClip, Cue, Deck, Slide, Transcript
 
 # 進度回報：fraction 為 0..1，None 表示不確定；status 為文字說明。
 ProgressCallback = Callable[[float | None, str], None]
@@ -87,4 +87,42 @@ class DeckRenderer(Protocol):
 class ModelCatalog(Protocol):
     def list_models(self) -> list[str]:
         """列出本機可用模型，供 UI 下拉。連不上時回傳空陣列，不 raise。"""
+        ...
+
+
+class AudioGateway(Protocol):
+    def download_audio(
+        self,
+        url: str,
+        dest_dir: str,
+        progress: ProgressCallback,
+        is_cancelled: CancelCheck,
+    ) -> AudioClip:
+        """下載影片的音訊到 dest_dir（自行建立），連同影片資訊回傳。
+
+        失敗時 raise NoSubtitlesAvailable——走到這一步表示影片已經沒有字幕，
+        音訊再拿不到，對呼叫端而言結局相同。
+        """
+        ...
+
+    def cleanup(self, dest_dir: str) -> None:
+        """刪除暫存音訊目錄。同 VideoSectionGateway.cleanup：必須容忍目錄
+        不存在，且絕不可 raise——它在 finally 裡被呼叫。"""
+        ...
+
+
+class SpeechTranscriber(Protocol):
+    def transcribe(
+        self,
+        audio_path: str,
+        duration: float,
+        progress: ProgressCallback,
+        is_cancelled: CancelCheck,
+    ) -> tuple[tuple[Cue, ...], str]:
+        """語音辨識，回傳 (字幕, 偵測到的語言代碼)。
+
+        沒偵測到任何語音時回傳空的字幕 tuple，由呼叫端決定如何告知使用者。
+        逐段檢查 is_cancelled，取消時 raise OperationCancelled。
+        duration 只用於進度顯示，給 0 時不顯示總長。
+        """
         ...
