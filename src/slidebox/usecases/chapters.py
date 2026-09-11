@@ -28,19 +28,49 @@ def _find_lang(tracks: Mapping[str, object] | None, prefer: Sequence[str]) -> st
     return None
 
 
+def _find_original(
+    tracks: Mapping[str, object] | None, original_language: str | None
+) -> str | None:
+    """在自動字幕裡找「影片原始語言」那一軌，也就是未經翻譯的語音辨識結果。
+
+    YouTube 的自動字幕同時提供原文辨識與約 150 種機器翻譯，翻譯軌的 URL
+    帶 tlang= 參數。翻譯是「辨識錯誤 + 翻譯錯誤」兩層損失，而且實測翻譯
+    端點會回 HTTP 429 限流。把原文交給模型、讓它邊摘要邊翻譯更好。
+
+    language 可能帶區域或字體標記（實測見過 zh-Hant），所以精確比對之後
+    再退讓到基底語言。
+    """
+    if not original_language or not tracks:
+        return None
+    base = original_language.split("-")[0]
+    for key in (f"{original_language}-orig", original_language, f"{base}-orig", base):
+        if key in tracks:
+            return key
+    return None
+
+
 def pick_subtitle_track(
     subtitles: Mapping[str, object] | None,
     automatic_captions: Mapping[str, object] | None,
     prefer: Sequence[str],
+    original_language: str | None = None,
 ) -> tuple[str, bool]:
     """從 yt-dlp 的兩份字典挑一軌，回傳 (語言鍵, 是否為自動字幕)。
 
-    手動字幕整體優先於自動字幕——人工字幕品質高出太多，寧可語言排序
-    退讓。都沒有則 raise NoSubtitlesAvailable。
+    優先序三層：
+
+    1. 人工字幕，依偏好序——人工翻譯品質高出太多，寧可語言排序退讓。
+    2. 自動字幕中的原始語言軌——原文只有辨識一層損失，機器翻譯是兩層。
+    3. 自動字幕，依偏好序——即 YouTube 的機器翻譯，最後手段。
+
+    都沒有則 raise NoSubtitlesAvailable。
     """
     hit = _find_lang(subtitles, prefer)
     if hit is not None:
         return hit, False
+    hit = _find_original(automatic_captions, original_language)
+    if hit is not None:
+        return hit, True
     hit = _find_lang(automatic_captions, prefer)
     if hit is not None:
         return hit, True
