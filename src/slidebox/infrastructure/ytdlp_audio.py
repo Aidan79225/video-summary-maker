@@ -41,7 +41,9 @@ class YtDlpAudioGateway:
 
         opts = {
             "format": "bestaudio/best",
-            "outtmpl": os.path.join(dest_dir, "audio.%(ext)s"),
+            # 檔名帶影片 id：yt-dlp 預設不覆寫既有檔案，固定檔名時上一次中斷
+            # 留下的舊檔會被直接拿來用，下一支影片就轉錄到別支影片的聲音。
+            "outtmpl": os.path.join(dest_dir, "%(id)s.%(ext)s"),
             "progress_hooks": [hook],
             "noplaylist": True,
             "quiet": True,

@@ -36,10 +36,12 @@ def _fake_ydl(info=INFO, *, write=True, error=None, hook_events=()):
                 raise error
             if not write:
                 return {**info, "requested_downloads": []}
-            folder = os.path.dirname(self.params["outtmpl"])
-            path = os.path.join(folder, "audio.webm")
-            with open(path, "wb") as f:
-                f.write(b"fake-opus")
+            path = self.params["outtmpl"].replace("%(id)s", info["id"]).replace("%(ext)s", "webm")
+            # 比照真實 yt-dlp：目標檔已存在就不覆寫、直接回報那個舊檔（「already
+            # downloaded」）。少了這個語意，任何測試都攔不到舊音訊被重複使用。
+            if not os.path.exists(path):
+                with open(path, "wb") as f:
+                    f.write(info["id"].encode())
             return {**info, "requested_downloads": [{"filepath": path}]}
 
     return FakeYDL
@@ -55,7 +57,7 @@ def test_returns_the_downloaded_file_with_the_video_metadata(tmp_path, monkeypat
     monkeypatch.setattr(ytdlp_audio.yt_dlp, "YoutubeDL", _fake_ydl())
     clip = YtDlpAudioGateway().download_audio("URL", str(tmp_path / "a"), _quiet, lambda: False)
     assert clip == AudioClip(
-        path=str(tmp_path / "a" / "audio.webm"),
+        path=str(tmp_path / "a" / "aqz-KE-bpKQ.webm"),
         video_id="aqz-KE-bpKQ",
         title="Big Buck Bunny",
         duration=635.0,
@@ -101,3 +103,17 @@ def test_download_progress_is_forwarded(tmp_path, monkeypatch):
         "URL", str(tmp_path), lambda f, s: seen.append((f, s)), lambda: False
     )
     assert (0.25, ) == tuple(f for f, _ in seen if f is not None)[:1]
+
+
+
+def test_a_leftover_file_from_another_video_is_never_reused(tmp_path, monkeypatch):
+    """攔的 bug：固定檔名 audio.webm。上一次執行在 finally 之前中斷（例如轉錄時
+    關掉視窗）留下舊檔，yt-dlp 預設不覆寫、直接回報舊檔——下一支影片就拿上一支
+    影片的聲音去轉錄，做出「新影片的標題與截圖、舊影片的內容」。"""
+    dest = tmp_path / "a"
+    dest.mkdir()
+    (dest / "audio.webm").write_bytes(b"OLD-VIDEO")
+    monkeypatch.setattr(ytdlp_audio.yt_dlp, "YoutubeDL", _fake_ydl())
+    clip = YtDlpAudioGateway().download_audio("URL", str(dest), _quiet, lambda: False)
+    with open(clip.path, "rb") as f:
+        assert f.read() == b"aqz-KE-bpKQ"

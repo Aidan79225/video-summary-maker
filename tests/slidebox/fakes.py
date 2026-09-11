@@ -113,8 +113,10 @@ class FakeAudioGateway:
         self._error = error
         self.dest_dirs: list[str] = []
         self.cleaned: list[str] = []
+        self.events: list[str] = []
 
     def download_audio(self, url, dest_dir, progress, is_cancelled):
+        self.events.append("download")
         self.dest_dirs.append(dest_dir)
         progress(0.5, "下載音訊…")
         if self._error is not None:
@@ -122,6 +124,7 @@ class FakeAudioGateway:
         return self._clip
 
     def cleanup(self, dest_dir):
+        self.events.append("cleanup")
         self.cleaned.append(dest_dir)
 
 

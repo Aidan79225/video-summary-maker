@@ -125,10 +125,11 @@ class BuildDeckUseCase:
     ) -> Transcript:
         """沒有字幕時：下載音訊 → 語音辨識 → 組成 Transcript。
 
-        音訊放在固定的 output_dir/_audio：此時還不知道 video_id，無法放進
-        影片自己的資料夾。app 一次只跑一個生成，不會撞名。
+        音訊放在固定的暫存資料夾：此時還不知道 video_id，無法放進影片自己的
+        資料夾。app 一次只跑一個生成，不會撞名。資料夾名稱刻意取成明顯屬於
+        本程式的樣子——cleanup 會整個刪除它，不能跟使用者自己的資料夾同名。
         """
-        audio_dir = os.path.join(settings.output_dir, "_audio")
+        audio_dir = os.path.join(settings.output_dir, ".slidebox_audio_tmp")
 
         # 語音路徑只回報文字、進度條顯示忙碌：音訊下載的 50% 若直接進度條，
         # 接著摘要從 5% 開始，進度條會倒退。
@@ -138,6 +139,9 @@ class BuildDeckUseCase:
         try:
             check()
             cb(None, "無法取得字幕，改用語音辨識…")
+            # 先清空：上一次若在 finally 之前就中斷（例如轉錄時關掉視窗），
+            # 留下的 .part 會被 yt-dlp 續傳，把兩支影片的位元組拼在一起。
+            self._audio.cleanup(audio_dir)
             clip = self._audio.download_audio(url, audio_dir, speech_cb, cancelled)
             check()
             cues, language = self._transcriber.transcribe(

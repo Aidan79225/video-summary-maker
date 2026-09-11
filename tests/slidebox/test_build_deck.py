@@ -278,7 +278,16 @@ def test_audio_is_removed_after_transcription():
     """攔的 bug：暫存音訊留在輸出資料夾裡越積越多。"""
     audio = FakeAudioGateway()
     _build_speech(audio=audio).execute("URL", _settings())
-    assert audio.cleaned == audio.dest_dirs
+    assert audio.events[-1] == "cleanup"
+    assert set(audio.cleaned) == set(audio.dest_dirs)
+
+
+def test_leftover_audio_is_cleared_before_downloading():
+    """攔的 bug：上一次執行在 finally 之前就中斷（例如轉錄時關掉視窗），留下的
+    .part 會被 yt-dlp 續傳，把兩支影片的位元組拼成一個檔。下載前先清空。"""
+    audio = FakeAudioGateway()
+    _build_speech(audio=audio).execute("URL", _settings())
+    assert audio.events[:2] == ["cleanup", "download"]
 
 
 def test_audio_is_removed_when_cancelled_during_transcription():
@@ -287,7 +296,7 @@ def test_audio_is_removed_when_cancelled_during_transcription():
     trans = FakeTranscriber(error=OperationCancelled())
     with pytest.raises(OperationCancelled):
         _build_speech(audio=audio, transcriber=trans).execute("URL", _settings())
-    assert audio.cleaned == audio.dest_dirs
+    assert audio.events[-1] == "cleanup"
 
 
 def test_no_detected_speech_is_a_clear_error():
