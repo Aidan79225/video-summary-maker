@@ -141,9 +141,9 @@ class BuildDeckUseCase:
         audio_dir = os.path.join(settings.output_dir, ".slidebox_audio_tmp")
 
         # 語音路徑只回報文字、進度條顯示忙碌：音訊下載的 50% 若直接進度條，
-        # 接著摘要從 5% 開始，進度條會倒退。
+        # 接著摘要從 5% 開始，進度條會倒退。百分比改寫進文字，不丟掉。
         def speech_cb(frac: float | None, status: str) -> None:
-            cb(None, status)
+            cb(None, status if frac is None else f"{status} {frac:.0%}")
 
         try:
             check()

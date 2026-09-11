@@ -374,3 +374,11 @@ def test_a_transient_subtitle_failure_is_reported_not_transcribed():
         uc.execute("URL", _settings())
     assert "請過幾分鐘再試" in str(exc.value)
     assert trans.calls == []
+
+
+def test_the_audio_download_percentage_is_shown_as_text():
+    """攔的 bug：語音路徑為了不讓進度條倒退而把分數改成 None，連帶把下載百分比
+    也丟了，下載音訊期間使用者看不到任何進展。"""
+    seen: list[str] = []
+    _build_speech().execute("URL", _settings(), lambda f, s: seen.append(s), None)
+    assert any("50%" in s for s in seen)

@@ -117,3 +117,42 @@ def test_a_leftover_file_from_another_video_is_never_reused(tmp_path, monkeypatc
     clip = YtDlpAudioGateway().download_audio("URL", str(dest), _quiet, lambda: False)
     with open(clip.path, "rb") as f:
         assert f.read() == b"aqz-KE-bpKQ"
+
+
+def _capture_format(monkeypatch, tmp_path):
+    captured: list[dict] = []
+
+    class Capturing:
+        def __init__(self, params):
+            captured.append(params)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def extract_info(self, url, download=False):
+            raise yt_dlp.utils.DownloadError("stop")
+
+    monkeypatch.setattr(ytdlp_audio.yt_dlp, "YoutubeDL", Capturing)
+    with pytest.raises(NoSubtitlesAvailable):
+        YtDlpAudioGateway().download_audio("URL", str(tmp_path), _quiet, lambda: False)
+    return captured[0]["format"]
+
+
+def test_the_audio_format_excludes_hls_streams(tmp_path, monkeypatch):
+    """攔的 bug：直播中的影片沒有字幕，會走到語音路徑；不限定協定時選到 HLS
+    音訊，yt-dlp 會一直錄到直播結束，使用者只看到忙碌動畫、永遠等不到。
+    限定 http 後，只有 HLS 可用時會直接報「格式不可用」而乾淨地失敗。"""
+    fmt = _capture_format(monkeypatch, tmp_path)
+    assert all("protocol^=http" in alternative for alternative in fmt.split("/"))
+
+
+def test_any_yt_dlp_failure_becomes_a_domain_error(tmp_path, monkeypatch):
+    """攔的 bug：只接 DownloadError。磁碟滿時 yt-dlp 拋的是 UnavailableVideoError，
+    以英文原文衝到 UI。"""
+    err = yt_dlp.utils.UnavailableVideoError("磁碟空間不足")
+    monkeypatch.setattr(ytdlp_audio.yt_dlp, "YoutubeDL", _fake_ydl(error=err))
+    with pytest.raises(NoSubtitlesAvailable):
+        YtDlpAudioGateway().download_audio("URL", str(tmp_path), _quiet, lambda: False)

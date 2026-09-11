@@ -40,7 +40,10 @@ class YtDlpAudioGateway:
                 progress(done / total if total else None, "下載音訊…")
 
         opts = {
-            "format": "bestaudio/best",
+            # 限定 http：直播中的影片沒有字幕、會走到這裡，選到 HLS 音訊時 yt-dlp
+            # 會一直錄到直播結束。限定後只有 HLS 可用時會直接報「格式不可用」。
+            # 退路也限定 http，並避免 best 抓回一整支影音合併的影片檔。
+            "format": "bestaudio[protocol^=http]/best[protocol^=http]",
             # 檔名帶影片 id：yt-dlp 預設不覆寫既有檔案，固定檔名時上一次中斷
             # 留下的舊檔會被直接拿來用，下一支影片就轉錄到別支影片的聲音。
             "outtmpl": os.path.join(dest_dir, "%(id)s.%(ext)s"),
@@ -54,8 +57,11 @@ class YtDlpAudioGateway:
             with yt_dlp.YoutubeDL(opts) as ydl:
                 info = ydl.extract_info(url, download=True) or {}
         except _YtDownloadCancelled as e:
+            # 必須排在 YoutubeDLError 之前：DownloadCancelled 也是它的子類別，
+            # 順序反了使用者按取消會被當成「下載失敗」。
             raise OperationCancelled() from e
-        except yt_dlp.utils.DownloadError as e:
+        except yt_dlp.utils.YoutubeDLError as e:
+            # 不只 DownloadError：例如磁碟空間不足時拋的是 UnavailableVideoError
             cause = str(e).removeprefix("ERROR: ").strip()[:160]
             raise NoSubtitlesAvailable(f"這部影片沒有字幕，音訊也下載失敗：{cause}") from e
 
