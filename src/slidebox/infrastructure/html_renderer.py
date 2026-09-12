@@ -101,7 +101,7 @@ class HtmlDeckRenderer:
         # 逐字稿預設收合：它比投影片長一個數量級，攤開就把成品推到螢幕外。
         # 用 <pre> 保留換行——每行開頭的時間是使用者找位置的唯一線索。
         transcript = (
-            '<details class="transcript"><summary>完整逐字稿</summary>'
+            '<details class="transcript"><summary>完整逐字稿（字幕原文）</summary>'
             f"<pre>{html.escape(deck.transcript_text)}</pre></details>"
             if deck.transcript_text.strip() else ""
         )

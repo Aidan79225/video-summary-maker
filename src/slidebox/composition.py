@@ -26,6 +26,25 @@ def _project_root() -> str:
     return os.path.dirname(os.path.dirname(os.path.dirname(here)))
 
 
+class CurrentSettingsSummarizer:
+    """每次生成都用當下的 model／host 設定，讓使用者換模型後不必重開 app。
+
+    參數必須與 Summarizer port 完全一致：這一層是純轉發，簽章少一個參數
+    不會有任何測試抓到（composition root 沒有測試），只會在使用者按下
+    生成時炸成 TypeError。
+    """
+
+    def __init__(self, settings: Settings):
+        self._settings = settings
+
+    def summarize(self, compressed, duration, min_slides, max_slides, hint,
+                  progress, detailed=False):
+        s = self._settings
+        impl = OllamaSummarizer(s.ollama_host, s.model, s.num_ctx)
+        return impl.summarize(
+            compressed, duration, min_slides, max_slides, hint, progress, detailed)
+
+
 def build_main_window() -> MainWindow:
     settings_repo = JsonSettingsRepository(
         os.path.join(_project_root(), "slidebox_settings.json")
@@ -35,17 +54,9 @@ def build_main_window() -> MainWindow:
     def save() -> None:
         settings_repo.save(settings)
 
-    # Summarizer 每次生成時都要用當下的 model／host 設定，所以包一層
-    # 轉發器，讓使用者換模型後不必重開 app。
-    class _CurrentSummarizer:
-        def summarize(self, compressed, duration, min_slides, max_slides, hint, progress):
-            impl = OllamaSummarizer(settings.ollama_host, settings.model, settings.num_ctx)
-            return impl.summarize(
-                compressed, duration, min_slides, max_slides, hint, progress)
-
     usecase = BuildDeckUseCase(
         YtDlpSubtitleGateway(),
-        _CurrentSummarizer(),
+        CurrentSettingsSummarizer(settings),
         YtDlpSectionGateway(),
         FfmpegFrameExtractor(),
         HtmlDeckRenderer(),
