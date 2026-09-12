@@ -3,7 +3,7 @@ import Base from '../../layouts/Base.astro';
 import Notice from '../../components/Notice.astro';
 import SlideBlock from '../../components/SlideBlock.astro';
 import Transcript from '../../components/Transcript.astro';
-import { getArticle } from '../../lib/api';
+import { getArticle, safeExternalUrl } from '../../lib/api';
 import { displayTitle, formatDateWithWeekday, humanDuration, mmss } from '../../lib/format';
 
 const slug = String(Astro.params.slug ?? '');
@@ -17,6 +17,7 @@ if (!res || !res.ok) {
 const article = res && res.ok ? res.data : null;
 const title = article ? displayTitle(article.title) : '找不到報導';
 const slides = article?.slides ?? [];
+const ivodUrl = safeExternalUrl(article?.ivod_url);
 const retryHref = Astro.url.pathname;
 ---
 
@@ -73,7 +74,7 @@ const retryHref = Astro.url.pathname;
               <dd class="tabular text-ink-2">{slides.length} 段</dd>
             </div>
             <a
-              href={article.ivod_url}
+              href={ivodUrl}
               target="_blank"
               rel="noopener noreferrer"
               class="lift ml-auto inline-flex items-center gap-1.5 rounded-full border border-line px-3 py-1 text-ink-2 hover:border-accent hover:text-accent"
@@ -108,7 +109,7 @@ const retryHref = Astro.url.pathname;
         {slides.length > 0 ? (
           <div class="mt-10 space-y-10 sm:mt-14 sm:space-y-12">
             {slides.map((s, i) => (
-              <SlideBlock slide={s} ivodUrl={article.ivod_url} order={i + 1} total={slides.length} />
+              <SlideBlock slide={s} ivodUrl={ivodUrl} order={i + 1} total={slides.length} />
             ))}
           </div>
         ) : (

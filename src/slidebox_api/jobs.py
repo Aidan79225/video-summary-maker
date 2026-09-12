@@ -8,15 +8,23 @@ from __future__ import annotations
 import threading
 import time
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
+from enum import StrEnum
 
-QUEUED = "queued"
-RUNNING = "running"
-DONE = "done"
-FAILED = "failed"
-CANCELLED = "cancelled"
 
-_FINISHED = (DONE, FAILED, CANCELLED)
+class JobStatus(StrEnum):
+    QUEUED = "queued"
+    RUNNING = "running"
+    DONE = "done"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+
+    @property
+    def is_finished(self) -> bool:
+        return self in _FINISHED
+
+
+_FINISHED = frozenset({JobStatus.DONE, JobStatus.FAILED, JobStatus.CANCELLED})
 
 # 預設保留幾筆工作。每筆成品帶著 base64 圖片，這個服務又會連續跑好幾個月，
 # 不設上限記憶體只會一路長。
@@ -33,7 +41,7 @@ class Job:
     max_slides: int | None = None
     model: str | None = None
 
-    status: str = QUEUED
+    status: JobStatus = JobStatus.QUEUED
     progress_fraction: float | None = None
     progress_status: str = ""
     error: str = ""
@@ -71,14 +79,24 @@ class JobStore:
         with self._lock:
             return self._jobs.get(job_id)
 
-    def recent(self, limit: int = 20) -> list[Job]:
+    def snapshot(self, job_id: str) -> Job | None:
+        """鎖內複製一份再回傳。
+
+        Job 是可變的，而 HTTP 層會在鎖外逐一讀它的屬性——沒有快照的話，
+        讀到一半工作剛好結束，就會拿到自相矛盾的組合。
+        """
         with self._lock:
-            return [self._jobs[i] for i in reversed(self._order)][:limit]
+            job = self._jobs.get(job_id)
+            return replace(job) if job is not None else None
+
+    def recent_snapshots(self, limit: int = 20) -> list[Job]:
+        with self._lock:
+            return [replace(self._jobs[i]) for i in reversed(self._order)][:limit]
 
     def counts(self) -> tuple[int, int]:
         """(排隊中, 是否有在跑)——給 /health 用。"""
         with self._lock:
-            queued = sum(1 for j in self._jobs.values() if j.status == QUEUED)
+            queued = sum(1 for j in self._jobs.values() if j.status == JobStatus.QUEUED)
             return queued, 1 if self._running_unlocked() else 0
 
     # --- 轉換 ---
@@ -100,8 +118,8 @@ class JobStore:
                 return None
             for job_id in self._order:
                 job = self._jobs[job_id]
-                if job.status == QUEUED:
-                    job.status = RUNNING
+                if job.status == JobStatus.QUEUED:
+                    job.status = JobStatus.RUNNING
                     job.started_at = time.time()
                     return job
             return None
@@ -114,13 +132,13 @@ class JobStore:
                 job.progress_status = status
 
     def finish(self, job_id: str, result: dict) -> None:
-        self._settle(job_id, DONE, result=result)
+        self._settle(job_id, JobStatus.DONE, result=result)
 
     def fail(self, job_id: str, error: str) -> None:
-        self._settle(job_id, FAILED, error=error)
+        self._settle(job_id, JobStatus.FAILED, error=error)
 
     def cancelled(self, job_id: str) -> None:
-        self._settle(job_id, CANCELLED)
+        self._settle(job_id, JobStatus.CANCELLED)
 
     def cancel(self, job_id: str) -> bool:
         """要求取消；回傳這個 id 存不存在。
@@ -134,29 +152,33 @@ class JobStore:
             if job is None:
                 return False
             job.cancel_requested.set()
-            if job.status == QUEUED:
-                job.status = CANCELLED
+            if job.status == JobStatus.QUEUED:
+                job.status = JobStatus.CANCELLED
                 job.finished_at = time.time()
             return True
 
     # --- 內部 ---
 
-    def _settle(self, job_id: str, status: str, result: dict | None = None,
+    def _settle(self, job_id: str, status: JobStatus, result: dict | None = None,
                 error: str = "") -> None:
         with self._lock:
             job = self._jobs.get(job_id)
             if job is None:
                 return
-            job.status = status
             job.result = result
             job.error = error
             job.finished_at = time.time()
-            job.progress_fraction = 1.0 if status == DONE else job.progress_fraction
+            if status == JobStatus.DONE:
+                job.progress_fraction = 1.0
+            # status 最後才寫：讀取端是在鎖外逐一取屬性的，先翻狀態會讓
+            # 「done 但 result 還是 None」這個瞬間被讀到——Pi 那邊看到它會
+            # 判定工作失敗，幾分鐘的 GPU 成品就報銷了。
+            job.status = status
             self._forget_old_unlocked()
 
     def _running_unlocked(self) -> Job | None:
         for job in self._jobs.values():
-            if job.status == RUNNING:
+            if job.status == JobStatus.RUNNING:
                 return job
         return None
 
@@ -168,7 +190,7 @@ class JobStore:
         """
         while len(self._order) > self._max_jobs:
             victim = next(
-                (i for i in self._order if self._jobs[i].status in _FINISHED), None)
+                (i for i in self._order if self._jobs[i].status.is_finished), None)
             if victim is None:
                 return
             self._order.remove(victim)

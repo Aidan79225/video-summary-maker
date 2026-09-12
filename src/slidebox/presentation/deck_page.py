@@ -25,15 +25,7 @@ from PySide6.QtWidgets import (
 from ..domain.entities import Settings
 from ..domain.ports import ModelCatalog
 from ..usecases.build_deck import BuildDeckUseCase
-from ..usecases.queue import (
-    CANCELLED,
-    DONE,
-    FAILED,
-    PENDING,
-    RUNNING,
-    JobQueue,
-    QueueItem,
-)
+from ..usecases.queue import ItemStatus, JobQueue, QueueItem
 from .workers import BuildDeckWorker
 
 # 畫質下拉：顯示文字 → max_height（沿用 musicbox 的形狀）
@@ -54,11 +46,11 @@ _SHUTDOWN_WAIT_MS = 30_000
 
 # 佇列每一項的狀態符號。純文字符號，不依賴任何圖示資源。
 _ICONS = {
-    PENDING: "⏳",
-    RUNNING: "▶",
-    DONE: "✅",
-    FAILED: "❌",
-    CANCELLED: "⏹",
+    ItemStatus.PENDING: "⏳",
+    ItemStatus.RUNNING: "▶",
+    ItemStatus.DONE: "✅",
+    ItemStatus.FAILED: "❌",
+    ItemStatus.CANCELLED: "⏹",
 }
 
 
@@ -309,9 +301,9 @@ class DeckPage(QWidget):
     def _open_selected(self) -> None:
         item = self._selected()
         # 沒選任何一項時開最後一個完成的——「做完就想看」是最常見的動作
-        if item is None or item.status != DONE:
+        if item is None or item.status != ItemStatus.DONE:
             fallback = next(
-                (i for i in reversed(self._queue.items) if i.status == DONE), None)
+                (i for i in reversed(self._queue.items) if i.status == ItemStatus.DONE), None)
             # 但要說清楚開的是哪一支：靜默改開別支影片會讓人以為成品錯了
             if fallback is not None and item is not None:
                 self.status.setText(
@@ -492,11 +484,11 @@ class DeckPage(QWidget):
             running or self._queue.pending_count > 0 or bool(self.url_edit.text().strip())
         )
         selected = self._selected()
-        self.remove_btn.setEnabled(selected is not None and selected.status != RUNNING)
+        self.remove_btn.setEnabled(selected is not None and selected.status != ItemStatus.RUNNING)
         self.retry_btn.setEnabled(
-            selected is not None and selected.status in (FAILED, CANCELLED))
+            selected is not None and selected.status in (ItemStatus.FAILED, ItemStatus.CANCELLED))
         self.open_btn.setEnabled(
-            any(i.status == DONE and i.html_path for i in self._queue.items)
+            any(i.status == ItemStatus.DONE and i.html_path for i in self._queue.items)
         )
         # 設定在每一項開始的當下讀取，生成途中改動會讓正在跑的那一項行為
         # 不一致，所以照舊鎖住；網址列不鎖——邊等邊排隊正是佇列的用途。

@@ -8,7 +8,7 @@ from fastapi.testclient import TestClient
 
 from slidebox.domain.errors import OperationCancelled
 from slidebox_api.app import create_app
-from slidebox_api.jobs import JobStore
+from slidebox_api.jobs import JobStatus, JobStore
 from slidebox_api.runner import JobWorker
 
 IVOD = "https://ivod.ly.gov.tw/Play/Clip/1M/171180"
@@ -34,14 +34,19 @@ class FakeExecutor:
         return {"video_id": "171180", "slides": [], "title": job.url}
 
 
+def _app(store, worker, api_key="", reachable=True):
+    return create_app(store=store, worker=worker, api_key=api_key,
+                      model="qwen3.5:9b", ollama_host="http://localhost:11434",
+                      probe_ollama=lambda: reachable)
+
+
 @pytest.fixture
 def kit():
     store = JobStore()
     executor = FakeExecutor()
     worker = JobWorker(store, executor)
-    app = create_app(store=store, worker=worker, api_key="")
     # 不啟動背景執行緒：測試自己決定何時跑，結果才是確定的
-    with TestClient(app) as client:
+    with TestClient(_app(store, worker)) as client:
         worker.stop()
         yield client, store, worker, executor
 
@@ -103,7 +108,7 @@ def test_an_unknown_job_is_404(kit):
 def test_a_queued_job_can_be_cancelled_before_it_ever_runs(kit):
     client, store, worker, executor = kit
     job_id = client.post("/jobs", json={"url": IVOD}).json()["id"]
-    assert client.delete(f"/jobs/{job_id}").json()["status"] == "cancelled"
+    assert client.delete(f"/jobs/{job_id}").json()["status"] == JobStatus.CANCELLED
     worker.run_once()
     assert executor.calls == []
 
@@ -116,13 +121,13 @@ def test_cancelling_a_running_job_stops_it(kit):
     thread = threading.Thread(target=worker.run_once)
     thread.start()
     try:
-        _wait(lambda: store.get(job_id).status == "running")
+        _wait(lambda: store.get(job_id).status == JobStatus.RUNNING)
         client.delete(f"/jobs/{job_id}")
-        _wait(lambda: store.get(job_id).status == "cancelled")
+        _wait(lambda: store.get(job_id).status == JobStatus.CANCELLED)
     finally:
         executor.gate.set()
         thread.join(5)
-    assert client.get(f"/jobs/{job_id}").json()["status"] == "cancelled"
+    assert client.get(f"/jobs/{job_id}").json()["status"] == JobStatus.CANCELLED
 
 
 def test_an_impossible_slide_range_is_refused(kit):
@@ -131,16 +136,19 @@ def test_an_impossible_slide_range_is_refused(kit):
     assert response.status_code == 422
 
 
-def test_a_url_that_is_obviously_not_one_is_refused(kit):
+@pytest.mark.parametrize("url", ["", "file:///C:/Windows/win.ini", "ftp://x/y",
+                                 "not-a-url"])
+def test_a_url_that_is_not_http_is_refused(kit, url):
+    """攔的 bug：這個網址會被交給 yt-dlp。沒有限定 scheme 的話，任何連得到
+    這個埠的人都能用 file:// 讀 GPU 主機上的本機檔案。"""
     client, *_ = kit
-    assert client.post("/jobs", json={"url": ""}).status_code == 422
+    assert client.post("/jobs", json={"url": url}).status_code == 422
 
 
 def test_the_api_key_is_enforced_when_one_is_configured():
     store = JobStore()
     worker = JobWorker(store, FakeExecutor())
-    app = create_app(store=store, worker=worker, api_key="secret")
-    with TestClient(app) as client:
+    with TestClient(_app(store, worker, api_key="secret")) as client:
         worker.stop()
         assert client.post("/jobs", json={"url": IVOD}).status_code == 401
         ok = client.post("/jobs", json={"url": IVOD}, headers={"X-API-Key": "secret"})

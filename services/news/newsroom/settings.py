@@ -80,6 +80,22 @@ MEDIA_ROOT = Path(os.environ.get("DJANGO_MEDIA_ROOT", str(BASE_DIR / "media")))
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
+# 匯入一輪要跑一到兩小時。沒有這段設定的話，維運者盯著的是一個完全沉默的
+# 終端機，分不出「還在跑」與「卡住了」。
+LOGGING = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "formatters": {"plain": {"format": "%(asctime)s %(levelname)s %(message)s"}},
+    "handlers": {"console": {"class": "logging.StreamHandler", "formatter": "plain"}},
+    "loggers": {
+        "articles": {
+            "handlers": ["console"],
+            "level": os.environ.get("DJANGO_LOG_LEVEL", "INFO"),
+            "propagate": False,
+        },
+    },
+}
+
 # --- 本專案自己的設定 ---
 
 # GPU 主機上的摘要 API（slidebox）。Pi 上不跑任何模型，只透過 HTTP 說話。

@@ -12,13 +12,28 @@ import time
 import urllib.error
 import urllib.request
 from collections.abc import Callable
+from enum import StrEnum
 
 _SUBMIT_TIMEOUT = 30.0
 _POLL_TIMEOUT = 30.0
 
 
+class JobStatus(StrEnum):
+    """GPU 那邊的工作狀態。這是 HTTP 契約的一部分，不是共用程式碼——
+    Pi 上沒有裝 slidebox，只能照著協定各留一份。"""
+    QUEUED = "queued"
+    RUNNING = "running"
+    DONE = "done"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+
+
 class GpuApiError(Exception):
     """摘要 API 這次不能用。暫時性問題，下次排程會再試。"""
+
+
+class JobNotFound(GpuApiError):
+    """GPU 那邊不認得這個工作 id（通常是服務重開過，記憶體裡的佇列沒了）。"""
 
 
 class JobFailed(Exception):
@@ -47,8 +62,16 @@ class GpuApiClient:
         self._sleep = sleep
         self._now = now
 
-    def health(self) -> dict:
-        return self._call("/health", "GET", timeout=_POLL_TIMEOUT)
+    def job(self, job_id: str) -> dict | None:
+        """查一個既有的工作；GPU 那邊不認得就回 None。
+
+        用途是斷線之後接回來：等待途中網路斷 40 秒就重送一次，等於把已經
+        跑完的幾分鐘 GPU 成品丟掉、整支影片再跑一遍。
+        """
+        try:
+            return self._call(f"/jobs/{job_id}", "GET", timeout=_POLL_TIMEOUT)
+        except JobNotFound:
+            return None
 
     def submit(self, url: str, detailed: bool = True, min_slides: int | None = None,
                max_slides: int | None = None) -> str:
@@ -76,14 +99,14 @@ class GpuApiClient:
             if on_progress is not None:
                 on_progress(job)
             status = job.get("status")
-            if status == "done":
+            if status == JobStatus.DONE:
                 result = job.get("result")
                 if not isinstance(result, dict):
                     raise JobFailed("工作回報完成，但沒有結果")
                 return result
-            if status == "failed":
+            if status == JobStatus.FAILED:
                 raise JobFailed(str(job.get("error") or "未知的失敗")[:500])
-            if status == "cancelled":
+            if status == JobStatus.CANCELLED:
                 raise JobFailed("工作被取消")
             if self._now() >= deadline:
                 raise GpuApiError(
@@ -98,6 +121,8 @@ class GpuApiClient:
                                       timeout)
         except urllib.error.HTTPError as e:
             detail = e.read().decode("utf-8", "replace")[:300]
+            if e.code == 404:
+                raise JobNotFound(f"摘要 API 不認得 {path}") from e
             raise GpuApiError(f"摘要 API 回應 {e.code}：{detail}") from e
         except (OSError, ValueError) as e:
             raise GpuApiError(f"摘要 API 連線失敗：{str(e)[:200]}") from e

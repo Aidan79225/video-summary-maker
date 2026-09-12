@@ -3,23 +3,20 @@ from __future__ import annotations
 
 from django.db import models
 
-PENDING = "pending"
-PROCESSING = "processing"
-READY = "ready"
-FAILED = "failed"
+TEASER_LENGTH = 120
 
-STATUS_CHOICES = [
-    (PENDING, "等待處理"),
-    (PROCESSING, "處理中"),
-    (READY, "已完成"),
-    (FAILED, "失敗"),
-]
+
+class ArticleStatus(models.TextChoices):
+    PENDING = "pending", "等待處理"
+    PROCESSING = "processing", "處理中"
+    READY = "ready", "已完成"
+    FAILED = "failed", "失敗"
 
 
 class Article(models.Model):
     """一段 IVOD 發言的摘要。
 
-    ivod_id 是唯一鍵：整條 pipeline 都以它為準做 upsert，所以排程重跑、
+    ivod_id 是唯一鍵，因為整條 pipeline 都以它為準做 upsert——排程重跑、
     手動補跑、失敗重試都不會產生重複的文章。
     """
 
@@ -36,9 +33,15 @@ class Article(models.Model):
     source_note = models.CharField(max_length=300, blank=True)
     transcript_text = models.TextField(blank=True)
 
-    status = models.CharField(max_length=16, choices=STATUS_CHOICES, default=PENDING,
-                              db_index=True)
+    status = models.CharField(max_length=16, choices=ArticleStatus.choices,
+                              default=ArticleStatus.PENDING, db_index=True)
     error = models.TextField(blank=True)
+    # 沒有上限的話，一篇永遠失敗的文章（例如影片已下架）會每天排在隊首、
+    # 每次燒掉幾分鐘 GPU，而且永遠不會放棄。
+    attempts = models.PositiveIntegerField(default=0)
+    # 等待途中斷線時，下一輪先問問看那個工作是不是已經跑完了——否則幾分鐘
+    # 的 GPU 成品會被白白丟掉、整支影片重跑一次。
+    gpu_job_id = models.CharField(max_length=64, blank=True)
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -53,16 +56,21 @@ class Article(models.Model):
 
     @property
     def teaser(self) -> str:
-        """導言：第一段的完整敘述截短。條列太零碎，當導言讀起來不像新聞。"""
+        """導言取完整敘述而不是條列：條列太零碎，當導言讀起來不像新聞。"""
         first = self.slides.first()
         if first is None:
             return ""
         text = first.detail or "；".join(first.bullets)
-        return text[:120]
+        return text[:TEASER_LENGTH]
 
     @property
-    def cover(self):
-        return self.slides.exclude(image="").first()
+    def cover(self) -> Slide | None:
+        """用 Python 過濾而不是 `.exclude(image="")`。
+
+        後者會 clone queryset 並丟掉 prefetch 的快取，於是清單上每張卡片都
+        多打一次資料庫——一頁 20 張就是 20 次多餘查詢打在 Pi 的 SD 卡上。
+        """
+        return next((slide for slide in self.slides.all() if slide.image), None)
 
 
 class Slide(models.Model):

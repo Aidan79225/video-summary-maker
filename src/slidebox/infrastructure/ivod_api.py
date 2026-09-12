@@ -98,8 +98,8 @@ class IvodClient:
 
 
 class IvodSubtitleGateway:
-    def __init__(self, client: IvodClient | None = None):
-        self._client = client or IvodClient()
+    def __init__(self, client: IvodClient):
+        self._client = client
 
     def fetch(self, url: str, langs: Sequence[str]) -> Transcript:
         """langs 用不到：IVOD 只有一種語言的逐字稿，沒有挑軌這回事。"""

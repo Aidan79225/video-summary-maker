@@ -1,13 +1,18 @@
 """匯入流程：用假的來源與假的 GPU 客戶端，不碰網路。"""
 from __future__ import annotations
 
+import atexit
 import base64
+import inspect
+import shutil
 import tempfile
 from datetime import date
 
-from django.test import TestCase, override_settings
+from django.core.files.storage import default_storage
+from django.db.utils import IntegrityError
+from django.test import SimpleTestCase, TestCase, override_settings
 
-from articles.gpu_client import GpuApiError, JobFailed
+from articles.gpu_client import GpuApiClient, GpuApiError, JobFailed
 from articles.ingest import (
     discover,
     imageless,
@@ -17,10 +22,11 @@ from articles.ingest import (
     save_result,
 )
 from articles.ivod_source import IvodClip, IvodUnavailable
-from articles.models import FAILED, PENDING, READY, Article
+from articles.models import Article, ArticleStatus
 
 IMAGE = b"\x00\x01fake-webp\xff"
 MEDIA = tempfile.mkdtemp(prefix="news_media_")
+atexit.register(shutil.rmtree, MEDIA, ignore_errors=True)
 
 
 def _clip(ivod_id="171180", speaker="洪毓祥"):
@@ -61,10 +67,14 @@ class FakeSource:
 
 
 class FakeClient:
-    def __init__(self, result=None, error=None):
+    def __init__(self, result=None, error=None, known_jobs=None):
         self._result = result if result is not None else _payload()
         self._error = error
+        self._known_jobs = known_jobs or {}
         self.submitted = []
+
+    def job(self, job_id):
+        return self._known_jobs.get(job_id)
 
     def submit(self, url, detailed=True, min_slides=None, max_slides=None):
         self.submitted.append((url, detailed))
@@ -84,7 +94,7 @@ class DiscoverTests(TestCase):
         found, created = discover(date(2026, 8, 27), FakeSource())
         self.assertEqual((found, created), (1, 1))
         article = Article.objects.get(ivod_id="171180")
-        self.assertEqual(article.status, PENDING)
+        self.assertEqual(article.status, ArticleStatus.PENDING)
         self.assertEqual(article.slug, "2026-08-27-171180")
         self.assertEqual(article.speaker, "洪毓祥")
 
@@ -101,7 +111,7 @@ class DiscoverTests(TestCase):
         article = Article.objects.get(ivod_id="171180")
         save_result(article, _payload())
         discover(date(2026, 8, 27), FakeSource())
-        self.assertEqual(Article.objects.get(ivod_id="171180").status, READY)
+        self.assertEqual(Article.objects.get(ivod_id="171180").status, ArticleStatus.READY)
 
 
 @override_settings(MEDIA_ROOT=MEDIA)
@@ -113,7 +123,7 @@ class ProcessTests(TestCase):
         report = process_pending(FakeClient(), limit=10, timeout=60)
         self.assertEqual(report.processed, 1)
         article = Article.objects.get(ivod_id="171180")
-        self.assertEqual(article.status, READY)
+        self.assertEqual(article.status, ArticleStatus.READY)
         self.assertEqual(article.slides.count(), 2)
         first = article.slides.first()
         self.assertEqual(first.bullets, ["重點 1"])
@@ -142,7 +152,7 @@ class ProcessTests(TestCase):
                                      limit=10, timeout=60)
         self.assertEqual(report.failed, 1)
         article = Article.objects.get(ivod_id="171180")
-        self.assertEqual(article.status, FAILED)
+        self.assertEqual(article.status, ArticleStatus.FAILED)
         self.assertIn("逐字稿", article.error)
         # 失敗的下一輪還會被撿起來——立法院的逐字稿有時晚幾小時才出現
         report = process_pending(FakeClient(), limit=10, timeout=60)
@@ -160,7 +170,7 @@ class ProcessTests(TestCase):
             report = process_pending(client, limit=10, timeout=60)
         self.assertEqual(report.failed, 1)
         self.assertEqual(len(client.submitted), 1)
-        self.assertEqual(Article.objects.filter(status=PENDING).count(), 3)
+        self.assertEqual(Article.objects.filter(status=ArticleStatus.PENDING).count(), 3)
 
     def test_reprocessing_replaces_the_old_slides_instead_of_piling_up(self):
         process_pending(FakeClient(), limit=10, timeout=60)
@@ -185,7 +195,7 @@ class IngestDayTests(TestCase):
                             limit=10, timeout=60)
         self.assertEqual((report.discovered, report.created, report.processed),
                          (1, 1, 0 + 1))
-        self.assertEqual(Article.objects.get(ivod_id="171180").status, READY)
+        self.assertEqual(Article.objects.get(ivod_id="171180").status, ArticleStatus.READY)
 
     def test_an_unreachable_legislature_api_does_not_crash_the_run(self):
         """Pi 半夜跑排程，立法院那邊偶爾就是連不上。下一輪會再試。"""
@@ -222,3 +232,76 @@ class RetryImagelessTests(TestCase):
 
     def test_unfinished_articles_are_not_swept_up_by_the_retry(self):
         self.assertEqual(list(imageless(10)), [])
+
+
+@override_settings(MEDIA_ROOT=MEDIA)
+class SaveResultDurabilityTests(TestCase):
+    """攔的 bug：在交易裡刪檔案。檔案系統不會跟著 DB 回滾。"""
+
+    def setUp(self):
+        discover(date(2026, 8, 27), FakeSource())
+        self.article = Article.objects.get(ivod_id="171180")
+        save_result(self.article, _payload())
+
+    def _files(self):
+        return [s.image.name for s in self.article.slides.all() if s.image]
+
+    def test_a_failed_rewrite_leaves_the_old_article_completely_intact(self):
+        """回滾之後不該留下「欄位有值、檔案不存在」的破圖——那種文章
+        imageless() 撿不到（欄位非空）、process_pending 也碰不到（狀態還是
+        READY），沒有任何路徑會修好它。"""
+        before = self._files()
+        self.assertTrue(before)
+
+        broken = _payload(slides=2)
+        broken["slides"][1]["index"] = broken["slides"][0]["index"]  # 撞 unique
+        with self.assertRaises(IntegrityError):
+            save_result(self.article, broken)
+
+        self.article.refresh_from_db()
+        self.assertEqual(self._files(), before)
+        for name in before:
+            with self.subTest(name=name):
+                self.assertTrue(default_storage.exists(name), f"{name} 不見了")
+
+    def test_a_successful_rewrite_cleans_up_the_old_files(self):
+        """反過來：成功時舊檔案要真的被刪掉，不能在 SD 卡上越積越多。
+
+        刪除掛在 transaction.on_commit 上，而 TestCase 把每個測試包在會回滾
+        的交易裡——所以要用 captureOnCommitCallbacks 才跑得到，這也正好說明
+        了「只有提交成功才刪」這個機制。
+        """
+        before = self._files()
+        with self.captureOnCommitCallbacks(execute=True):
+            save_result(self.article, _payload(slides=3))
+        after = self._files()
+        self.assertNotEqual(set(before), set(after))
+        for name in before:
+            with self.subTest(name=name):
+                self.assertFalse(default_storage.exists(name))
+        for name in after:
+            self.assertTrue(default_storage.exists(name))
+
+    def test_rewriting_does_not_accumulate_random_suffixes(self):
+        """攔的 bug：Django 的 storage 從不覆寫，撞名會加隨機後綴。"""
+        save_result(self.article, _payload())
+        for name in self._files():
+            self.assertRegex(name, r"articles/171180/[0-9a-f]{8}/\d{2}\.webp$")
+
+
+
+class ClientContractTests(SimpleTestCase):
+    """攔的 bug：測試用的假客戶端跟真的分頭演化。
+
+    真實 client 多了一個方法，ingest 開始呼叫它，而所有 ingest 測試仍然
+    全綠——因為它們用的是那個舊的假物件。這種漂移只有簽章比對抓得到。
+    """
+
+    def test_the_fake_offers_every_method_ingest_uses(self):
+        for name in ("submit", "wait", "job"):
+            with self.subTest(method=name):
+                self.assertTrue(hasattr(FakeClient, name))
+                self.assertEqual(
+                    list(inspect.signature(getattr(FakeClient, name)).parameters),
+                    list(inspect.signature(getattr(GpuApiClient, name)).parameters),
+                )

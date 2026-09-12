@@ -105,3 +105,38 @@ GET /api/speakers
 - 不做使用者系統、不做留言、不做全文檢索引擎（`q` 用資料庫的 icontains 就夠）。
 - 不做完整會議（Full）：8 小時壓成十幾頁不是新聞，而且影片主機連不上、沒有截圖。只收 Clip。
 - 不在 Pi 上跑任何模型。
+
+## 審查後的修正
+
+### C1：`/media` 在預設設定下根本沒被掛上，整站圖片全 404
+
+`django.conf.urls.static.static()` 的第一行就是 `if not settings.DEBUG: return []`，而本專案的 `DEBUG` 預設是 `False`——照 README 部署的結果是每一張截圖都 404，而註解、settings、README、`.env.example` 四處都宣稱相反。
+
+三邊的測試都沒抓到：pytest 不碰 Django，Django 的測試只斷言字串以 `/media/` 開頭，Astro 沒有測試。**斷言 URL 的形狀，不等於斷言 URL 能用。** 現在改用 `django.views.static.serve` 明確掛上，並補了真的去 GET 那張圖、比對位元組的測試。
+
+### C2：在交易裡刪檔案，回滾後留下永久破圖
+
+`save_result` 先刪舊截圖再刪 DB 列。之後只要有任何例外（重複的 slide index、SD 卡寫滿、SQLite 被鎖），DB 回滾把列救回來，但**檔案已經沒了**。結果是一批「欄位有值、檔案不存在」的破圖，而且 `imageless()` 看的是欄位是否為空——欄位非空，所以永遠不會被重試撿到；狀態也還是 READY。沒有任何路徑會修好它。
+
+改成新截圖寫進一個新的子資料夾，舊檔案掛在 `transaction.on_commit` 上等提交成功才刪。留下孤兒檔比留下破圖便宜得多。順帶修掉一個假的保證：Django 的 storage 從不覆寫同名檔案，原本「重跑會覆蓋」的註解只是因為先刪掉了。
+
+### 其餘
+
+- `?date=abc` 會讓 Django 500（前端把訪客網址原樣轉手過來，任何爬蟲都能觸發）→ 參數改宣告成日期型別，交給 ninja 回 422。
+- `_process` 只接兩種例外，其他錯誤會炸掉整批且靜悄悄 → 每篇各自接住，標記失敗後繼續。
+- `PROCESSING` 不是鎖：排程與手動指令同時跑會把同一支影片送去 GPU 兩次 → 改用資料庫的條件式 UPDATE 搶所有權，並用時間判準回收卡住的項目。
+- `--retry-imageless` 失敗會把已發佈的好文章打成 FAILED、立刻從站上消失 → 那條路徑失敗不降級。
+- 沒有重試上限，永久失敗的文章每天燒一次 GPU → 加 `attempts` 與上限。
+- `job_id` 沒有留下來，等待途中斷線就整支重跑 → 存進 `Article.gpu_job_id`，下一輪先問問看那個工作是不是已經好了。
+- `JobStore` 先寫狀態再寫結果，而讀取端在鎖外逐一取屬性 → 會讀到「done 但沒有 result」，Pi 判定失敗、幾分鐘的 GPU 成品報銷。改成結果先寫、狀態最後寫，並提供鎖內快照。
+- 每個工作都重建一次 use case，等於每次重付 40 秒的語音模型載入 → 整個行程只建一次。
+- GPU API：金鑰改用 `compare_digest`（`==` 會由回應時間洩漏前綴）、網址限定 http(s)（否則 `file://` 就是讀本機檔案的管道）、監聽非 loopback 又沒設金鑰時啟動警告。
+- 前端：圖片的 base 與 API 的 base 分開（SSR 用 127.0.0.1 沒問題，但那個位址送到手機上就是破圖）；外部連結先過 scheme 檢查（上游回 `javascript:` 就是點擊型 XSS）。
+- Pi 停機跨過排程時間 = 那天的內容永久消失（記憶體排程沒有補跑的概念）→ 排程啟動時回補最近三天。
+- 立法院 API 改 schema 與「今天休會」在下游長得一模一樣（都是發現 0 篇）→ 少了 `ivods` 欄位就明確報錯。
+
+## 撰碼慣例（使用者要求）
+
+- **狀態不用裸字串**：`ArticleStatus`（Django `TextChoices`）、`JobStatus`、`ItemStatus`、`VideoKind`、`Feature`、`Field` 都是列舉。立法院 API 的欄位名也集中在一個列舉裡，上游改名只要動一個地方。
+- **嚴格 DI**：中間層不自己 `new` 相依、也不讀環境變數。`create_app` 的每個相依都是必填參數，組裝全部集中在 `serve_api.py`；Django 這邊的 composition root 是 management command。
+- **註解與 docstring 說「為什麼」**：能從程式碼讀出來的事就不寫。

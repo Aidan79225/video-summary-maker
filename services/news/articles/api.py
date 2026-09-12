@@ -7,7 +7,7 @@ from django.db.models import Count, Max, Q
 from django.shortcuts import get_object_or_404
 from ninja import NinjaAPI, Schema
 
-from .models import READY, Article
+from .models import Article, ArticleStatus
 
 api = NinjaAPI(title="立法院質詢摘要 API", version="1.0", urls_namespace="news")
 
@@ -88,7 +88,7 @@ def _card(article: Article) -> dict:
 
 @api.get("/health", response=HealthOut)
 def health(request) -> dict:
-    ready = Article.objects.filter(status=READY)
+    ready = Article.objects.filter(status=ArticleStatus.READY)
     return {
         "ok": True,
         "articles": ready.count(),
@@ -97,13 +97,18 @@ def health(request) -> dict:
 
 
 @api.get("/articles", response=ArticleListOut)
-def list_articles(request, date: str | None = None, speaker: str | None = None,
+def list_articles(request, date: date_type | None = None, speaker: str | None = None,
                   q: str | None = None, page: int = 1, page_size: int = 20) -> dict:
-    """只回已完成的文章——處理中或失敗的是內部狀態，不是新聞。"""
+    """只回已完成的文章——處理中或失敗的是內部狀態，不是新聞。
+
+    date 宣告成日期型別而不是字串：前端會把訪客網址上的 ?date= 原樣轉手
+    過來，字串會被直接丟進 filter() 而讓任何爬蟲或打錯的連結變成 500。
+    交給 ninja 驗證就會回 422。
+    """
     page = max(1, page)
     page_size = max(1, min(page_size, _MAX_PAGE_SIZE))
 
-    queryset = Article.objects.filter(status=READY).prefetch_related("slides")
+    queryset = Article.objects.filter(status=ArticleStatus.READY).prefetch_related("slides")
     if date:
         queryset = queryset.filter(date=date)
     if speaker:
@@ -130,7 +135,7 @@ def list_articles(request, date: str | None = None, speaker: str | None = None,
 @api.get("/articles/{slug}", response=ArticleDetailOut)
 def article_detail(request, slug: str) -> dict:
     article = get_object_or_404(
-        Article.objects.prefetch_related("slides"), slug=slug, status=READY)
+        Article.objects.prefetch_related("slides"), slug=slug, status=ArticleStatus.READY)
     data = _card(article)
     data.update({
         "source_note": article.source_note,
@@ -149,7 +154,7 @@ def article_detail(request, slug: str) -> dict:
 
 @api.get("/speakers", response=SpeakerListOut)
 def speakers(request) -> dict:
-    rows = (Article.objects.filter(status=READY)
+    rows = (Article.objects.filter(status=ArticleStatus.READY)
             .values("speaker")
             .annotate(count=Count("id"), latest_date=Max("date"))
             .order_by("-latest_date", "-count"))

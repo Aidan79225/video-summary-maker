@@ -97,3 +97,21 @@ class IvodSourceTests(SimpleTestCase):
         pages = [{"ivods": [{"日期": "2026-08-27"}, _row(2)], "total_page": 1}]
         source, _ = _source(pages)
         self.assertEqual([c.ivod_id for c in source.clips_for(date(2026, 8, 27))], ["2"])
+
+
+class SchemaChangeTests(SimpleTestCase):
+    def test_a_response_without_the_rows_field_is_reported_not_silently_empty(self):
+        """攔的 bug：上游改了 schema 跟「今天休會」在下游看起來一模一樣，
+        都是「發現 0 篇」——新聞會靜悄悄地停更而沒有人收到任何訊號。"""
+        source, _ = _source([{"total_page": 1}])
+        with self.assertRaises(IvodUnavailable):
+            source.clips_for(date(2026, 8, 27))
+
+    def test_a_quiet_day_is_not_an_error(self):
+        source, _ = _source([{"ivods": [], "total_page": 1}])
+        self.assertEqual(source.clips_for(date(2026, 8, 27)), [])
+
+    def test_a_non_numeric_id_does_not_crash_the_sort(self):
+        pages = [{"ivods": [_row("abc"), _row(2)], "total_page": 1}]
+        source, _ = _source(pages)
+        self.assertEqual(len(source.clips_for(date(2026, 8, 27))), 2)

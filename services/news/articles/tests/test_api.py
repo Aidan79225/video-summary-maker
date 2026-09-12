@@ -1,16 +1,19 @@
 """news API：Astro 前端讀的就是這些端點。"""
 from __future__ import annotations
 
+import atexit
 import base64
+import shutil
 import tempfile
 from datetime import date
 
 from django.test import TestCase, override_settings
 
 from articles.ingest import save_result
-from articles.models import FAILED, PENDING, Article
+from articles.models import Article, ArticleStatus
 
 MEDIA = tempfile.mkdtemp(prefix="news_api_media_")
+atexit.register(shutil.rmtree, MEDIA, ignore_errors=True)
 IMAGE = b"\x00\x01fake-webp\xff"
 
 
@@ -26,7 +29,7 @@ def _article(ivod_id="171180", speaker="洪毓祥", day="2026-08-27", status=Non
         duration_seconds=197,
         ivod_url=f"https://ivod.ly.gov.tw/Play/Clip/1M/{ivod_id}",
     )
-    if status in (PENDING, FAILED):
+    if status in (ArticleStatus.PENDING, ArticleStatus.FAILED):
         article.status = status
         article.save()
         return article
@@ -68,8 +71,8 @@ class ApiTests(TestCase):
     def test_unfinished_articles_are_not_news(self):
         """攔的 bug：處理中或失敗的文章是內部狀態，露到前端就會出現
         沒有內容的空白新聞。"""
-        _article(ivod_id="1", status=PENDING)
-        _article(ivod_id="2", status=FAILED)
+        _article(ivod_id="1", status=ArticleStatus.PENDING)
+        _article(ivod_id="2", status=ArticleStatus.FAILED)
         self.assertEqual(self.client.get("/api/articles").json()["count"], 0)
 
     def test_filtering_by_date_and_speaker_and_text(self):
@@ -123,7 +126,7 @@ class ApiTests(TestCase):
         self.assertEqual(self.client.get("/api/articles/沒這篇").status_code, 404)
 
     def test_an_unfinished_article_is_404_rather_than_half_a_page(self):
-        _article(ivod_id="1", status=PENDING)
+        _article(ivod_id="1", status=ArticleStatus.PENDING)
         self.assertEqual(
             self.client.get("/api/articles/2026-08-27-1").status_code, 404)
 
@@ -148,3 +151,32 @@ class ApiTests(TestCase):
         _article(ivod_id="2", day="2026-08-27")
         items = self.client.get("/api/articles").json()["items"]
         self.assertEqual(items[0]["ivod_id"], "2")
+
+
+@override_settings(MEDIA_ROOT=MEDIA)
+class MediaServingTests(TestCase):
+    """攔的 bug：清單回的 /media/... 只是字串，沒有任何測試證明它取得到。
+
+    django.conf.urls.static.static() 在 DEBUG=False 時直接回空清單，而本
+    專案的 DEBUG 預設就是 False——照文件部署的結果是整站圖片全 404，
+    而三邊的測試都照樣綠（只比對字串開頭）。
+    """
+
+    def test_the_cover_url_from_the_api_actually_serves_the_image(self):
+        _article()
+        url = self.client.get("/api/articles").json()["items"][0]["cover_image_url"]
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(b"".join(response.streaming_content), IMAGE)
+
+    def test_every_slide_image_url_serves_too(self):
+        _article()
+        body = self.client.get("/api/articles/2026-08-27-171180").json()
+        for slide in body["slides"]:
+            with self.subTest(index=slide["index"]):
+                self.assertEqual(self.client.get(slide["image_url"]).status_code, 200)
+
+    def test_paths_outside_the_media_root_are_refused(self):
+        for path in ("/media/../../manage.py", "/media/..%2f..%2fmanage.py"):
+            with self.subTest(path=path):
+                self.assertNotEqual(self.client.get(path).status_code, 200)

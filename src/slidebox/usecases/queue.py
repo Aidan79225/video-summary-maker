@@ -7,17 +7,25 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
+from enum import StrEnum
 
 from .sources import ivod_id
 
-PENDING = "pending"
-RUNNING = "running"
-DONE = "done"
-FAILED = "failed"
-CANCELLED = "cancelled"
 
-# 已經結束、可以被「清除完成」掃掉的狀態
-_FINISHED = (DONE, FAILED, CANCELLED)
+class ItemStatus(StrEnum):
+    PENDING = "pending"
+    RUNNING = "running"
+    DONE = "done"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+
+    @property
+    def is_finished(self) -> bool:
+        """是否可以被「清除已完成」掃掉。"""
+        return self in _FINISHED
+
+
+_FINISHED = frozenset({ItemStatus.DONE, ItemStatus.FAILED, ItemStatus.CANCELLED})
 
 
 # 從各種 YouTube 網址形式取出 11 碼影片 id
@@ -46,7 +54,7 @@ def video_key(url: str) -> str:
 class QueueItem:
     """佇列裡的一項。label 是影片標題——排隊當下還不知道，完成後才填。"""
     url: str
-    status: str = PENDING
+    status: ItemStatus = ItemStatus.PENDING
     label: str = ""
     message: str = ""
     html_path: str = ""
@@ -62,11 +70,11 @@ class JobQueue:
 
     @property
     def running(self) -> QueueItem | None:
-        return next((i for i in self.items if i.status == RUNNING), None)
+        return next((i for i in self.items if i.status == ItemStatus.RUNNING), None)
 
     @property
     def pending_count(self) -> int:
-        return sum(1 for i in self.items if i.status == PENDING)
+        return sum(1 for i in self.items if i.status == ItemStatus.PENDING)
 
     def add(self, url: str) -> QueueItem | None:
         """加入一項；空白或「已經在排隊／正在跑的同一個網址」回傳 None。
@@ -78,7 +86,7 @@ class JobQueue:
         if not url:
             return None
         key = video_key(url)
-        if any(video_key(i.url) == key and i.status in (PENDING, RUNNING)
+        if any(video_key(i.url) == key and i.status in (ItemStatus.PENDING, ItemStatus.RUNNING)
                for i in self.items):
             return None
         item = QueueItem(url=url)
@@ -93,22 +101,22 @@ class JobQueue:
         """
         if self.running is not None:
             return None
-        item = next((i for i in self.items if i.status == PENDING), None)
+        item = next((i for i in self.items if i.status == ItemStatus.PENDING), None)
         if item is not None:
-            item.status = RUNNING
+            item.status = ItemStatus.RUNNING
         return item
 
     def finish(self, item: QueueItem, html_path: str, label: str) -> None:
-        item.status = DONE
+        item.status = ItemStatus.DONE
         item.html_path = html_path
         item.label = label or item.label
 
     def fail(self, item: QueueItem, message: str) -> None:
-        item.status = FAILED
+        item.status = ItemStatus.FAILED
         item.message = message
 
     def cancel(self, item: QueueItem) -> None:
-        item.status = CANCELLED
+        item.status = ItemStatus.CANCELLED
 
     def retry(self, item: QueueItem) -> bool:
         """把失敗或取消的項目放回等待佇列；回傳是否真的放回去了。
@@ -116,9 +124,9 @@ class JobQueue:
         環境壞掉（例如 Ollama 沒開、模型名稱打錯）時整排都會失敗，沒有
         重試路徑就得一支一支重貼網址。
         """
-        if item.status not in _FINISHED or item not in self.items:
+        if not item.status.is_finished or item not in self.items:
             return False
-        item.status = PENDING
+        item.status = ItemStatus.PENDING
         item.message = ""
         return True
 
@@ -128,10 +136,10 @@ class JobQueue:
         執行中的項目一旦從清單消失，工作執行緒結束時就會把結果寫進一個
         再也看不到的項目——使用者會看到生成卡在最後不動。
         """
-        if item.status == RUNNING or item not in self.items:
+        if item.status == ItemStatus.RUNNING or item not in self.items:
             return False
         self.items.remove(item)
         return True
 
     def clear_finished(self) -> None:
-        self.items = [i for i in self.items if i.status not in _FINISHED]
+        self.items = [i for i in self.items if not i.status.is_finished]

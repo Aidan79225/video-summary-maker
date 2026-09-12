@@ -1,7 +1,7 @@
 """佇列：純資料與規則，不碰執行緒也不碰 UI。"""
 from __future__ import annotations
 
-from slidebox.usecases.queue import DONE, FAILED, PENDING, RUNNING, JobQueue
+from slidebox.usecases.queue import ItemStatus, JobQueue
 
 
 def test_added_urls_wait_in_the_order_they_were_pasted():
@@ -10,7 +10,7 @@ def test_added_urls_wait_in_the_order_they_were_pasted():
     q.add("A")
     q.add("B")
     assert [i.url for i in q.items] == ["A", "B"]
-    assert q.items[0].status == PENDING
+    assert q.items[0].status == ItemStatus.PENDING
 
 
 def test_whitespace_is_trimmed_and_blank_urls_are_refused():
@@ -43,7 +43,7 @@ def test_start_next_takes_the_first_waiting_item_and_marks_it_running():
     q.add("B")
     item = q.start_next()
     assert item.url == "A"
-    assert item.status == RUNNING
+    assert item.status == ItemStatus.RUNNING
     assert q.running is item
 
 
@@ -62,7 +62,7 @@ def test_finishing_records_where_the_result_landed():
     item = q.add("A")
     q.start_next()
     q.finish(item, "OUT/a.html", "影片 A")
-    assert item.status == DONE
+    assert item.status == ItemStatus.DONE
     assert item.html_path == "OUT/a.html"
     assert item.label == "影片 A"
     assert q.running is None
@@ -75,7 +75,7 @@ def test_a_failure_keeps_the_reason_visible_and_lets_the_queue_go_on():
     q.add("B")
     q.start_next()
     q.fail(item, "連不上 Ollama")
-    assert item.status == FAILED
+    assert item.status == ItemStatus.FAILED
     assert "Ollama" in item.message
     assert q.start_next().url == "B"
 
@@ -88,7 +88,7 @@ def test_cancelling_stops_the_queue_instead_of_moving_on():
     q.start_next()
     q.cancel(item)
     assert q.running is None
-    assert q.items[1].status == PENDING
+    assert q.items[1].status == ItemStatus.PENDING
 
 
 def test_waiting_items_can_be_removed_but_the_running_one_cannot():
@@ -155,7 +155,7 @@ def test_a_failed_item_can_be_put_back_in_the_queue():
     q.start_next()
     q.fail(item, "連不上 Ollama")
     assert q.retry(item) is True
-    assert item.status == PENDING
+    assert item.status == ItemStatus.PENDING
     assert item.message == ""
     assert q.start_next() is item
 
@@ -165,7 +165,7 @@ def test_the_running_item_cannot_be_retried():
     item = q.add("A")
     q.start_next()
     assert q.retry(item) is False
-    assert item.status == RUNNING
+    assert item.status == ItemStatus.RUNNING
 
 
 def test_the_same_ivod_clip_in_two_url_forms_is_only_queued_once():

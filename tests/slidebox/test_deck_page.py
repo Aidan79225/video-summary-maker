@@ -17,13 +17,7 @@ from PySide6.QtWidgets import QApplication  # noqa: E402
 from slidebox.domain.entities import Deck, DeckResult, Settings, Slide  # noqa: E402
 from slidebox.domain.errors import OperationCancelled  # noqa: E402
 from slidebox.presentation.deck_page import DeckPage  # noqa: E402
-from slidebox.usecases.queue import (  # noqa: E402
-    CANCELLED,
-    DONE,
-    FAILED,
-    PENDING,
-    RUNNING,
-)
+from slidebox.usecases.queue import ItemStatus  # noqa: E402
 
 
 @pytest.fixture(scope="module")
@@ -106,11 +100,11 @@ def test_the_url_field_stays_usable_while_a_job_runs(app, tmp_path):
     uc = GatedUseCase()
     page = _page(tmp_path, uc)
     _add(page, "A")
-    assert _pump(page, lambda: page._queue.items[0].status == RUNNING)
+    assert _pump(page, lambda: page._queue.items[0].status == ItemStatus.RUNNING)
     assert page.url_edit.isEnabled()
     assert page.add_btn.isEnabled()
     uc.gate.set()
-    _pump(page, lambda: page._queue.items[0].status == DONE)
+    _pump(page, lambda: page._queue.items[0].status == ItemStatus.DONE)
 
 
 def test_a_second_url_waits_and_starts_by_itself_when_the_first_finishes(app, tmp_path):
@@ -120,10 +114,10 @@ def test_a_second_url_waits_and_starts_by_itself_when_the_first_finishes(app, tm
     _add(page, "A")
     assert _pump(page, lambda: uc.urls == ["A"])
     _add(page, "B")
-    assert page._queue.items[1].status == PENDING
+    assert page._queue.items[1].status == ItemStatus.PENDING
     uc.gate.set()
     assert _pump(page, lambda: uc.urls == ["A", "B"])
-    assert _pump(page, lambda: all(i.status == DONE for i in page._queue.items))
+    assert _pump(page, lambda: all(i.status == ItemStatus.DONE for i in page._queue.items))
     assert page._queue.items[0].html_path == "OUT/A.html"
     assert page._queue.items[1].html_path == "OUT/B.html"
 
@@ -136,7 +130,7 @@ def test_results_land_on_the_item_they_belong_to(app, tmp_path):
     _add(page, "A")
     _add(page, "B")
     uc.gate.set()
-    assert _pump(page, lambda: all(i.status == DONE for i in page._queue.items))
+    assert _pump(page, lambda: all(i.status == ItemStatus.DONE for i in page._queue.items))
     assert page._queue.items[0].label == "標題 A"
     assert page._queue.items[1].label == "標題 B"
 
@@ -148,7 +142,7 @@ def test_a_failure_does_not_stop_the_rest_of_the_queue(app, tmp_path):
     _add(page, "A")
     _add(page, "B")
     uc.gate.set()
-    assert _pump(page, lambda: page._queue.items[1].status == DONE)
+    assert _pump(page, lambda: page._queue.items[1].status == ItemStatus.DONE)
     assert "Ollama" in page._queue.items[0].message
 
 
@@ -160,8 +154,8 @@ def test_cancelling_stops_the_queue_and_leaves_the_rest_waiting(app, tmp_path):
     _add(page, "B")
     assert _pump(page, lambda: uc.urls == ["A"])
     page._on_action()                      # 執行中 → 取消
-    assert _pump(page, lambda: page._queue.items[0].status == CANCELLED)
-    assert page._queue.items[1].status == PENDING
+    assert _pump(page, lambda: page._queue.items[0].status == ItemStatus.CANCELLED)
+    assert page._queue.items[1].status == ItemStatus.PENDING
     assert uc.urls == ["A"]
     assert page.action_btn.text() == "開始"
 
@@ -190,7 +184,7 @@ def test_the_queue_never_stalls_between_two_items(app, tmp_path):
     assert _pump(page, lambda: len(uc.urls) == 5, timeout=10.0), (
         f"佇列停住了，只跑了 {uc.urls}"
     )
-    assert _pump(page, lambda: all(i.status == DONE for i in page._queue.items))
+    assert _pump(page, lambda: all(i.status == ItemStatus.DONE for i in page._queue.items))
 
 
 def test_closing_the_window_stops_the_worker_instead_of_crashing(app, tmp_path):
@@ -202,7 +196,7 @@ def test_closing_the_window_stops_the_worker_instead_of_crashing(app, tmp_path):
     page = _page(tmp_path, uc)
     win = MainWindow(page)
     _add(page, "A")
-    assert _pump(page, lambda: page._queue.items[0].status == RUNNING)
+    assert _pump(page, lambda: page._queue.items[0].status == ItemStatus.RUNNING)
     win.close()
     assert page._worker is None or not page._worker.isRunning()
 
@@ -214,9 +208,9 @@ def test_consecutive_failures_stop_the_queue(app, tmp_path):
     page = _page(tmp_path, uc)
     for url in "ABC":
         _add(page, url)
-    assert _pump(page, lambda: page._queue.items[1].status == FAILED, timeout=10.0)
+    assert _pump(page, lambda: page._queue.items[1].status == ItemStatus.FAILED, timeout=10.0)
     # 連續兩次失敗就停下，第三項維持等待，而不是跟著燒掉
-    assert _pump(page, lambda: page._queue.items[2].status == PENDING)
+    assert _pump(page, lambda: page._queue.items[2].status == ItemStatus.PENDING)
     assert page._queue.running is None
     assert "C" not in uc.urls
 
@@ -227,11 +221,11 @@ def test_a_failed_item_can_be_retried_from_the_ui(app, tmp_path):
     uc.fail_urls = {"A"}
     page = _page(tmp_path, uc)
     _add(page, "A")
-    assert _pump(page, lambda: page._queue.items[0].status == FAILED)
+    assert _pump(page, lambda: page._queue.items[0].status == ItemStatus.FAILED)
     uc.fail_urls = set()
     page.queue_list.setCurrentRow(0)
     page._retry_selected()
-    assert _pump(page, lambda: page._queue.items[0].status == DONE)
+    assert _pump(page, lambda: page._queue.items[0].status == ItemStatus.DONE)
 
 
 def test_clearing_finished_items_keeps_the_selection_on_the_same_item(app, tmp_path):
@@ -241,11 +235,11 @@ def test_clearing_finished_items_keeps_the_selection_on_the_same_item(app, tmp_p
     uc.gate.set()
     page = _page(tmp_path, uc)
     _add(page, "A")
-    assert _pump(page, lambda: page._queue.items[0].status == DONE)
+    assert _pump(page, lambda: page._queue.items[0].status == ItemStatus.DONE)
     uc.gate.clear()                            # 之後排的都會停在閘門前
     for url in "BCD":
         _add(page, url)
-    assert _pump(page, lambda: page._queue.items[1].status == RUNNING)
+    assert _pump(page, lambda: page._queue.items[1].status == ItemStatus.RUNNING)
     page.queue_list.setCurrentRow(2)           # C
     page._clear_finished()                     # A 被清掉，列號整個往前移
     assert page._selected() is not None

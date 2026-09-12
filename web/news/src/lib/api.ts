@@ -18,6 +18,7 @@ import fixture from '../fixtures/sample.json';
 
 const BUILD_API_BASE = import.meta.env.PUBLIC_API_BASE as string | undefined;
 const BUILD_USE_FIXTURE = import.meta.env.USE_FIXTURE as string | undefined;
+const BUILD_MEDIA_BASE = import.meta.env.PUBLIC_MEDIA_BASE as string | undefined;
 
 function runtimeEnv(key: string): string | undefined {
   try {
@@ -43,11 +44,34 @@ function timeoutMs(): number {
   return Number.isFinite(n) && n > 0 ? n : 8000;
 }
 
-/** 相對路徑（/media/...）接上 API base；已經是絕對網址就原樣回傳 */
+/**
+ * 圖片的 base 與 API 的 base 分開。
+ *
+ * API base 是 SSR 在伺服器端用的，可以是 127.0.0.1；但圖片網址會原樣送到
+ * 瀏覽器，用 127.0.0.1 的話，任何用手機開這個站的人都會看到一排破圖。
+ * 沒設就沿用 API base（單機開發時兩者本來就相同）。
+ */
+export function mediaBase(): string {
+  const raw = runtimeEnv('PUBLIC_MEDIA_BASE') ?? BUILD_MEDIA_BASE;
+  return raw ? raw.replace(/\/+$/, '') : apiBase();
+}
+
+/** 相對路徑（/media/...）接上圖片 base；已經是絕對網址就原樣回傳 */
 export function mediaUrl(path: string | null | undefined): string | null {
   if (!path) return null;
   if (/^https?:\/\//i.test(path)) return path;
-  return `${apiBase()}${path.startsWith('/') ? '' : '/'}${path}`;
+  return `${mediaBase()}${path.startsWith('/') ? '' : '/'}${path}`;
+}
+
+/**
+ * 外部連結只接受 http(s)。
+ *
+ * ivod_url 來自立法院的 API，而它會直接變成頁面上可點的連結——上游哪天
+ * 回了 javascript: 就是一個點擊型 XSS，Astro 的屬性跳脫擋不住這件事。
+ */
+export function safeExternalUrl(url: string | null | undefined): string | null {
+  if (!url) return null;
+  return /^https?:\/\//i.test(url.trim()) ? url.trim() : null;
 }
 
 /* ------------------------------------------------------------------

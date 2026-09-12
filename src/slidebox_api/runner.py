@@ -1,27 +1,27 @@
 """工作執行緒：把佇列裡的工作真的跑起來。
 
-執行內容由外面注入（`execute`），所以這個迴圈本身能用假的執行函式測試，
-不需要 Ollama、不需要網路。
+執行內容由外面注入，所以這個迴圈本身能用假的執行函式測試，不需要
+Ollama、不需要網路。
 """
 from __future__ import annotations
 
-import os
 import threading
 from collections.abc import Callable
 
-from slidebox.composition import build_usecase
 from slidebox.domain.entities import Settings
 from slidebox.domain.errors import OperationCancelled
+from slidebox.usecases.build_deck import BuildDeckUseCase
 from slidebox.usecases.queue import video_key
 from slidebox.usecases.sources import ivod_id
 
 from .jobs import Job, JobStore
 from .payload import deck_payload
 
-# 一個工作要幾分鐘，輪詢間隔不必短
-_POLL_SECONDS = 0.2
+ProgressCallback = Callable[[float | None, str], None]
+CancelCheck = Callable[[], bool]
+Executor = Callable[[Job, ProgressCallback, CancelCheck], dict]
 
-Executor = Callable[[Job, Callable[[float | None, str], None], Callable[[], bool]], dict]
+DEFAULT_POLL_SECONDS = 0.2
 
 
 class JobWorker:
@@ -31,7 +31,7 @@ class JobWorker:
     """
 
     def __init__(self, store: JobStore, execute: Executor,
-                 poll_seconds: float = _POLL_SECONDS):
+                 poll_seconds: float = DEFAULT_POLL_SECONDS):
         self._store = store
         self._execute = execute
         self._poll = poll_seconds
@@ -41,12 +41,20 @@ class JobWorker:
     def start(self) -> None:
         if self._thread is not None:
             return
+        # clear 是必要的：stop 之後再 start，沒清旗標的話迴圈會立刻退出，
+        # 而且是靜悄悄地什麼都不處理。
+        self._stop.clear()
         self._thread = threading.Thread(target=self._loop, name="slidebox-worker",
                                         daemon=True)
         self._thread.start()
 
     def stop(self, timeout: float = 5.0) -> None:
         self._stop.set()
+        # 一併要求正在跑的工作停下來，否則關機時會把跑到一半的 pipeline
+        # 丟著讓行程死掉，暫存檔也不會被清。
+        running = self._store.running
+        if running is not None:
+            running.cancel_requested.set()
         if self._thread is not None:
             self._thread.join(timeout)
             self._thread = None
@@ -57,7 +65,6 @@ class JobWorker:
         if job is None:
             return False
         if job.cancel_requested.is_set():
-            # 排隊期間被取消了，但已經被 take_next 標成執行中
             self._store.cancelled(job.id)
             return True
 
@@ -80,35 +87,48 @@ class JobWorker:
                 self._stop.wait(self._poll)
 
 
-def _video_id(url: str) -> str:
+def video_id_of(url: str) -> str:
     """新聞服務用來當主鍵的識別碼。
 
-    IVOD 給裸的數字 id（Django 那邊的 `ivod_id` 就是它），其他來源退回
-    佇列用的那把鑰匙，至少保證同一支影片得到同一個值。
+    IVOD 給裸的數字 id（Django 那邊的 ivod_id 就是它），其他來源退回佇列
+    用的那把鑰匙，至少保證同一支影片得到同一個值。
     """
     return ivod_id(url) or video_key(url)
 
 
-def build_executor(base_settings: Settings) -> Executor:
-    """真正的執行函式：跑完整條 slidebox pipeline。
+class SlideboxExecutor:
+    """用 slidebox 跑完整條 pipeline。
 
-    每個工作複製一份設定再套用它自己的參數——`Settings` 是可變物件，
-    直接改會讓同時進來的請求互相污染。
+    use case 與設定都從外面傳進來，而且**整個行程只建一次**：建構
+    BuildDeckUseCase 會連帶建立語音辨識器，那個模型載入要 40 秒並佔著
+    VRAM，每個工作重建一次等於每次重付。
+
+    每個工作把自己的參數套進同一個 Settings 實例——安全的前提是同一時間
+    只有一個工作在跑（見 JobWorker），這也是這個服務本來就有的保證。
     """
-    def execute(job: Job, progress, is_cancelled) -> dict:
-        from dataclasses import replace
 
-        settings = replace(
-            base_settings,
-            detailed=job.detailed,
-            min_slides=job.min_slides or base_settings.min_slides,
-            max_slides=job.max_slides or base_settings.max_slides,
-            model=job.model or base_settings.model,
-        )
-        usecase = build_usecase(settings)
-        result = usecase.execute(job.url, settings, progress, is_cancelled)
-        payload = deck_payload(result.deck, _video_id(job.url))
-        payload["html_path"] = os.path.abspath(result.html_path)
-        return payload
+    def __init__(self, usecase: BuildDeckUseCase, settings: Settings):
+        self._usecase = usecase
+        self._settings = settings
 
-    return execute
+    def __call__(self, job: Job, progress: ProgressCallback,
+                 is_cancelled: CancelCheck) -> dict:
+        settings = self._apply(job)
+        result = self._usecase.execute(job.url, settings, progress, is_cancelled)
+        return deck_payload(result.deck, video_id_of(job.url))
+
+    def _apply(self, job: Job) -> Settings:
+        """就地改那個共用的 Settings 實例，不複製。
+
+        composition 組出來的 summarizer 持有它的參照、每次生成都重讀——
+        複製一份的話，工作自己指定的模型不會生效。
+        """
+        for name, value in (
+            ("detailed", job.detailed),
+            ("min_slides", job.min_slides),
+            ("max_slides", job.max_slides),
+            ("model", job.model),
+        ):
+            if value is not None:
+                setattr(self._settings, name, value)
+        return self._settings

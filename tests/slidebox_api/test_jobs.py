@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import pytest
 
-from slidebox_api.jobs import DONE, FAILED, QUEUED, RUNNING, JobStore
+from slidebox_api.jobs import JobStatus, JobStore
 
 
 def _store() -> JobStore:
@@ -13,7 +13,7 @@ def _store() -> JobStore:
 def test_a_submitted_job_starts_queued_and_gets_an_id():
     store = _store()
     job = store.submit("https://ivod.ly.gov.tw/Play/Clip/1M/1", detailed=True)
-    assert job.status == QUEUED
+    assert job.status == JobStatus.QUEUED
     assert job.id
     assert store.get(job.id) is job
 
@@ -47,7 +47,7 @@ def test_taking_a_job_marks_it_running_and_records_when():
     store = _store()
     job = store.submit("a")
     store.take_next()
-    assert job.status == RUNNING
+    assert job.status == JobStatus.RUNNING
     assert job.started_at is not None
 
 
@@ -65,7 +65,7 @@ def test_finishing_stores_the_result_and_frees_the_slot():
     job = store.submit("a")
     store.take_next()
     store.finish(job.id, {"slides": []})
-    assert job.status == DONE
+    assert job.status == JobStatus.DONE
     assert job.result == {"slides": []}
     assert job.finished_at is not None
     assert store.running is None
@@ -76,7 +76,7 @@ def test_failing_keeps_the_reason_and_frees_the_slot():
     job = store.submit("a")
     store.take_next()
     store.fail(job.id, "連不上 Ollama")
-    assert job.status == FAILED
+    assert job.status == JobStatus.FAILED
     assert "Ollama" in job.error
     assert store.running is None
 
@@ -99,7 +99,7 @@ def test_cancelling_a_running_job_raises_its_flag_rather_than_killing_it():
     store.take_next()
     assert store.cancel(job.id) is True
     assert job.cancel_requested.is_set()
-    assert job.status == RUNNING
+    assert job.status == JobStatus.RUNNING
     assert store.running is job
 
 
@@ -111,8 +111,28 @@ def test_recent_lists_newest_first_and_is_capped():
     store = _store()
     for i in range(5):
         store.submit(f"u{i}")
-    recent = store.recent(limit=3)
+    recent = store.recent_snapshots(limit=3)
     assert [j.url for j in recent] == ["u4", "u3", "u2"]
+
+
+def test_a_snapshot_never_shows_done_without_its_result():
+    """攔的 bug：狀態先寫、結果後寫，而讀取端在鎖外逐一取屬性——讀到那個
+    瞬間的話，Pi 會判定工作失敗，幾分鐘的 GPU 成品就報銷了。"""
+    store = _store()
+    job = store.submit("a")
+    store.take_next()
+    store.finish(job.id, {"slides": []})
+    snapshot = store.snapshot(job.id)
+    assert snapshot.status == JobStatus.DONE
+    assert snapshot.result == {"slides": []}
+
+
+def test_a_snapshot_does_not_change_under_the_readers_feet():
+    store = _store()
+    job = store.submit("a")
+    snapshot = store.snapshot(job.id)
+    store.take_next()
+    assert snapshot.status == JobStatus.QUEUED
 
 
 def test_old_finished_jobs_are_forgotten_so_memory_does_not_grow_forever():

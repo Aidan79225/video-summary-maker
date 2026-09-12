@@ -10,9 +10,34 @@ import urllib.parse
 import urllib.request
 from dataclasses import dataclass
 from datetime import date
+from enum import StrEnum
 
 _PAGE_SIZE = 100
 _TIMEOUT = 30.0
+
+
+class VideoKind(StrEnum):
+    CLIP = "Clip"
+    FULL = "Full"
+
+
+class Feature(StrEnum):
+    AI_TRANSCRIPT = "ai-transcript"
+
+
+class Field(StrEnum):
+    """立法院 API 的欄位名。集中在這裡，上游改名時只要動一個地方。"""
+    ID = "IVOD_ID"
+    URL = "IVOD_URL"
+    DATE = "日期"
+    KIND = "影片種類"
+    SPEAKER = "委員名稱"
+    DURATION = "影片長度"
+    MEETING = "會議資料"
+    MEETING_TITLE = "標題"
+    FEATURES = "支援功能"
+    ROWS = "ivods"
+    TOTAL_PAGES = "total_page"
 
 
 class IvodUnavailable(Exception):
@@ -57,19 +82,18 @@ def _duration(value: object) -> int:
 
 
 def _clip(raw: dict) -> IvodClip | None:
-    ivod_id = raw.get("IVOD_ID")
+    ivod_id = raw.get(Field.ID)
     if ivod_id is None:
         return None
-    meeting = (raw.get("會議資料") or {}).get("標題") or ""
-    features = raw.get("支援功能")
+    meeting = (raw.get(Field.MEETING) or {}).get(Field.MEETING_TITLE) or ""
     return IvodClip(
         ivod_id=str(ivod_id),
-        date=str(raw.get("日期") or ""),
-        speaker=str(raw.get("委員名稱") or ""),
+        date=str(raw.get(Field.DATE) or ""),
+        speaker=str(raw.get(Field.SPEAKER) or ""),
         meeting=str(meeting),
-        duration_seconds=_duration(raw.get("影片長度")),
-        ivod_url=str(raw.get("IVOD_URL") or ""),
-        has_transcript="ai-transcript" in (features or []),
+        duration_seconds=_duration(raw.get(Field.DURATION)),
+        ivod_url=str(raw.get(Field.URL) or ""),
+        has_transcript=Feature.AI_TRANSCRIPT in (raw.get(Field.FEATURES) or []),
     )
 
 
@@ -88,22 +112,27 @@ class IvodDailySource:
         page = 1
         while True:
             payload = self._page(day, page)
-            rows = payload.get("ivods")
+            if Field.ROWS not in payload:
+                # 上游改了 schema 跟「今天休會」在下游看起來一模一樣，
+                # 都是「發現 0 篇」。寧可吵一次也不要靜悄悄地停更。
+                raise IvodUnavailable(f"立法院 API 的回應少了 {Field.ROWS} 欄位")
+            rows = payload[Field.ROWS]
             if not isinstance(rows, list) or not rows:
                 break
             clips.extend(c for c in (_clip(r) for r in rows if isinstance(r, dict))
                          if c is not None)
-            if page >= int(payload.get("total_page") or 1):
+            if page >= int(payload.get(Field.TOTAL_PAGES) or 1):
                 break
             page += 1
         if only_with_transcript:
             clips = [c for c in clips if c.has_transcript]
-        return sorted(clips, key=lambda c: int(c.ivod_id))
+        # 上游哪天給了非數字 id，排序不該讓整個指令崩潰
+        return sorted(clips, key=lambda c: (len(c.ivod_id), c.ivod_id))
 
     def _page(self, day: date, page: int) -> dict:
         query = urllib.parse.urlencode({
-            "日期": day.isoformat(),
-            "影片種類": "Clip",
+            Field.DATE: day.isoformat(),
+            Field.KIND: VideoKind.CLIP,
             "limit": _PAGE_SIZE,
             "page": page,
         })
