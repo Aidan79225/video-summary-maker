@@ -166,3 +166,20 @@ def test_the_running_item_cannot_be_retried():
     q.start_next()
     assert q.retry(item) is False
     assert item.status == RUNNING
+
+
+def test_the_same_ivod_clip_in_two_url_forms_is_only_queued_once():
+    """攔的 bug：video_key 只認 YouTube 的 11 碼 id，IVOD 每種寫法都算不同。
+    兩項都會跑，而且資料夾名用的是 IVOD id——第二次直接覆寫第一次的成品。"""
+    q = JobQueue()
+    assert q.add("https://ivod.ly.gov.tw/Play/Clip/1M/171180") is not None
+    assert q.add("https://ivod.ly.gov.tw/Play/Clip/1M/171180/") is None
+    assert q.add("https://ivod.ly.gov.tw/Play/Clip/300K/171180") is None
+    assert len(q.items) == 1
+
+
+def test_two_different_ivod_clips_are_both_queued():
+    q = JobQueue()
+    assert q.add("https://ivod.ly.gov.tw/Play/Clip/1M/171180") is not None
+    assert q.add("https://ivod.ly.gov.tw/Play/Full/1M/17704") is not None
+    assert len(q.items) == 2

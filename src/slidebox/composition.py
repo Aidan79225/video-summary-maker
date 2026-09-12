@@ -2,20 +2,28 @@
 from __future__ import annotations
 
 import os
+from typing import TYPE_CHECKING
 
 from .domain.entities import Settings, Slide
 from .domain.ports import CancelCheck, ProgressCallback
 from .infrastructure.ffmpeg_frames import FfmpegFrameExtractor
 from .infrastructure.html_renderer import HtmlDeckRenderer
+from .infrastructure.ivod_api import IvodClient, IvodSubtitleGateway
+from .infrastructure.ivod_sections import IvodSectionGateway
 from .infrastructure.ollama_summarizer import OllamaModelCatalog, OllamaSummarizer
+from .infrastructure.routing import (
+    BySourceSectionGateway,
+    BySourceSubtitleGateway,
+)
 from .infrastructure.settings_repository import JsonSettingsRepository
 from .infrastructure.whisper_transcriber import FasterWhisperTranscriber
 from .infrastructure.ytdlp_audio import YtDlpAudioGateway
 from .infrastructure.ytdlp_sections import YtDlpSectionGateway
 from .infrastructure.ytdlp_subtitles import YtDlpSubtitleGateway
-from .presentation.deck_page import DeckPage
-from .presentation.main_window import MainWindow
 from .usecases.build_deck import BuildDeckUseCase
+
+if TYPE_CHECKING:
+    from .presentation.main_window import MainWindow
 
 # 預設輸出資料夾
 DEFAULT_OUTPUT_DIR = r"C:\Users\Aidan\Desktop\影片摘要"
@@ -56,7 +64,38 @@ class CurrentSettingsSummarizer:
                               hint, progress, detailed, is_cancelled)
 
 
-def build_main_window() -> MainWindow:
+def build_usecase(settings: Settings) -> BuildDeckUseCase:
+    """組好一條完整的 pipeline。
+
+    刻意與 UI 分開：這個函式不碰 PySide6，所以無介面的服務（例如每天跑一輪
+    產出網頁的排程）可以直接 import 它來用。
+
+    字幕與片段兩個 gateway 依網址分派：立法院 IVOD 走開放 API（逐字稿是
+    立法院自己用 WhisperX 產好的）與 ffmpeg 切 HLS，其餘走 yt-dlp。
+    IVOD 的兩個 adapter 共用同一個 client，讓同一筆 record 只抓一次。
+    """
+    ivod_client = IvodClient()
+    return BuildDeckUseCase(
+        BySourceSubtitleGateway(YtDlpSubtitleGateway(), IvodSubtitleGateway(ivod_client)),
+        CurrentSettingsSummarizer(settings),
+        BySourceSectionGateway(YtDlpSectionGateway(), IvodSectionGateway(ivod_client)),
+        FfmpegFrameExtractor(),
+        HtmlDeckRenderer(),
+        # 沒有字幕時的語音辨識備援。模型在第一次需要時才載入（約 40 秒）並
+        # 快取在這個實例裡；改 whisper_model 需重開 app（語言模型與 host 則每次生成時即時讀取）。
+        audio=YtDlpAudioGateway(),
+        transcriber=FasterWhisperTranscriber(settings.whisper_model),
+    )
+
+
+def build_main_window() -> "MainWindow":
+    # presentation 的 import 刻意放在函式內：module 層級 import 會讓
+    # `from slidebox.composition import build_usecase` 一併拉進 PySide6，
+    # 無頭機器（沒有 libGL/xcb）連 import 都會失敗——那正是抽出
+    # build_usecase 要服務的場景。
+    from .presentation.deck_page import DeckPage
+    from .presentation.main_window import MainWindow
+
     settings_repo = JsonSettingsRepository(
         os.path.join(_project_root(), "slidebox_settings.json")
     )
@@ -65,16 +104,6 @@ def build_main_window() -> MainWindow:
     def save() -> None:
         settings_repo.save(settings)
 
-    usecase = BuildDeckUseCase(
-        YtDlpSubtitleGateway(),
-        CurrentSettingsSummarizer(settings),
-        YtDlpSectionGateway(),
-        FfmpegFrameExtractor(),
-        HtmlDeckRenderer(),
-        # 沒有字幕時的語音辨識備援。模型在第一次需要時才載入（約 40 秒）並
-        # 快取在這個實例裡；改 whisper_model 需重開 app（語言模型與 host 則每次生成時即時讀取）。
-        audio=YtDlpAudioGateway(),
-        transcriber=FasterWhisperTranscriber(settings.whisper_model),
-    )
-    page = DeckPage(usecase, OllamaModelCatalog(settings.ollama_host), settings, save)
+    page = DeckPage(build_usecase(settings),
+                    OllamaModelCatalog(settings.ollama_host), settings, save)
     return MainWindow(page)

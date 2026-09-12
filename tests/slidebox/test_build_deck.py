@@ -474,3 +474,17 @@ def test_the_summarizer_gets_a_live_cancel_check():
     with pytest.raises(OperationCancelled):
         usecase.execute("URL", _settings(), None, lambda: cancelled["value"])
     assert summ.saw_cancel
+
+
+def test_a_source_that_states_its_own_quality_note_wins():
+    """IVOD 的逐字稿不是滾動字幕（is_automatic=False），但確實是 AI 產的、
+    需要註記。攔的 bug：註記只從 is_automatic 推，這種來源就會靜悄悄地
+    被當成人工字幕。"""
+    transcript = Transcript(
+        video_id="171180", title="某段發言", duration=200.0,
+        cues=(Cue(0.0, 3.0, "第一句"), Cue(30.0, 33.0, "第二句")),
+        language="zh", is_automatic=False,
+        source_note="逐字稿由立法院 AI 自動產生，可能有辨識錯誤",
+    )
+    result = _build(subs=FakeSubtitleGateway(transcript)).execute("URL", _settings())
+    assert result.deck.source_note == "逐字稿由立法院 AI 自動產生，可能有辨識錯誤"

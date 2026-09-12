@@ -99,8 +99,9 @@ class BuildDeckUseCase:
         cb(0.0, "取得字幕…")
         try:
             transcript = self._subtitles.fetch(url, settings.subtitle_langs)
-            # 自動字幕品質較差，要讓使用者知道
-            note = "使用 YouTube 自動字幕，品質可能較差" if transcript.is_automatic else ""
+            # 來源自己講的優先；沒講就用「是不是 YouTube 自動字幕」判斷
+            note = transcript.source_note or (
+                "使用 YouTube 自動字幕，品質可能較差" if transcript.is_automatic else "")
         except SubtitleDownloadFailed:
             # 字幕存在但這次下載失敗（例如 HTTP 429）：這是暫時性問題，原樣
             # 告知使用者稍後重試。改走語音會把品質最好的人工字幕無聲地換成

@@ -103,7 +103,7 @@ class DeckPage(QWidget):
         # 網址
         url_row = QHBoxLayout()
         self.url_edit = QLineEdit()
-        self.url_edit.setPlaceholderText("貼上 YouTube 網址，按 Enter 加入佇列")
+        self.url_edit.setPlaceholderText("貼上 YouTube 或立法院 IVOD 網址，按 Enter 加入佇列")
         self.url_edit.returnPressed.connect(self._add)
         self.url_edit.textChanged.connect(lambda _: self._refresh_buttons())
         paste_btn = QPushButton("貼上")
@@ -265,7 +265,7 @@ class DeckPage(QWidget):
         """把網址列的內容加進佇列；沒有東西在跑就立刻開始。"""
         url = self.url_edit.text().strip()
         if not url:
-            self.status.setText("請先貼上 YouTube 網址。")
+            self.status.setText("請先貼上 YouTube 或立法院 IVOD 網址。")
             return
         if self._queue.add(url) is None:
             self.status.setText("這個網址已經在佇列裡了。")

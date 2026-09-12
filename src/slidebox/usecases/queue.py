@@ -8,6 +8,8 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 
+from .sources import ivod_id
+
 PENDING = "pending"
 RUNNING = "running"
 DONE = "done"
@@ -27,8 +29,12 @@ def video_key(url: str) -> str:
 
     `youtu.be/X`、`watch?v=X`、`watch?v=X&t=30` 都是同一支影片；兩項都跑
     不只白等一倍時間，第二次還會覆寫第一次的成品資料夾（資料夾名用的是
-    影片 id）。認不出 id 的網址就拿整串字串比。
+    影片 id）。IVOD 同理，網址尾端有沒有斜線都是同一段發言。
+    認不出 id 的網址就拿整串字串比。
     """
+    ivod = ivod_id(url)
+    if ivod:
+        return f"ivod:{ivod}"
     m = _ID_RE.search(url)
     return m.group(1) if m else url
 
