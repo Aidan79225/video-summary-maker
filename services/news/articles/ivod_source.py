@@ -81,6 +81,15 @@ def _duration(value: object) -> int:
     return int(total)
 
 
+def _total_pages(payload: dict) -> int:
+    """上游給了怪值也不要讓整個指令帶著 traceback 死掉——那會連已經登記好
+    的積壓都不處理。當成只有一頁即可。"""
+    try:
+        return int(payload.get(Field.TOTAL_PAGES) or 1)
+    except (TypeError, ValueError):
+        return 1
+
+
 def _clip(raw: dict) -> IvodClip | None:
     ivod_id = raw.get(Field.ID)
     url = str(raw.get(Field.URL) or "")
@@ -115,6 +124,8 @@ class IvodDailySource:
         page = 1
         while True:
             payload = self._page(day, page)
+            if not isinstance(payload, dict):
+                raise IvodUnavailable("立法院 API 的回應不是物件")
             if Field.ROWS not in payload:
                 # 上游改了 schema 跟「今天休會」在下游看起來一模一樣，
                 # 都是「發現 0 篇」。寧可吵一次也不要靜悄悄地停更。
@@ -124,7 +135,7 @@ class IvodDailySource:
                 break
             clips.extend(c for c in (_clip(r) for r in rows if isinstance(r, dict))
                          if c is not None)
-            if page >= int(payload.get(Field.TOTAL_PAGES) or 1):
+            if page >= _total_pages(payload):
                 break
             page += 1
         if only_with_transcript:

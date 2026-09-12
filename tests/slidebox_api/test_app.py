@@ -165,3 +165,18 @@ def _wait(predicate, timeout=5.0):
             return True
         time.sleep(0.01)
     raise AssertionError("等不到預期的狀態")
+
+
+def test_a_non_ascii_api_key_is_rejected_not_a_crash():
+    """攔的 bug：compare_digest 對非 ASCII 的 str 會丟 TypeError，於是一個
+    亂填的金鑰變成 500 而不是 401。
+
+    header 在線路上是 latin-1，所以真正送得進來的非 ASCII 是這個範圍。
+    """
+    store = JobStore()
+    worker = JobWorker(store, FakeExecutor())
+    with TestClient(_app(store, worker, api_key="secret")) as client:
+        worker.stop()
+        response = client.post("/jobs", json={"url": IVOD},
+                               headers={"X-API-Key": "sécret".encode("latin-1")})
+        assert response.status_code == 401

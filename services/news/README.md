@@ -21,6 +21,8 @@ API 在 <http://localhost:8000/api/health>，互動式文件在 <http://localhos
 
 管理後台（可選）：`uv run python manage.py createsuperuser`，然後開 `/admin/`。
 
+`DEBUG=False` 時 `runserver` 不會服務靜態檔，admin 會是一頁沒有樣式的 HTML。加 `--insecure` 就好——它是把 `attempts` 歸零的唯一介面。
+
 ## 正式部署前一定要做的一件事
 
 ```bash
@@ -84,7 +86,7 @@ uv run python manage.py run_scheduler                   # 每天 04:10；每次�
 uv run python manage.py run_scheduler --backfill-days 0 # 不要回補
 
 # 二、系統排程（crontab -e）
-10 4 * * * cd /home/pi/yt-downloader/services/news && /home/pi/.local/bin/uv run python manage.py ingest_ivod >> /var/log/ly-news.log 2>&1
+10 4 * * * cd /home/pi/yt-downloader/services/news && /home/pi/.local/bin/uv run python manage.py ingest_ivod >> /var/log/ly-news-ingest.log 2>&1
 ```
 
 ## API
@@ -100,10 +102,12 @@ uv run python manage.py run_scheduler --backfill-days 0 # 不要回補
 
 ## 部署到 Raspberry Pi
 
+三個 unit 各自獨立，**名字不要重複**（前端那份文件用的是 `ly-news-web`）：
+
 ```ini
-# /etc/systemd/system/ly-news.service
+# /etc/systemd/system/ly-news-api.service
 [Unit]
-Description=立法院質詢摘要 API
+Description=立法院質詢摘要 API（Django）
 After=network-online.target
 
 [Service]
@@ -112,7 +116,7 @@ WorkingDirectory=/home/pi/yt-downloader/services/news
 Environment=DJANGO_SECRET_KEY=換成一串隨機字元
 Environment=DJANGO_ALLOWED_HOSTS=localhost,127.0.0.1,pi.local
 Environment=GPU_API_BASE=http://192.168.1.50:8800
-ExecStart=/home/pi/.local/bin/uv run python manage.py runserver 0.0.0.0:8000 --noreload
+ExecStart=/home/pi/.local/bin/uv run python manage.py runserver 0.0.0.0:8000 --noreload --insecure
 Restart=always
 
 [Install]
@@ -123,7 +127,7 @@ WantedBy=multi-user.target
 # /etc/systemd/system/ly-news-scheduler.service
 [Unit]
 Description=立法院質詢摘要每日匯入
-After=ly-news.service
+After=ly-news-api.service
 
 [Service]
 User=pi
@@ -135,6 +139,8 @@ Restart=always
 [Install]
 WantedBy=multi-user.target
 ```
+
+`--insecure` 是為了讓 `DEBUG=False` 下的 `/admin/` 還有 CSS——admin 是把 `attempts` 歸零的唯一介面。
 
 `runserver` 是開發伺服器。自用流量沒問題，但要更穩的話換成 gunicorn：
 

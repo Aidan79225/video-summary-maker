@@ -15,6 +15,7 @@ from django.test import SimpleTestCase, TestCase, override_settings
 from articles.gpu_client import GpuApiClient, GpuApiError, JobFailed
 from articles.ingest import (
     discover,
+    discover_days,
     imageless,
     ingest_day,
     process_pending,
@@ -358,3 +359,60 @@ class ResumeTests(TestCase):
         self._run(client)
         self.assertEqual(client.cancelled, ["J"])
         self.assertEqual(len(client.submitted), 1)
+
+
+@override_settings(MEDIA_ROOT=MEDIA)
+class UpstreamOutageTests(TestCase):
+    def test_the_backlog_is_still_processed_when_the_legislature_api_is_down(self):
+        """攔的 bug：discover 失敗就直接 return，跳過整個 process_pending。
+        兩者的上游不同——立法院掛掉時 GPU 沒有理由整夜閒著。"""
+        discover(date(2026, 8, 27), FakeSource())
+        client = FakeClient()
+        with self.assertLogs("articles.ingest", level="WARNING"):
+            report = ingest_day(date(2026, 8, 28),
+                                FakeSource(error=IvodUnavailable("逾時")),
+                                client, limit=10, timeout=60)
+        self.assertEqual(len(client.submitted), 1)
+        self.assertEqual(report.processed, 1)
+
+    def test_one_bad_day_does_not_stop_the_other_days(self):
+        class FlakySource:
+            def __init__(self):
+                self.calls = 0
+
+            def clips_for(self, day, only_with_transcript=True):
+                self.calls += 1
+                if self.calls == 1:
+                    raise IvodUnavailable("逾時")
+                return [_clip()]
+
+        source = FlakySource()
+        with self.assertLogs("articles.ingest", level="WARNING"):
+            report = discover_days([date(2026, 8, 27), date(2026, 8, 26)], source)
+        self.assertEqual(report.created, 1)
+        self.assertTrue(report.errors)
+
+
+@override_settings(MEDIA_ROOT=MEDIA)
+class StuckJobTests(TestCase):
+    def setUp(self):
+        discover(date(2026, 8, 27), FakeSource())
+        self.article = Article.objects.get(ivod_id="900001")
+        self.article.gpu_job_id = "J"
+        self.article.save(update_fields=["gpu_job_id"])
+
+    def test_a_job_stuck_in_the_queue_is_also_cancelled_and_resubmitted(self):
+        """攔的 bug：只認 RUNNING 的話，被取消後重送的那個會一直是 QUEUED
+        ——之後每天都「接回」一個永遠排不到的工作，而且再也不會被判定卡住。"""
+        client = FakeClient(known_jobs={
+            "J": {"status": "queued", "created_at": time.time() - 10_000}})
+        process_pending(client, limit=10, timeout=60)
+        self.assertEqual(client.cancelled, ["J"])
+        self.assertEqual(len(client.submitted), 1)
+
+    def test_a_job_that_just_started_is_left_alone(self):
+        client = FakeClient(known_jobs={
+            "J": {"status": "queued", "created_at": time.time()}})
+        process_pending(client, limit=10, timeout=60)
+        self.assertEqual(client.cancelled, [])
+        self.assertEqual(client.submitted, [])

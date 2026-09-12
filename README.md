@@ -248,6 +248,19 @@ uv run --group api serve_api.py
 
 環境變數見 `serve_api.py` 的 docstring。設了 `SLIDEBOX_API_KEY` 就會強制 `X-API-Key`。
 
+**要讓 Pi 連得到這個服務，兩件事都要做**（預設只綁 loopback，所以預設狀態下 Pi 是連不到的）：
+
+```powershell
+$env:SLIDEBOX_API_HOST = "0.0.0.0"          # 預設 127.0.0.1
+uv run --group api serve_api.py
+
+# 另開一個「以系統管理員身分」的視窗，放行入站連線（只開給私人網路）
+New-NetFirewallRule -DisplayName "SlideBox API" -Direction Inbound -LocalPort 8800 `
+  -Protocol TCP -Action Allow -Profile Private
+```
+
+綁在非 loopback 位址又沒設 `SLIDEBOX_API_KEY` 時，啟動會印一行警告——任何連得到這個埠的人都能佔用你的 GPU。
+
 ## 2. 後端（Pi）
 
 `services/news/` — Django + django-ninja。每天凌晨抓前一天的質詢片段、送去 GPU 主機產生**詳細模式**的摘要、存成文章，並開出 news API。見 `services/news/README.md`。

@@ -47,7 +47,16 @@ class Command(BaseCommand):
         # 沒有回補就再也不會被查到，而且沒有任何訊號。
         scheduler.add_job(job, "cron", hour=hour, minute=minute, id="ingest_ivod",
                           max_instances=1, coalesce=True, misfire_grace_time=3600)
-        signal.signal(signal.SIGTERM, lambda *_: scheduler.shutdown(wait=False))
+        def stop(*_) -> None:
+            # 回補是在 scheduler.start() 之前同步跑的（可能一兩個小時）。
+            # 那段期間呼叫 shutdown 會丟 SchedulerNotRunningError，而它會
+            # 從匯入迴圈當下的位置冒出來，被當成「這篇文章處理失敗」。
+            if scheduler.running:
+                scheduler.shutdown(wait=False)
+            else:
+                raise SystemExit(0)
+
+        signal.signal(signal.SIGTERM, stop)
 
         self.stdout.write(
             f"排程已啟動：每天 {hour:02d}:{minute:02d}（{settings.TIME_ZONE}）")

@@ -29,6 +29,8 @@ if (!listRes.ok) {
 const speakers = speakersRes.ok ? speakersRes.data.items : [];
 const list = listRes.ok ? listRes.data : null;
 const items = list?.items ?? [];
+// 分頁越界時說「資料庫裡還沒有文章」會誤導——那兩件事完全不同
+const beyondLastPage = !!list && list.count > 0 && items.length === 0;
 
 const hasFilter = Boolean(date || speaker || q);
 const showLead = !hasFilter && page === 1 && items.length > 1;
@@ -91,13 +93,15 @@ const latestDate = items[0]?.date ?? '';
       listRes.ok && items.length === 0 && (
         <div class="mt-10">
           <Notice
-            title={hasFilter ? '這個條件下沒有報導' : '目前還沒有任何報導'}
+            title={beyondLastPage ? '沒有這一頁' : hasFilter ? '這個條件下沒有報導' : '目前還沒有任何報導'}
             body={
-              hasFilter
-                ? '試著放寬條件——換一個日期、清掉關鍵字，或改看全部委員。'
-                : '後端資料庫裡還沒有文章。等當天的 IVOD 處理完成後，這裡就會出現。'
+              beyondLastPage
+                ? `這個條件下只有 ${list?.pages ?? 1} 頁。`
+                : hasFilter
+                  ? '試著放寬條件——換一個日期、清掉關鍵字，或改看全部委員。'
+                  : '後端資料庫裡還沒有文章。等當天的 IVOD 處理完成後，這裡就會出現。'
             }
-            retryHref={hasFilter ? '/' : retryHref}
+            retryHref={beyondLastPage || hasFilter ? '/' : retryHref}
           />
         </div>
       )

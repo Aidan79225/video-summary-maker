@@ -105,3 +105,34 @@ class GpuClientTests(SimpleTestCase):
         seen = []
         client.wait("abc", timeout=600, on_progress=lambda job: seen.append(job))
         self.assertEqual(len(seen), 2)
+
+
+class ErrorClassificationTests(SimpleTestCase):
+    """一篇壞掉的文章與一個掛掉的服務，處置方式完全不同。"""
+
+    def _http_error(self, code):
+        import io
+        import urllib.error
+        return urllib.error.HTTPError("http://gpu/jobs", code, "boom", {},
+                                      io.BytesIO(b"detail"))
+
+    def test_a_rejected_payload_is_this_articles_problem(self):
+        """422 是「這一筆送的內容不合法」——標記這一篇失敗，繼續下一篇。"""
+        client, _, _ = _client([self._http_error(422)])
+        with self.assertRaises(JobFailed):
+            client.submit("https://ivod/1")
+
+    def test_a_deployment_mistake_stops_the_batch_instead(self):
+        """攔的 bug：把 405/400 也當成單篇失敗。那種錯對每一篇都一樣，會把
+        當晚 20 篇的重試次數全部燒掉，五天後整批永久放棄。"""
+        for code in (400, 401, 403, 405, 500, 502):
+            with self.subTest(code=code):
+                client, _, _ = _client([self._http_error(code)])
+                with self.assertRaises(GpuApiError):
+                    client.submit("https://ivod/1")
+
+    def test_a_job_the_gpu_no_longer_knows_reads_as_none(self):
+        """GPU 重開過，記憶體裡的佇列沒了。那不是服務掛掉，是那個 id 沒了
+        ——呼叫端要據此重送，而不是停下整批。"""
+        client, _, _ = _client([self._http_error(404)])
+        self.assertIsNone(client.job("nope"))

@@ -25,7 +25,7 @@ const [listRes, speakersRes] = await Promise.all([
 ]);
 
 if (!listRes.ok) {
-  Astro.response.status = statusFor(res.error.kind);
+  Astro.response.status = statusFor(listRes.error.kind);
 }
 
 const list = listRes.ok ? listRes.data : null;

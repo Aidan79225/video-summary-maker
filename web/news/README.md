@@ -9,7 +9,8 @@
 
 ## 需求
 
-- Node.js 20 以上（開發機實測 v24.15.0）
+- **Node.js 22.12 以上**（Astro 7 的 `engines` 要求；開發機實測 v24.15.0）。
+  Raspberry Pi OS 的 apt 給的是 Node 18，要用 [NodeSource](https://github.com/nodesource/distributions) 或 nvm 裝。
 - npm（實測 11.12.1）
 
 ## 快速開始
@@ -56,9 +57,7 @@ node ./dist/server/entry.mjs       # 等同 npm run preview / npm start
 
 所有 API 呼叫都發生在伺服器端（SSR），瀏覽器不會直接連到 Django，
 因此 `PUBLIC_API_BASE` 可以填內網位址（例如 `http://127.0.0.1:8000`）——但圖片是瀏覽器自己去抓的，那個位址手機連不到，所以要另外設 `PUBLIC_MEDIA_BASE`，或在 Pi 上用 nginx 同時代理 `/api` 與 `/media`。
-但要注意：圖片 `<img src>` 是**瀏覽器**去抓的，所以圖片能不能顯示取決於使用者的裝置
-是否連得到這個 base；若手機要看得到圖，`PUBLIC_API_BASE` 要填手機也連得到的位址
-（或在前面放一個同時反向代理 `/api` 與 `/media` 的 nginx）。
+
 
 ## 假資料模式（USE_FIXTURE=1）
 
@@ -132,7 +131,7 @@ node ./dist/server/entry.mjs
 
 ### systemd service 範例
 
-`/etc/systemd/system/ly-news.service`：
+`/etc/systemd/system/ly-news-web.service`：（後端那兩個叫 `ly-news-api` 與 `ly-news-scheduler`）
 
 ```ini
 [Unit]
@@ -140,7 +139,7 @@ Description=立院質詢日報（Astro SSR 前端）
 After=network-online.target
 Wants=network-online.target
 # 和 Django 裝在同一台時，讓它等後端先起來（沒有也不會壞，頁面會顯示「連不上內容伺服器」）
-After=ly-api.service
+After=ly-news-api.service
 
 [Service]
 Type=simple
@@ -151,6 +150,9 @@ Environment=NODE_ENV=production
 Environment=HOST=0.0.0.0
 Environment=PORT=4321
 Environment=PUBLIC_API_BASE=http://127.0.0.1:8000
+# 圖片網址會原樣送到瀏覽器，所以這一行要填**手機連得到**的位址，
+# 而且那個 host 要加進 Django 的 DJANGO_ALLOWED_HOSTS。
+Environment=PUBLIC_MEDIA_BASE=http://pi.local:8000
 Environment=API_TIMEOUT_MS=8000
 # 後端整個掛掉時要先撐住 demo，就把下面這行的註解拿掉
 # Environment=USE_FIXTURE=1
@@ -161,7 +163,7 @@ RestartSec=3
 MemoryMax=512M
 StandardOutput=journal
 StandardError=journal
-SyslogIdentifier=ly-news
+SyslogIdentifier=ly-news-web
 
 [Install]
 WantedBy=multi-user.target
@@ -171,9 +173,9 @@ WantedBy=multi-user.target
 
 ```bash
 sudo systemctl daemon-reload
-sudo systemctl enable --now ly-news
-sudo systemctl status ly-news
-journalctl -u ly-news -f
+sudo systemctl enable --now ly-news-web
+sudo systemctl status ly-news-web
+journalctl -u ly-news-web -f
 ```
 
 改環境變數後只要 `sudo systemctl restart ly-news`，不必重新 build。

@@ -155,3 +155,24 @@ GET /api/speakers
 ### 已知限制（未做）
 
 GPU 端沒有單一工作的硬性逾時。現有的阻塞點都有界限（Ollama 600 秒、IVOD 切片 30 秒），但一支合法而很長的影片若超過 `GPU_JOB_TIMEOUT_SECONDS`，Pi 端會逾時放棄、隔天再接回。真正的解法是在 `JobWorker` 加看門狗，那是比較大的改動。
+
+## 第三輪審查的修正
+
+- **委員頁引用了不存在的變數**（第二輪改 `statusFor` 時打錯）：後端一出錯，那一頁不是顯示「連不上內容伺服器」，而是整頁空白 500。`astro build` 不做型別檢查所以照樣建置成功，而我當時只看了 `astro check` 輸出的最後三行、剛好把 errors 那行截掉。**教訓：檢查工具的輸出要看完整，不要只 tail。**
+- **`services/news/.env` 沒有被 gitignore**：`.env.example` 明說「複製成 .env」，而 repo 是公開的——照文件做完再一次 `git add -A`，`DJANGO_SECRET_KEY` 與 `GPU_API_KEY` 就上去了。連同 WAL 的 `db.sqlite3-wal/-shm` 一起補。
+- **兩份 README 的 systemd unit 同名**（都叫 `ly-news.service`）：照著做的話第二個會覆蓋第一個，Django 永遠不會被帶起來。改成 `ly-news-api` / `ly-news-scheduler` / `ly-news-web`。
+- **前端的 systemd 範例沒設 `PUBLIC_MEDIA_BASE`**：照抄的結果是所有訪客都看到破圖（圖片網址會變成 `127.0.0.1`）。
+- **Node 版本寫錯**：Astro 7 要 22.12+，README 寫 20；Raspberry Pi OS 的 apt 給的是 18。
+- **GPU 主機那側沒講「要讓 Pi 連得到」**：預設只綁 loopback，還要開 Windows 防火牆。這是最可能的第一個「為什麼 Pi 說連線失敗」。
+- **回補期間收到 SIGTERM**：`scheduler.shutdown()` 在 scheduler 還沒啟動時會丟例外，而那個例外會被匯入迴圈的 `except Exception` 接住，變成「這篇文章處理失敗」。
+- 上游回了非物件或怪 `total_page` 時不再帶著 traceback 死掉；分頁越界不再顯示「資料庫裡還沒有文章」。
+- 補上前兩輪修正的測試：discover 失敗後仍會處理積壓、QUEUED 卡住的判定、4xx 的分類、非 ASCII 金鑰。
+
+## 已知限制（帶著走）
+
+- **站上的不是全量**：每次執行上限 20 篇、最新優先，而會期日的片段遠多於 20。積壓只會增加，目前只有指令輸出的「仍待處理 N」看得到。
+- **停更是無聲的**：立法院換 schema、GPU 主機夜裡休眠、五次失敗後永久放棄，都只進 log。`/api/health` 的 `latest_date` 是唯一適合外部監控的訊號。
+- **打到 `MAX_ATTEMPTS` 的文章要人進 admin 把 `attempts` 歸零**，沒有其他路徑。
+- **GPU 端沒有單一工作的硬性逾時**：現有阻塞點都有界限（Ollama 600 秒、IVOD 切片 30 秒），Pi 端 1800 秒逾時加隔天接回實際上可運作。
+- **GPU 主機的輸出資料夾不會被清**：每個工作留下 `slides.html` 與截圖，新聞服務不讀它；同一支影片重跑會覆寫，所以量是線性的。
+- `runserver` 終究是開發伺服器；自用流量沒問題，要更穩就換 gunicorn。
