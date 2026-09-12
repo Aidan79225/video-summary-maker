@@ -96,12 +96,13 @@ export function errorTitle(e: ApiError): string {
 }
 
 export function errorHint(e: ApiError): string {
-  const base = apiBase();
+  // 訊息裡不放 API base：那是內部位址，而這段字是訪客看得到的。
+  // 要查是哪一台連不上，看伺服器的 log。
   switch (e.kind) {
     case 'offline':
-      return `後端 API（${base}）目前沒有回應。若這台機器剛重新開機，Django 可能還在啟動中，稍候重新整理即可。`;
+      return '內容伺服器目前沒有回應。若這台機器剛重新開機，後端可能還在啟動中，稍候重新整理即可。';
     case 'timeout':
-      return `等待 ${base} 超過 ${Math.round(timeoutMs() / 1000)} 秒仍無回應。伺服器可能正在忙，請稍後再試。`;
+      return `等待內容伺服器超過 ${Math.round(timeoutMs() / 1000)} 秒仍無回應。伺服器可能正在忙，請稍後再試。`;
     case 'server':
       return `後端回報 HTTP ${e.status ?? 500}。這是內容伺服器那一側的問題，網站本身是正常的。`;
     case 'notfound':
@@ -139,8 +140,11 @@ async function getJson<T>(path: string): Promise<Result<T>> {
   }
 
   if (!res.ok) {
+    // 只有 422（django-ninja 的參數驗證）才是訪客送錯東西。其餘 4xx——
+    // ALLOWED_HOSTS 沒設對是 400、反向代理的 401/403/429——都是這一端的
+    // 設定問題，當成訪客的錯會讓「網站整個掛了」顯示成「請檢查篩選條件」。
     const kind: ApiError['kind'] =
-      res.status === 404 ? 'notfound' : res.status >= 500 ? 'server' : 'client';
+      res.status === 404 ? 'notfound' : res.status === 422 ? 'client' : 'server';
     return {
       ok: false,
       // detail 只放路徑：完整網址含內部位址，而它會顯示在訪客看得到的

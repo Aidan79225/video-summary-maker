@@ -140,3 +140,18 @@ GET /api/speakers
 - **狀態不用裸字串**：`ArticleStatus`（Django `TextChoices`）、`JobStatus`、`ItemStatus`、`VideoKind`、`Feature`、`Field` 都是列舉。立法院 API 的欄位名也集中在一個列舉裡，上游改名只要動一個地方。
 - **嚴格 DI**：中間層不自己 `new` 相依、也不讀環境變數。`create_app` 的每個相依都是必填參數，組裝全部集中在 `serve_api.py`；Django 這邊的 composition root 是 management command。
 - **註解與 docstring 說「為什麼」**：能從程式碼讀出來的事就不寫。
+
+## 第二輪審查的修正
+
+- **立法院 API 一掛，整晚的積壓一篇都不處理**：`ingest_day` 在 discover 失敗時直接 return，跳過 process。兩者的上游不同——立法院掛掉時 GPU 沒有理由整夜閒著。
+- **每晚的 GPU 預算悄悄變三倍**：上一輪讓排程改跑 `--days 3`，但指令對每一天各跑一次 `process_pending(limit=20)`。回補的意思是「多查幾天的清單」，處理上限應該只有一份。
+- **`statusFor` 把後端設定錯誤當成訪客的錯**：`ALLOWED_HOSTS` 沒設對時 Django 回 400，整站每頁都會顯示「請檢查篩選條件」並回 400，監控看不出網站其實掛了。只有 422（ninja 的參數驗證）才是訪客的錯。
+- **`_REQUEST_ERROR_CODES` 太寬**：405／400 只會來自部署錯誤，把它們當成單篇失敗會把當晚 20 篇的重試次數全部燒掉。縮成只有 422。
+- **`_stuck` 只認 RUNNING**：卡住的工作被取消後，重送的那個會一直是 QUEUED——之後每天都「接回」一個永遠排不到的工作，而且再也不會被判定卡住。QUEUED 改用 `created_at` 判。
+- **`_claim` 沒檢查 `attempts`**：兩個行程同時跑時可以把同一篇推到第六次。
+- **DI 回退**：上一輪為了卡住判準去 import `django.conf.settings`，但同一個值已經以參數注入。改回注入，時鐘也一併注入。
+- `?page=` 超過 int64 讓 SQLite 直接 500；`X-API-Key` 含非 ASCII 讓 `compare_digest` 丟 TypeError 變成 500；`gpu_job_id` 的清除併進 `save_result` 的同一次寫入；錯誤提示不再把 API base 印給訪客。
+
+### 已知限制（未做）
+
+GPU 端沒有單一工作的硬性逾時。現有的阻塞點都有界限（Ollama 600 秒、IVOD 切片 30 秒），但一支合法而很長的影片若超過 `GPU_JOB_TIMEOUT_SECONDS`，Pi 端會逾時放棄、隔天再接回。真正的解法是在 `JobWorker` 加看門狗，那是比較大的改動。

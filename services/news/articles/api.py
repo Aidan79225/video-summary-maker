@@ -5,13 +5,16 @@ from datetime import date as date_type
 
 from django.db.models import Count, Max, Q
 from django.shortcuts import get_object_or_404
-from ninja import NinjaAPI, Schema
+from ninja import NinjaAPI, Query, Schema
 
 from .models import Article, ArticleStatus
 
 api = NinjaAPI(title="立法院質詢摘要 API", version="1.0", urls_namespace="news")
 
 _MAX_PAGE_SIZE = 50
+# 頁碼上限：SQLite 的 OFFSET 綁定超過 int64 會直接 500，而前端會把訪客
+# 網址上的 ?page= 原樣轉手過來。
+_MAX_PAGE = 10_000
 
 
 class SlideOut(Schema):
@@ -98,14 +101,17 @@ def health(request) -> dict:
 
 @api.get("/articles", response=ArticleListOut)
 def list_articles(request, date: date_type | None = None, speaker: str | None = None,
-                  q: str | None = None, page: int = 1, page_size: int = 20) -> dict:
+                  q: str | None = None,
+                  page: int = Query(1, ge=1, le=_MAX_PAGE),
+                  page_size: int = 20) -> dict:
     """只回已完成的文章——處理中或失敗的是內部狀態，不是新聞。
 
     date 宣告成日期型別而不是字串：前端會把訪客網址上的 ?date= 原樣轉手
     過來，字串會被直接丟進 filter() 而讓任何爬蟲或打錯的連結變成 500。
     交給 ninja 驗證就會回 422。
     """
-    page = max(1, page)
+    # page 由 Query 擋住（超過 int64 的 OFFSET 會讓 SQLite 直接 500），
+    # page_size 則夾住就好——一個看起來合理的 ?page_size=100 不值得回錯誤。
     page_size = max(1, min(page_size, _MAX_PAGE_SIZE))
 
     queryset = Article.objects.filter(status=ArticleStatus.READY).prefetch_related("slides")

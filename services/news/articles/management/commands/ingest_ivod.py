@@ -14,7 +14,7 @@ from django.core.management.base import BaseCommand, CommandError
 from django.utils import timezone
 
 from articles.gpu_client import GpuApiClient
-from articles.ingest import discover, ingest_day, process_pending, retry_imageless
+from articles.ingest import discover_days, process_pending, retry_imageless
 from articles.ivod_source import IvodDailySource
 
 
@@ -46,14 +46,24 @@ class Command(BaseCommand):
             self._report(process_pending(client, limit=limit, timeout=timeout))
             return
 
-        for day in self._days(options):
-            source = IvodDailySource(settings.IVOD_API_BASE)
-            self.stdout.write(f"=== {day} ===")
-            if options["discover_only"]:
-                found, created = discover(day, source)
-                self.stdout.write(f"發現 {found}、新增 {created}")
-                continue
-            self._report(ingest_day(day, source, client, limit=limit, timeout=timeout))
+        days = self._days(options)
+        source = IvodDailySource(settings.IVOD_API_BASE)
+        self.stdout.write(f"=== {days[-1]} ～ {days[0]} ===")
+
+        # 先把所有天的清單登記完，再跑**一次**處理。一天一次 process_pending
+        # 的話，--days 3 會讓當晚的處理上限悄悄變成三倍——GPU 主機是使用者
+        # 的桌機，那會一路跑進上班時間。
+        report = discover_days(days, source)
+        if options["discover_only"]:
+            self.stdout.write(f"發現 {report.discovered}、新增 {report.created}")
+            return
+
+        processed = process_pending(client, limit=limit, timeout=timeout)
+        report.processed = processed.processed
+        report.failed = processed.failed
+        report.pending = processed.pending
+        report.errors.extend(processed.errors)
+        self._report(report)
 
     def _days(self, options) -> list[date]:
         if options["date"]:

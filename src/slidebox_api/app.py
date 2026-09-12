@@ -89,8 +89,9 @@ def create_app(
         if not api_key:
             return
         # compare_digest 而不是 ==：後者會在第一個不同的位元組就返回，
-        # 回應時間會洩漏金鑰的前綴。
-        if not secrets.compare_digest(x_api_key, api_key):
+        # 回應時間會洩漏金鑰的前綴。比 bytes 而不是 str：compare_digest 對
+        # 非 ASCII 的 str 會丟 TypeError，那會變成 500 而不是 401。
+        if not secrets.compare_digest(x_api_key.encode(), api_key.encode()):
             raise HTTPException(status_code=401, detail="X-API-Key 不正確")
 
     @app.get("/health", response_model=HealthView)

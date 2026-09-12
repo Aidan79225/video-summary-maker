@@ -22,9 +22,10 @@ _POLL_TIMEOUT = 30.0
 _POLL_RETRIES = 5
 _RETRY_SECONDS = 3.0
 
-# 這些 4xx 是「這一次請求的問題」，不是服務掛了——把它們當成服務層級的
-# 錯誤會讓一篇壞掉的文章擋住當天整批。
-_REQUEST_ERROR_CODES = frozenset({400, 405, 409, 413, 422})
+# 422 是「這一筆送的內容不合法」，屬於這一支影片自己的問題。其餘 4xx
+# （405、400…）只可能來自部署錯誤，那對每一篇都一樣——當成單篇失敗會把
+# 當晚 20 篇的重試次數全部燒掉，五天後整批永久放棄。
+_REQUEST_ERROR_CODES = frozenset({422})
 
 
 class JobStatus(StrEnum):
@@ -45,6 +46,7 @@ class JobField(StrEnum):
     ERROR = "error"
     PROGRESS = "progress_status"
     STARTED_AT = "started_at"
+    CREATED_AT = "created_at"
 
 
 class GpuApiError(Exception):

@@ -44,7 +44,7 @@ python -c "import secrets; print(secrets.token_urlsafe(64))"
 | `GPU_API_BASE` | `http://localhost:8800` | GPU 主機上的摘要 API |
 | `GPU_API_KEY` | 空 | 對應 GPU 端的 `SLIDEBOX_API_KEY` |
 | `GPU_JOB_TIMEOUT_SECONDS` | `1800` | 等單一支影片的上限 |
-| `INGEST_DAILY_LIMIT` | `20` | 每次最多處理幾段（一段約 3～5 分鐘） |
+| `INGEST_DAILY_LIMIT` | `20` | **每次執行**最多處理幾段（一段約 3～5 分鐘）。回補多天只是多查幾天的清單，處理上限不變。 |
 | `INGEST_HOUR` | `4` | 常駐排程每天幾點跑 |
 
 ## 每日匯入
@@ -54,7 +54,7 @@ python -c "import secrets; print(secrets.token_urlsafe(64))"
 uv run python manage.py ingest_ivod
 
 uv run python manage.py ingest_ivod --date 2026-08-27
-uv run python manage.py ingest_ivod --days 7        # 補跑最近七天
+uv run python manage.py ingest_ivod --days 7        # 多查七天的清單（處理上限仍是 INGEST_DAILY_LIMIT）
 uv run python manage.py ingest_ivod --discover-only # 只登記，不送去產生摘要
 uv run python manage.py ingest_ivod --process-only  # 不查立法院，只把待處理的送出去
 uv run python manage.py ingest_ivod --retry-imageless  # 重跑「一張截圖都沒有」的文章
@@ -80,7 +80,7 @@ uv run python manage.py ingest_ivod --retry-imageless --limit 5
 
 ```bash
 # 一、常駐排程（不想碰 systemd 的話）
-uv run python manage.py run_scheduler                   # 每天 04:10，啟動時先回補三天
+uv run python manage.py run_scheduler                   # 每天 04:10；每次都回補三天的清單
 uv run python manage.py run_scheduler --backfill-days 0 # 不要回補
 
 # 二、系統排程（crontab -e）

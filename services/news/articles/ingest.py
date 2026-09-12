@@ -8,12 +8,12 @@ from __future__ import annotations
 import base64
 import logging
 import time
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
 from datetime import date, timedelta
 from uuid import uuid4
 
-from django.conf import settings
 from django.core.files.base import ContentFile
 from django.core.files.storage import Storage
 from django.db import transaction
@@ -91,6 +91,21 @@ def discover(day: date, source: IvodDailySource) -> tuple[int, int]:
     return len(clips), created
 
 
+def discover_days(days: Sequence[date], source: IvodDailySource) -> IngestReport:
+    """登記多天份的片段。某一天失敗不影響其他天。"""
+    report = IngestReport()
+    for day in days:
+        try:
+            found, created = discover(day, source)
+        except IvodUnavailable as e:
+            report.errors.append(f"{day}: {e}")
+            logger.warning("立法院清單取得失敗（%s）：%s", day, e)
+            continue
+        report.discovered += found
+        report.created += created
+    return report
+
+
 def _upsert(clip: IvodClip, day: date) -> tuple[Article, bool]:
     article, created = Article.objects.get_or_create(
         ivod_id=clip.ivod_id,
@@ -115,7 +130,7 @@ def process_pending(client: GpuApiClient, limit: int, timeout: float) -> IngestR
     有時晚幾小時才出現，隔天重試通常就好了。
     """
     queryset = (Article.objects
-                .filter(_claimable())
+                .filter(_claimable(timeout))
                 .filter(attempts__lt=MAX_ATTEMPTS)
                 .order_by("-date", "ivod_id")[:limit])
     return _process(queryset, client, timeout)
@@ -162,7 +177,7 @@ def _process(queryset: QuerySet, client: GpuApiClient, timeout: float,
     """
     report = IngestReport()
     for article in list(queryset):
-        if claim and not _claim(article):
+        if claim and not _claim(article, timeout):
             # 另一個行程（排程與手動指令同時跑）已經接手這一篇
             report.skipped += 1
             continue
@@ -183,8 +198,8 @@ def _process(queryset: QuerySet, client: GpuApiClient, timeout: float,
             _record_failure(article, e, report, demote_on_failure)
         else:
             report.processed += 1
-    report.pending = Article.objects.filter(_claimable()).filter(
-        attempts__lt=MAX_ATTEMPTS).count()
+    report.pending = (Article.objects.filter(_claimable(timeout))
+                      .filter(attempts__lt=MAX_ATTEMPTS).count())
     return report
 
 
@@ -206,19 +221,18 @@ def _record_failure(article: Article, error: Exception, report: IngestReport,
     logger.warning("文章 %s 處理失敗：%s", article.ivod_id, error)
 
 
-def _claimable():
+def _claimable(timeout: float):
     """可以被接手的條件：還沒做、做壞了、或卡在處理中太久。
 
     卡住的判準是時間：處理途中斷電或被 kill 的文章會永遠停在 PROCESSING，
     沒有這條就再也沒人會碰它。
     """
-    stale_before = timezone.now() - timedelta(
-        seconds=STALE_FACTOR * settings.GPU_JOB_TIMEOUT_SECONDS)
+    stale_before = timezone.now() - timedelta(seconds=STALE_FACTOR * timeout)
     return (Q(status__in=[ArticleStatus.PENDING, ArticleStatus.FAILED])
             | Q(status=ArticleStatus.PROCESSING, updated_at__lt=stale_before))
 
 
-def _claim(article: Article) -> bool:
+def _claim(article: Article, timeout: float) -> bool:
     """用一次條件式 UPDATE 宣告所有權；回傳有沒有搶到。
 
     PROCESSING 這個狀態本身不是鎖——排程與手動指令同時跑時，兩邊都會選
@@ -227,7 +241,10 @@ def _claim(article: Article) -> bool:
     """
     claimed = (Article.objects
                .filter(pk=article.pk)
-               .filter(_claimable())
+               .filter(_claimable(timeout))
+               # attempts 也要在這裡擋：兩個行程同時跑時，另一個可能剛把它
+               # 推到上限，而查詢那一刻還沒到。
+               .filter(attempts__lt=MAX_ATTEMPTS)
                .update(status=ArticleStatus.PROCESSING, error="",
                        attempts=F("attempts") + 1, updated_at=timezone.now()))
     if claimed:
@@ -243,8 +260,6 @@ def _process_one(article: Article, client: GpuApiClient, timeout: float) -> None
                              "文章 %s：%s", article.ivod_id,
                              job.get(JobField.PROGRESS) or job.get(JobField.STATUS)))
     save_result(article, result)
-    article.gpu_job_id = ""
-    article.save(update_fields=["gpu_job_id", "updated_at"])
 
 
 def _resume_or_submit(article: Article, client: GpuApiClient, timeout: float) -> str:
@@ -265,8 +280,8 @@ def _resume_or_submit(article: Article, client: GpuApiClient, timeout: float) ->
     return job_id
 
 
-def _resumable_job(article: Article, client: GpuApiClient,
-                   timeout: float) -> str | None:
+def _resumable_job(article: Article, client: GpuApiClient, timeout: float,
+                   now: Callable[[], float] = time.time) -> str | None:
     """上一輪的工作 id 還值不值得等。
 
     只接回還可能有成果的狀態。接回一個 failed 的工作等於每天重讀同一個
@@ -281,18 +296,26 @@ def _resumable_job(article: Article, client: GpuApiClient,
     job = client.job(article.gpu_job_id)
     if job is None or job.get(JobField.STATUS) not in RESUMABLE_STATUSES:
         return None
-    if _stuck(job, timeout):
+    if _stuck(job, timeout, now):
         logger.warning("工作 %s 卡住太久，取消後重送", article.gpu_job_id)
         client.cancel(article.gpu_job_id)
         return None
     return article.gpu_job_id
 
 
-def _stuck(job: dict, timeout: float) -> bool:
-    started = job.get(JobField.STARTED_AT)
-    if job.get(JobField.STATUS) != JobStatus.RUNNING or not started:
-        return False
-    return time.time() - float(started) > STUCK_JOB_FACTOR * timeout
+def _stuck(job: dict, timeout: float, now: Callable[[], float]) -> bool:
+    """這個工作是不是卡太久了。
+
+    QUEUED 也要看：卡住的工作被取消之後，重送的那個會排在它後面一直是
+    QUEUED——只認 RUNNING 的話，之後每天都會「接回」這個永遠排不到的
+    工作，而且再也不會被判定卡住。
+    """
+    reference = {
+        JobStatus.RUNNING: JobField.STARTED_AT,
+        JobStatus.QUEUED: JobField.CREATED_AT,
+    }.get(job.get(JobField.STATUS))
+    since = job.get(reference) if reference else None
+    return bool(since) and now() - float(since) > STUCK_JOB_FACTOR * timeout
 
 
 @transaction.atomic
@@ -321,6 +344,9 @@ def save_result(article: Article, payload: dict) -> Article:
     article.transcript_text = payload.get(DeckField.TRANSCRIPT) or ""
     article.status = ArticleStatus.READY
     article.error = ""
+    # 成品已經落地，那個工作 id 沒有用了；留著只會讓下一輪接回一份
+    # 早就取回過的結果。
+    article.gpu_job_id = ""
     article.published_at = article.published_at or timezone.now()
     article.save()
 
@@ -373,13 +399,9 @@ def _save_slide(article: Article, raw: dict, folder: str, index: int) -> None:
 def ingest_day(day: date, source: IvodDailySource, client: GpuApiClient,
                limit: int, timeout: float) -> IngestReport:
     """一天份的完整流程。"""
-    report = IngestReport()
-    try:
-        report.discovered, report.created = discover(day, source)
-    except IvodUnavailable as e:
-        report.errors.append(str(e))
-        logger.warning("立法院清單取得失敗：%s", e)
-        return report
+    report = discover_days([day], source)
+    # 查不到新片段不影響「把先前登記好的積壓送出去」——兩件事的上游不同，
+    # 立法院掛掉時 GPU 沒有理由整夜閒著。
     processed = process_pending(client, limit=limit, timeout=timeout)
     report.processed = processed.processed
     report.failed = processed.failed

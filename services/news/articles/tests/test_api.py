@@ -180,3 +180,24 @@ class MediaServingTests(TestCase):
         for path in ("/media/../../manage.py", "/media/..%2f..%2fmanage.py"):
             with self.subTest(path=path):
                 self.assertNotEqual(self.client.get(path).status_code, 200)
+
+
+@override_settings(MEDIA_ROOT=MEDIA)
+class HostileQueryTests(TestCase):
+    """訪客網址上的參數會被前端原樣轉手過來，爬蟲什麼都會試。"""
+
+    def test_a_page_number_beyond_any_database_is_refused_not_a_500(self):
+        """攔的 bug：超過 int64 的 OFFSET 讓 SQLite 直接 500，而前端會把它
+        顯示成「後端掛了」——任何爬蟲都能製造假的故障警報。"""
+        response = self.client.get("/api/articles?page=99999999999999999999")
+        self.assertEqual(response.status_code, 422)
+
+    def test_a_bad_date_is_the_visitors_problem_not_a_500(self):
+        self.assertEqual(self.client.get("/api/articles?date=abc").status_code, 422)
+        self.assertEqual(
+            self.client.get("/api/articles?date=2026-13-45").status_code, 422)
+
+    def test_a_large_page_size_is_clamped_rather_than_refused(self):
+        _article()
+        body = self.client.get("/api/articles?page_size=100000").json()
+        self.assertLessEqual(body["page_size"], 50)
