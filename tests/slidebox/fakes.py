@@ -1,12 +1,17 @@
 """測試用的記憶體假實作（不碰真實磁碟／網路）。"""
 from __future__ import annotations
 
-from slidebox.domain.entities import Cue, Slide, Transcript
-from slidebox.domain.errors import NoSubtitlesAvailable, SummarizerOutputInvalid
+from slidebox.domain.entities import AudioClip, Cue, Slide, Transcript
+from slidebox.domain.errors import (
+    NoSubtitlesAvailable,
+    OperationCancelled,
+    SummarizerOutputInvalid,
+)
 
 
 class FakeSubtitleGateway:
-    def __init__(self, transcript: Transcript | None = None, fail: bool = False):
+    def __init__(self, transcript: Transcript | None = None, fail: bool = False,
+                 error: Exception | None = None):
         self._transcript = transcript or Transcript(
             video_id="vid1",
             title="測試影片",
@@ -16,10 +21,13 @@ class FakeSubtitleGateway:
             is_automatic=True,
         )
         self._fail = fail
+        self._error = error
         self.calls: list[tuple[str, tuple[str, ...]]] = []
 
     def fetch(self, url, langs):
         self.calls.append((url, tuple(langs)))
+        if self._error is not None:
+            raise self._error
         if self._fail:
             raise NoSubtitlesAvailable("沒有字幕")
         return self._transcript
@@ -28,14 +36,24 @@ class FakeSubtitleGateway:
 class FakeSummarizer:
     """依序回傳預設的多批結果，用來模擬「第一次不合格、重試後合格」。"""
 
-    def __init__(self, batches: list[tuple[Slide, ...]]):
+    def __init__(self, batches: list[tuple[Slide, ...]], on_summarize=None):
+        self._on_summarize = on_summarize
         self._batches = list(batches)
         self.hints: list[str] = []
         self.compressed: list[str] = []
+        self.detailed_flags: list[bool] = []
+        self.saw_cancel = False
 
-    def summarize(self, compressed, duration, min_slides, max_slides, hint, progress):
+    def summarize(self, compressed, duration, min_slides, max_slides, hint, progress,
+                  detailed=False, is_cancelled=None):
         self.compressed.append(compressed)
         self.hints.append(hint)
+        self.detailed_flags.append(detailed)
+        if self._on_summarize is not None:
+            self._on_summarize()
+        # 比照真實 adapter 在生成途中檢查取消——use case 若傳進來的是死的
+        # 取消函式，saw_cancel 永遠是 False，接線就壞了而沒人知道
+        self.saw_cancel = bool(is_cancelled and is_cancelled())
         progress(0.0, "開始")
         progress(0.5, "一半")
         progress(None, "長度未知")
@@ -51,7 +69,8 @@ class RaisingThenSucceedingSummarizer:
         self._error = error
         self.calls = 0
 
-    def summarize(self, compressed, duration, min_slides, max_slides, hint, progress):
+    def summarize(self, compressed, duration, min_slides, max_slides, hint, progress,
+                  detailed=False, is_cancelled=None):
         self.calls += 1
         if self.calls == 1:
             raise SummarizerOutputInvalid(self._error)
@@ -95,8 +114,72 @@ class FakeRenderer:
         self.rendered.append((deck, dest_path))
 
 
-def make_slides(n: int) -> tuple[Slide, ...]:
+def make_slides(n: int, detail: bool = False) -> tuple[Slide, ...]:
+    """detail=True 產出通過詳細模式驗證的長度（見 chapters._MIN_DETAIL）。"""
+    body = "這一段講的是" + "內容" * 30 if detail else ""
     return tuple(
-        Slide(index=i, title=f"第 {i} 段", bullets=(f"重點 {i}",), timestamp=float(i * 30))
+        Slide(index=i, title=f"第 {i} 段", bullets=(f"重點 {i}",),
+              timestamp=float(i * 30), detail=body)
         for i in range(1, n + 1)
     )
+
+
+class FakeAudioGateway:
+    """回傳固定的 AudioClip；下載時回報一個非 None 的進度，用來確認 use case
+    不會把它直接丟給進度條。"""
+
+    def __init__(self, clip: AudioClip | None = None, error: Exception | None = None,
+                 on_download=None):
+        self._on_download = on_download
+        self.saw_cancel = False
+        self._clip = clip or AudioClip(
+            path="OUT/_audio/audio.webm", video_id="spk1", title="沒有字幕的影片", duration=120.0
+        )
+        self._error = error
+        self.dest_dirs: list[str] = []
+        self.cleaned: list[str] = []
+        self.events: list[str] = []
+
+    def download_audio(self, url, dest_dir, progress, is_cancelled):
+        self.events.append("download")
+        self.dest_dirs.append(dest_dir)
+        progress(0.5, "下載音訊…")
+        # 比照真實 adapter 在下載途中檢查取消。saw_cancel 記錄 adapter 自己是否
+        # 看到取消——use case 若傳進來的是死的取消函式，這裡永遠是 False。
+        if self._on_download is not None:
+            self._on_download()
+        self.saw_cancel = is_cancelled()
+        if self.saw_cancel:
+            raise OperationCancelled()
+        if self._error is not None:
+            raise self._error
+        return self._clip
+
+    def cleanup(self, dest_dir):
+        self.events.append("cleanup")
+        self.cleaned.append(dest_dir)
+
+
+class FakeTranscriber:
+    def __init__(self, cues=None, language: str = "ja", error: Exception | None = None,
+                 on_transcribe=None):
+        self._on_transcribe = on_transcribe
+        self.saw_cancel = False
+        self._cues = cues if cues is not None else (
+            Cue(0.0, 4.0, "こんにちは"), Cue(30.0, 34.0, "よろしくお願いします"),
+        )
+        self._language = language
+        self._error = error
+        self.calls: list[tuple[str, float]] = []
+
+    def transcribe(self, audio_path, duration, progress, is_cancelled):
+        self.calls.append((audio_path, duration))
+        progress(None, "語音辨識中… 0:30 / 2:00")
+        if self._on_transcribe is not None:
+            self._on_transcribe()
+        self.saw_cancel = is_cancelled()
+        if self.saw_cancel:
+            raise OperationCancelled()
+        if self._error is not None:
+            raise self._error
+        return tuple(self._cues), self._language

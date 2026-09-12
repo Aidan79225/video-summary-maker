@@ -31,6 +31,8 @@ class JsonSettingsRepository:
             image_width=data.get("image_width", default.image_width),
             num_ctx=data.get("num_ctx", default.num_ctx),
             char_budget=data.get("char_budget", default.char_budget),
+            whisper_model=data.get("whisper_model", default.whisper_model),
+            detailed=bool(data.get("detailed", default.detailed)),
             # 空清單或型別不對都視同未設定：偏好語言全空會讓字幕挑軌永遠
             # 失敗，而且症狀會顯示成「這部影片沒有字幕」，是誤導使用者的
             # 錯誤訊息。退回預設值比忠實還原一個會讓 app 不可用的值有用。
@@ -52,6 +54,8 @@ class JsonSettingsRepository:
             "num_ctx": settings.num_ctx,
             "char_budget": settings.char_budget,
             "subtitle_langs": list(settings.subtitle_langs),
+            "whisper_model": settings.whisper_model,
+            "detailed": settings.detailed,
         }
         os.makedirs(os.path.dirname(os.path.abspath(self._path)), exist_ok=True)
         with open(self._path, "w", encoding="utf-8") as f:

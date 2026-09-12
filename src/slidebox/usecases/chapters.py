@@ -28,19 +28,49 @@ def _find_lang(tracks: Mapping[str, object] | None, prefer: Sequence[str]) -> st
     return None
 
 
+def _find_original(
+    tracks: Mapping[str, object] | None, original_language: str | None
+) -> str | None:
+    """在自動字幕裡找「影片原始語言」那一軌，也就是未經翻譯的語音辨識結果。
+
+    YouTube 的自動字幕同時提供原文辨識與約 150 種機器翻譯，翻譯軌的 URL
+    帶 tlang= 參數。翻譯是「辨識錯誤 + 翻譯錯誤」兩層損失，而且實測翻譯
+    端點會回 HTTP 429 限流。把原文交給模型、讓它邊摘要邊翻譯更好。
+
+    language 可能帶區域或字體標記（實測見過 zh-Hant），所以精確比對之後
+    再退讓到基底語言。
+    """
+    if not original_language or not tracks:
+        return None
+    base = original_language.split("-")[0]
+    for key in (f"{original_language}-orig", original_language, f"{base}-orig", base):
+        if key in tracks:
+            return key
+    return None
+
+
 def pick_subtitle_track(
     subtitles: Mapping[str, object] | None,
     automatic_captions: Mapping[str, object] | None,
     prefer: Sequence[str],
+    original_language: str | None = None,
 ) -> tuple[str, bool]:
     """從 yt-dlp 的兩份字典挑一軌，回傳 (語言鍵, 是否為自動字幕)。
 
-    手動字幕整體優先於自動字幕——人工字幕品質高出太多，寧可語言排序
-    退讓。都沒有則 raise NoSubtitlesAvailable。
+    優先序三層：
+
+    1. 人工字幕，依偏好序——人工翻譯品質高出太多，寧可語言排序退讓。
+    2. 自動字幕中的原始語言軌——原文只有辨識一層損失，機器翻譯是兩層。
+    3. 自動字幕，依偏好序——即 YouTube 的機器翻譯，最後手段。
+
+    都沒有則 raise NoSubtitlesAvailable。
     """
     hit = _find_lang(subtitles, prefer)
     if hit is not None:
         return hit, False
+    hit = _find_original(automatic_captions, original_language)
+    if hit is not None:
+        return hit, True
     hit = _find_lang(automatic_captions, prefer)
     if hit is not None:
         return hit, True
@@ -92,6 +122,9 @@ def parse_vtt(text: str) -> tuple[Cue, ...]:
 # 少於這個長度的重疊視為巧合而非滾動重複。中文相鄰句子單字重疊很常見
 # （「…很好」接「好的…」），沒有這道門檻就會把正常內容當成重複刪掉。
 _MIN_OVERLAP = 3
+
+# 合併字幕的時間窗。摘要與逐字稿必須用同一個值，否則兩邊的時間戳對不起來。
+_WINDOW = 15.0
 
 
 def _dedupe(cues: Sequence[Cue], is_automatic: bool = True) -> list[tuple[float, str]]:
@@ -157,7 +190,8 @@ def _group(pairs: Sequence[tuple[float, str]], window: float, keep: float = 1.0)
 
 
 def compress_cues(
-    cues: Sequence[Cue], char_budget: int, window: float = 15.0, is_automatic: bool = True
+    cues: Sequence[Cue], char_budget: int, window: float = _WINDOW,
+    is_automatic: bool = True,
 ) -> str:
     """把數千句字幕壓成帶秒數標記的段落文字，長度不超過 char_budget。
 
@@ -198,11 +232,21 @@ def clamp_timestamps(slides: Sequence[Slide], duration: float) -> tuple[Slide, .
     return tuple(out)
 
 
-def validate_slides(slides: Sequence[Slide], min_slides: int, max_slides: int) -> list[str]:
+# 詳細模式下一段敘述至少要有的字數。要求是 150～300 字，這個門檻只抓
+# 「空字串」與「就是這樣」這種敷衍，不去管稍微短一點的正常輸出。
+_MIN_DETAIL = 40
+
+
+def validate_slides(slides: Sequence[Slide], min_slides: int, max_slides: int,
+                    detailed: bool = False) -> list[str]:
     """回傳問題描述清單；空清單表示通過。
 
     不檢查時間戳——那一律由 clamp_timestamps 先處理掉。這裡抓的是
     「模型沒照指示做」的問題，需要重試才能修正。
+
+    detailed 時多檢查 detail：JSON schema 的 required 只擋得住「少了欄位」，
+    擋不住空字串。少了這一關，使用者勾了詳細、等了兩倍時間，拿到的成品
+    跟一般模式一模一樣，而完成訊息照樣說「✅ 完成」。
     """
     problems: list[str] = []
     if len(slides) < min_slides:
@@ -214,4 +258,34 @@ def validate_slides(slides: Sequence[Slide], min_slides: int, max_slides: int) -
             problems.append(f"第 {slide.index} 頁的標題是空白")
         if not slide.bullets:
             problems.append(f"第 {slide.index} 頁沒有任何重點條列")
+        if detailed and len(slide.detail.strip()) < _MIN_DETAIL:
+            problems.append(
+                f"第 {slide.index} 頁的 detail 太短或空白，需要 150 到 300 字的完整敘述")
     return problems
+
+
+# --- 完整逐字稿 ---
+
+_MARKER_RE = re.compile(r"^\[(\d+)\] ", re.MULTILINE)
+
+
+def readable_transcript(text: str) -> str:
+    """把 `[秒數] 文字` 的行首標記換成 `mm:ss 文字`。
+
+    秒數標記是給模型抄的（見 compress_cues），人要看的是分秒。超過一小時
+    不換成 hh:mm:ss——分鐘持續累加（62:05）不會誤讀，也省掉一種格式。
+    """
+    def repl(m: re.Match[str]) -> str:
+        total = int(m.group(1))
+        return f"{total // 60:02d}:{total % 60:02d} "
+
+    return _MARKER_RE.sub(repl, text)
+
+
+def full_transcript(cues: Sequence[Cue], is_automatic: bool = True) -> str:
+    """整份逐字稿，不套用字元預算——這是給人讀的，不進模型的 context。
+
+    只做去重與時間分段，內容一字不刪：使用者要的正是「不看影片也知道
+    全部講了什麼」。
+    """
+    return readable_transcript(_group(_dedupe(cues, is_automatic), _WINDOW))

@@ -19,7 +19,22 @@ class Transcript:
     duration: float
     cues: tuple[Cue, ...]
     language: str
-    is_automatic: bool = False   # 自動字幕品質較差，UI 會提示
+    # 是否為 YouTube 的滾動式自動字幕：決定是否做滾動去重、以及是否提示品質。
+    # 語音辨識的結果不是滾動字幕，設 False——套用滾動去重只會誤刪內容。
+    is_automatic: bool = False
+
+
+@dataclass(frozen=True)
+class AudioClip:
+    """下載好的音訊檔與其影片資訊。
+
+    語音路徑是在字幕 gateway 失敗之後才走的，拿不到它原本提供的 metadata，
+    所以由音訊 gateway 一併帶回。
+    """
+    path: str
+    video_id: str
+    title: str
+    duration: float
 
 
 @dataclass(frozen=True)
@@ -30,6 +45,9 @@ class Slide:
     bullets: tuple[str, ...]
     timestamp: float
     image_path: str | None = None
+    # 詳細模式下該章節的完整敘述；一般模式為空字串。條列是「提醒你看過什麼」，
+    # 這一段是「沒看影片也能懂」，兩者用途不同，不能互相取代。
+    detail: str = ""
 
 
 @dataclass(frozen=True)
@@ -37,6 +55,11 @@ class Deck:
     source_url: str
     video_title: str
     slides: tuple[Slide, ...]
+    # 內容來源的註記，例如「由語音辨識產生」。寫在成品裡而不只是狀態列：
+    # 狀態列幾毫秒後就被蓋掉，而 HTML 會被分享、會被日後重看。
+    source_note: str = ""
+    # 詳細模式下附在成品末尾的完整逐字稿；一般模式為空字串。
+    transcript_text: str = ""
 
     @property
     def missing_images(self) -> int:
@@ -62,4 +85,13 @@ class Settings:
     image_width: int = 1280
     num_ctx: int = 32768
     char_budget: int = 20000
-    subtitle_langs: tuple[str, ...] = ("zh-TW", "zh-Hant", "zh-HK", "zh", "en")
+    # 簡中排在繁中之後、英文之前：輸出是繁體，但人工簡中已經是中文，比英文好。
+    subtitle_langs: tuple[str, ...] = (
+        "zh-TW", "zh-Hant", "zh-HK", "zh", "zh-Hans", "zh-CN", "en",
+    )
+    # 沒有字幕時的語音辨識模型。large-v3-turbo 在 CPU 上比 medium 還快、品質
+    # 最佳；實測日韓 3.9～4.9 倍即時。改 small 約快兩成，但日文明顯較差。
+    whisper_model: str = "large-v3-turbo"
+    # 詳細模式：每頁多產一段完整敘述，並在 HTML 末尾附上完整逐字稿。
+    # 給「不想看影片但要知道全部內容」的情況，代價是生成較慢、檔案較大。
+    detailed: bool = False

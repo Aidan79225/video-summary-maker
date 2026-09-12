@@ -4,7 +4,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Callable, Protocol
 
-from .entities import Deck, Slide, Transcript
+from .entities import AudioClip, Cue, Deck, Slide, Transcript
 
 # 進度回報：fraction 為 0..1，None 表示不確定；status 為文字說明。
 ProgressCallback = Callable[[float | None, str], None]
@@ -15,7 +15,12 @@ CancelCheck = Callable[[], bool]
 
 class SubtitleGateway(Protocol):
     def fetch(self, url: str, langs: Sequence[str]) -> Transcript:
-        """抓字幕並解析。找不到任何可用字幕時 raise NoSubtitlesAvailable。"""
+        """抓字幕並解析。
+
+        拿不到可用字幕時 raise NoSubtitlesAvailable——包含影片根本沒有字幕、
+        以及字幕存在但下載失敗（例如 HTTP 429）。對呼叫端而言兩者結局相同：
+        這部影片的字幕無法取得，該改走其他來源（例如語音辨識）。
+        """
         ...
 
 
@@ -28,12 +33,20 @@ class Summarizer(Protocol):
         max_slides: int,
         hint: str,
         progress: ProgressCallback,
+        detailed: bool = False,
+        is_cancelled: CancelCheck | None = None,
     ) -> tuple[Slide, ...]:
         """回傳 image_path 皆為 None 的 Slide 序列。
 
         compressed 是 compress_cues() 的產出——壓縮是純邏輯，不是
         summarizer 的責任。hint 為空字串表示首次嘗試，非空時是上一次
         的驗證錯誤，會附進提示裡要求模型修正。
+
+        detailed 為 True 時另外要求每頁一段完整敘述，填進 Slide.detail。
+
+        is_cancelled 要在生成途中反覆檢查並 raise OperationCancelled：這是整條
+        pipeline 最久的一步（詳細模式可達數分鐘），只在開始前檢查一次等於
+        不能取消。
         """
         ...
 
@@ -82,4 +95,42 @@ class DeckRenderer(Protocol):
 class ModelCatalog(Protocol):
     def list_models(self) -> list[str]:
         """列出本機可用模型，供 UI 下拉。連不上時回傳空陣列，不 raise。"""
+        ...
+
+
+class AudioGateway(Protocol):
+    def download_audio(
+        self,
+        url: str,
+        dest_dir: str,
+        progress: ProgressCallback,
+        is_cancelled: CancelCheck,
+    ) -> AudioClip:
+        """下載影片的音訊到 dest_dir（自行建立），連同影片資訊回傳。
+
+        失敗時 raise NoSubtitlesAvailable——走到這一步表示影片已經沒有字幕，
+        音訊再拿不到，對呼叫端而言結局相同。
+        """
+        ...
+
+    def cleanup(self, dest_dir: str) -> None:
+        """刪除暫存音訊目錄。同 VideoSectionGateway.cleanup：必須容忍目錄
+        不存在，且絕不可 raise——它在 finally 裡被呼叫。"""
+        ...
+
+
+class SpeechTranscriber(Protocol):
+    def transcribe(
+        self,
+        audio_path: str,
+        duration: float,
+        progress: ProgressCallback,
+        is_cancelled: CancelCheck,
+    ) -> tuple[tuple[Cue, ...], str]:
+        """語音辨識，回傳 (字幕, 偵測到的語言代碼)。
+
+        沒偵測到任何語音時回傳空的字幕 tuple，由呼叫端決定如何告知使用者。
+        逐段檢查 is_cancelled，取消時 raise OperationCancelled。
+        duration 只用於進度顯示，給 0 時不顯示總長。
+        """
         ...

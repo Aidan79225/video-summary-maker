@@ -9,17 +9,51 @@ import os
 from dataclasses import replace
 
 from ..domain.entities import Deck, DeckResult, Settings, Slide, Transcript
-from ..domain.errors import OperationCancelled, SummarizerOutputInvalid
+from ..domain.errors import (
+    NoSubtitlesAvailable,
+    OperationCancelled,
+    SubtitleDownloadFailed,
+    SummarizerOutputInvalid,
+)
 from ..domain.ports import (
+    AudioGateway,
     CancelCheck,
     DeckRenderer,
     FrameExtractor,
     ProgressCallback,
+    SpeechTranscriber,
     SubtitleGateway,
     Summarizer,
     VideoSectionGateway,
 )
-from .chapters import clamp_timestamps, compress_cues, validate_slides
+from .chapters import (
+    clamp_timestamps,
+    compress_cues,
+    full_transcript,
+    validate_slides,
+)
+from .naming import deck_folder_name
+
+# 詳細模式下每頁輸出約略會用掉的字元（150～300 字的敘述加上標題條列，
+# 取上緣）。輸出與提示共用 num_ctx，所以要從預算裡先扣掉。
+_DETAIL_CHARS_PER_SLIDE = 400
+# 字幕再怎麼被擠壓也要留下的量，否則摘要會失去全片涵蓋
+_MIN_BUDGET = 4000
+
+
+def _budget(settings: Settings) -> int:
+    """這次要餵給模型的字幕字元上限。
+
+    一般模式就是設定值。詳細模式的輸出量是一般模式的近十倍，而 Ollama 的
+    num_ctx 是提示與生成共用的——頁數上限拉到 50 時，20000 字的字幕加上
+    50 × 400 字的輸出會超出 32768，此時 Ollama 會從頭靜默截斷提示，症狀是
+    「摘要只涵蓋影片後半段」而且沒有任何錯誤訊息。
+    """
+    if not settings.detailed:
+        return settings.char_budget
+    room = settings.num_ctx - settings.max_slides * _DETAIL_CHARS_PER_SLIDE
+    return max(_MIN_BUDGET, min(settings.char_budget, room))
+
 
 # 各階段的進度界線
 _P_SUBTITLES = 0.05
@@ -36,7 +70,11 @@ class BuildDeckUseCase:
         sections: VideoSectionGateway,
         frames: FrameExtractor,
         renderer: DeckRenderer,
+        audio: AudioGateway | None = None,
+        transcriber: SpeechTranscriber | None = None,
     ):
+        self._audio = audio
+        self._transcriber = transcriber
         self._subtitles = subtitles
         self._summarizer = summarizer
         self._sections = sections
@@ -59,21 +97,41 @@ class BuildDeckUseCase:
 
         check()
         cb(0.0, "取得字幕…")
-        transcript = self._subtitles.fetch(url, settings.subtitle_langs)
+        try:
+            transcript = self._subtitles.fetch(url, settings.subtitle_langs)
+            # 自動字幕品質較差，要讓使用者知道
+            note = "使用 YouTube 自動字幕，品質可能較差" if transcript.is_automatic else ""
+        except SubtitleDownloadFailed:
+            # 字幕存在但這次下載失敗（例如 HTTP 429）：這是暫時性問題，原樣
+            # 告知使用者稍後重試。改走語音會把品質最好的人工字幕無聲地換成
+            # 較差的語音辨識，而且把「請過幾分鐘再試」的提示吞掉。
+            raise
+        except NoSubtitlesAvailable:
+            # 影片真的沒有可用字幕，才改用語音辨識
+            if self._audio is None or self._transcriber is None:
+                raise
+            transcript = self._transcribe(url, settings, cb, check, cancelled)
+            note = "由語音辨識產生，可能有辨識錯誤"
 
         check()
-        # 自動字幕品質較差，在狀態列提示使用者——這是 is_automatic 唯一被讀取的地方
-        subtitle_status = (
-            "整理字幕…（使用自動字幕，品質可能較差）" if transcript.is_automatic else "整理字幕…"
-        )
-        cb(_P_SUBTITLES, subtitle_status)
+        cb(_P_SUBTITLES, "整理字幕…" + (f"（{note}）" if note else ""))
         compressed = compress_cues(
-            transcript.cues, settings.char_budget, is_automatic=transcript.is_automatic
+            transcript.cues, _budget(settings), is_automatic=transcript.is_automatic
         )
 
-        slides = self._summarize(compressed, transcript, settings, cb, check)
+        slides = self._summarize(
+            compressed, transcript, settings, cb, check, cancelled)
 
-        out_dir = os.path.join(settings.output_dir, transcript.video_id)
+        # 逐字稿在摘要之後才算：取消發生在摘要階段的話，這幾十毫秒的字串
+        # 處理就白做了。內容無損，字元預算只約束餵給模型的那一份。
+        transcript_text = (
+            full_transcript(transcript.cues, transcript.is_automatic)
+            if settings.detailed else ""
+        )
+
+        out_dir = os.path.join(
+            settings.output_dir, deck_folder_name(transcript.title, transcript.video_id)
+        )
         clips_dir = os.path.join(out_dir, "_clips")
         try:
             check()
@@ -92,16 +150,67 @@ class BuildDeckUseCase:
 
         check()
         cb(_P_FRAMES, "產生 HTML…")
-        deck = Deck(source_url=url, video_title=transcript.title, slides=slides)
+        deck = Deck(source_url=url, video_title=transcript.title, slides=slides,
+                    source_note=note, transcript_text=transcript_text)
         html_path = os.path.join(out_dir, "slides.html")
         self._renderer.render(deck, html_path)
 
         missing = deck.missing_images
         done = f"完成，共 {len(slides)} 頁"
-        cb(1.0, done + (f"，其中 {missing} 頁沒有截圖" if missing else ""))
+        # 來源註記放進最後一則狀態：中途的提示會被後續狀態蓋掉
+        done += f"，其中 {missing} 頁沒有截圖" if missing else ""
+        cb(1.0, done + (f"（{note}）" if note else ""))
         return DeckResult(deck=deck, html_path=html_path)
 
     # --- 內部 ---
+
+    def _transcribe(
+        self,
+        url: str,
+        settings: Settings,
+        cb: ProgressCallback,
+        check,
+        cancelled: CancelCheck,
+    ) -> Transcript:
+        """沒有字幕時：下載音訊 → 語音辨識 → 組成 Transcript。
+
+        音訊放在固定的暫存資料夾：此時還不知道 video_id，無法放進影片自己的
+        資料夾。app 一次只跑一個生成，不會撞名。資料夾名稱刻意取成明顯屬於
+        本程式的樣子——cleanup 會整個刪除它，不能跟使用者自己的資料夾同名。
+        """
+        audio_dir = os.path.join(settings.output_dir, ".slidebox_audio_tmp")
+
+        # 語音路徑只回報文字、進度條顯示忙碌：音訊下載的 50% 若直接進度條，
+        # 接著摘要從 5% 開始，進度條會倒退。百分比改寫進文字，不丟掉。
+        def speech_cb(frac: float | None, status: str) -> None:
+            cb(None, status if frac is None else f"{status} {frac:.0%}")
+
+        try:
+            check()
+            cb(None, "無法取得字幕，改用語音辨識…")
+            # 先清空：上一次若在 finally 之前就中斷（例如轉錄時關掉視窗），
+            # 留下的 .part 會被 yt-dlp 續傳，把兩支影片的位元組拼在一起。
+            self._audio.cleanup(audio_dir)
+            clip = self._audio.download_audio(url, audio_dir, speech_cb, cancelled)
+            check()
+            cues, language = self._transcriber.transcribe(
+                clip.path, clip.duration, speech_cb, cancelled
+            )
+        finally:
+            self._audio.cleanup(audio_dir)
+
+        if not cues:
+            raise NoSubtitlesAvailable("這部影片沒有字幕，也沒有偵測到語音")
+        # is_automatic=False：Whisper 的輸出是一句一句的獨立段落，不是 YouTube
+        # 的滾動字幕，套用滾動去重只會誤刪內容。
+        return Transcript(
+            video_id=clip.video_id,
+            title=clip.title,
+            duration=clip.duration,
+            cues=cues,
+            language=language,
+            is_automatic=False,
+        )
 
     def _summarize(
         self,
@@ -110,6 +219,7 @@ class BuildDeckUseCase:
         settings: Settings,
         cb: ProgressCallback,
         check,
+        cancelled: CancelCheck,
     ) -> tuple[Slide, ...]:
         """摘要並驗證；不合格時把錯誤回饋給模型，最多重試一次。"""
         hint = ""
@@ -125,6 +235,8 @@ class BuildDeckUseCase:
                     settings.max_slides,
                     hint,
                     self._scaled(cb, _P_SUBTITLES, _P_SUMMARY),
+                    settings.detailed,
+                    cancelled,
                 )
             except SummarizerOutputInvalid as e:
                 # 完全不是 JSON 的回應和「JSON 但欄位不合格」一樣值得重試一次；
@@ -137,7 +249,8 @@ class BuildDeckUseCase:
                 continue
             # 時間戳越界是小毛病，夾回去即可，不算驗證失敗
             slides = clamp_timestamps(slides, transcript.duration)
-            problems = validate_slides(slides, settings.min_slides, settings.max_slides)
+            problems = validate_slides(
+                slides, settings.min_slides, settings.max_slides, settings.detailed)
             if not problems:
                 return slides
             hint = "上一次的輸出有這些問題，請修正後重新產出：" + "；".join(problems)
