@@ -1,0 +1,68 @@
+---
+import '../styles/global.css';
+import SiteHeader from '../components/SiteHeader.astro';
+import SiteFooter from '../components/SiteFooter.astro';
+
+interface Props {
+  title: string;
+  description?: string;
+  /** 頁首要不要顯示回首頁的返回鍵 */
+  back?: boolean;
+}
+
+const {
+  title,
+  description = '立法院質詢的每日重點整理：逐段摘要、原片時間戳、完整逐字稿。',
+  back = false,
+} = Astro.props;
+
+const fullTitle = title ? `${title}｜立院質詢日報` : '立院質詢日報';
+---
+
+<!doctype html>
+<html lang="zh-Hant">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{fullTitle}</title>
+    <meta name="description" content={description} />
+    <meta name="color-scheme" content="dark light" />
+    <meta property="og:title" content={fullTitle} />
+    <meta property="og:description" content={description} />
+    <meta property="og:type" content="website" />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+  </head>
+  <body class="bg-bg text-ink antialiased">
+    <a
+      href="#main"
+      class="sr-only focus:not-sr-only focus:absolute focus:top-3 focus:left-3 focus:z-50 focus:rounded-md focus:bg-surface focus:px-4 focus:py-2 focus:text-sm"
+    >
+      跳到主要內容
+    </a>
+
+    <SiteHeader back={back} />
+
+    <main id="main" class="min-h-[60vh]">
+      <slot />
+    </main>
+
+    <SiteFooter />
+
+    {/* 圖片載入失敗時，換成同尺寸的佔位方塊，版面不會塌掉 */}
+    <script is:inline>
+      document.addEventListener(
+        'error',
+        function (e) {
+          var t = e.target;
+          if (!t || t.tagName !== 'IMG' || t.dataset.failed) return;
+          t.dataset.failed = '1';
+          t.style.visibility = 'hidden';
+          var parent = t.parentElement;
+          var ph = parent && parent.querySelector('[data-fallback]');
+          if (ph) ph.hidden = false;
+        },
+        true,
+      );
+    </script>
+  </body>
+</html>

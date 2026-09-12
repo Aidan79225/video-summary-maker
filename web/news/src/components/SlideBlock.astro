@@ -1,0 +1,78 @@
+---
+import type { Slide } from '../lib/types';
+import { mediaUrl } from '../lib/api';
+import { mmss } from '../lib/format';
+import Figure from './Figure.astro';
+
+interface Props {
+  slide: Slide;
+  ivodUrl: string | null;
+  order: number;
+  total: number;
+}
+
+const { slide, ivodUrl, order, total } = Astro.props;
+const img = mediaUrl(slide.image_url);
+const num = String(slide.index ?? order).padStart(2, '0');
+const time = mmss(slide.timestamp);
+const bullets = Array.isArray(slide.bullets) ? slide.bullets.filter(Boolean) : [];
+---
+
+<section
+  id={`s${slide.index ?? order}`}
+  class="rise scroll-mt-24 border-t border-line-soft pt-8 first:border-t-0 sm:pt-10"
+  style={`--d: ${Math.min(order, 6) * 40}ms`}
+  aria-labelledby={`s${slide.index ?? order}-h`}
+>
+  <div class="grid gap-4 md:grid-cols-[6.5rem_minmax(0,1fr)] md:gap-7">
+    <!-- 左側：段號 + 時間戳 -->
+    <div class="flex items-center gap-3 md:sticky md:top-24 md:block md:self-start">
+      <span class="headline tabular text-2xl leading-none font-semibold text-line md:text-3xl">
+        {num}
+      </span>
+      <span class="text-[0.68rem] tracking-widest text-muted/60 md:hidden">／{total}</span>
+
+      <a
+        href={ivodUrl}
+        target="_blank"
+        rel="noopener noreferrer"
+        title="在立法院 IVOD 開啟原始影片（原片網址不支援時間參數，會從頭播放）"
+        class="lift ml-auto inline-flex items-center gap-1.5 rounded-full border border-line bg-surface px-2.5 py-1 text-[0.75rem] text-muted hover:border-accent hover:text-accent md:mt-3 md:ml-0"
+      >
+        <svg viewBox="0 0 24 24" class="h-3 w-3" fill="currentColor" aria-hidden="true">
+          <path d="M8 5.5v13l11-6.5z"></path>
+        </svg>
+        <span class="tabular">{time}</span>
+      </a>
+      <span class="hidden text-[0.68rem] tracking-widest text-muted/50 md:mt-2 md:block">
+        第 {order} 段／共 {total} 段
+      </span>
+    </div>
+
+    <!-- 右側：截圖 + 小標 + 條列 + 敘述 -->
+    <div class="min-w-0">
+      <Figure
+        src={img}
+        alt={slide.title ? `${slide.title}（影片 ${time} 畫面）` : `影片 ${time} 畫面`}
+        ratio="16 / 9"
+        label="此段無截圖"
+      />
+
+      <h2 id={`s${slide.index ?? order}-h`} class="headline mt-5 text-xl font-semibold sm:text-2xl">
+        {slide.title}
+      </h2>
+
+      {
+        bullets.length > 0 && (
+          <ul class="mt-4 space-y-2 border-l-2 border-accent/40 pl-4 text-[0.92rem] text-ink-2">
+            {bullets.map((b) => (
+              <li class="leading-relaxed">{b}</li>
+            ))}
+          </ul>
+        )
+      }
+
+      {slide.detail && <p class="prose-cn mt-5 text-[1.02rem]">{slide.detail}</p>}
+    </div>
+  </div>
+</section>

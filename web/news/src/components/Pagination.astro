@@ -1,0 +1,81 @@
+---
+import { buildQuery } from '../lib/format';
+
+interface Props {
+  page: number;
+  pages: number;
+  /** 目前頁面路徑，例如 "/" 或 "/speaker/洪毓祥" */
+  base: string;
+  /** 要保留的其他 query 參數 */
+  params?: Record<string, string | undefined>;
+}
+
+const { page, pages, base, params = {} } = Astro.props;
+
+const href = (p: number) => `${base}${buildQuery(params, { page: p <= 1 ? undefined : p })}`;
+
+const windowSize = 5;
+let start = Math.max(1, page - Math.floor(windowSize / 2));
+const end = Math.min(pages, start + windowSize - 1);
+start = Math.max(1, end - windowSize + 1);
+const nums = Array.from({ length: end - start + 1 }, (_, i) => start + i);
+
+const box =
+  'inline-flex h-9 min-w-9 items-center justify-center rounded-lg border px-3 text-sm tabular transition-colors';
+---
+
+{
+  pages > 1 && (
+    <nav class="mt-10 flex flex-wrap items-center justify-center gap-1.5" aria-label="分頁">
+      {page > 1 ? (
+        <a href={href(page - 1)} class={`${box} border-line text-ink-2 hover:border-accent hover:text-accent`} rel="prev">
+          上一頁
+        </a>
+      ) : (
+        <span class={`${box} border-line-soft text-muted/40`} aria-disabled="true">
+          上一頁
+        </span>
+      )}
+
+      {start > 1 && (
+        <>
+          <a href={href(1)} class={`${box} border-line text-ink-2 hover:border-accent hover:text-accent`}>
+            1
+          </a>
+          <span class="px-1 text-muted/50">…</span>
+        </>
+      )}
+
+      {nums.map((n) =>
+        n === page ? (
+          <span class={`${box} border-accent/50 bg-accent-soft font-medium text-accent-ink`} aria-current="page">
+            {n}
+          </span>
+        ) : (
+          <a href={href(n)} class={`${box} border-line text-ink-2 hover:border-accent hover:text-accent`}>
+            {n}
+          </a>
+        ),
+      )}
+
+      {end < pages && (
+        <>
+          <span class="px-1 text-muted/50">…</span>
+          <a href={href(pages)} class={`${box} border-line text-ink-2 hover:border-accent hover:text-accent`}>
+            {pages}
+          </a>
+        </>
+      )}
+
+      {page < pages ? (
+        <a href={href(page + 1)} class={`${box} border-line text-ink-2 hover:border-accent hover:text-accent`} rel="next">
+          下一頁
+        </a>
+      ) : (
+        <span class={`${box} border-line-soft text-muted/40`} aria-disabled="true">
+          下一頁
+        </span>
+      )}
+    </nav>
+  )
+}

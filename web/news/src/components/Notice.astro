@@ -1,0 +1,86 @@
+---
+import type { ApiError } from '../lib/types';
+import { errorHint, errorTitle } from '../lib/api';
+
+interface Props {
+  /** 傳 error 就顯示錯誤樣式；否則用 title/body 顯示一般提示 */
+  error?: ApiError;
+  title?: string;
+  body?: string;
+  tone?: 'error' | 'empty';
+  /** 重試用的網址，通常就是當前頁 */
+  retryHref?: string;
+}
+
+const { error, title, body, tone = error ? 'error' : 'empty', retryHref } = Astro.props;
+
+const heading = title ?? (error ? errorTitle(error) : '沒有內容');
+const message = body ?? (error ? errorHint(error) : '');
+const isError = tone === 'error';
+---
+
+<div
+  class:list={[
+    'rise mx-auto max-w-2xl rounded-[var(--radius-card)] border px-5 py-8 text-center sm:px-8 sm:py-10',
+    isError ? 'border-danger/30 bg-danger/5' : 'border-line bg-surface',
+  ]}
+  role={isError ? 'alert' : undefined}
+>
+  <div
+    class:list={[
+      'mx-auto flex h-11 w-11 items-center justify-center rounded-full border',
+      isError ? 'border-danger/30 text-danger' : 'border-line text-muted',
+    ]}
+    aria-hidden="true"
+  >
+    {
+      isError ? (
+        <svg viewBox="0 0 24 24" class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="1.7">
+          <path d="M12 9v4.5" stroke-linecap="round" />
+          <circle cx="12" cy="17" r="0.9" fill="currentColor" stroke="none" />
+          <path d="M10.3 3.9 2.6 17.2A2 2 0 0 0 4.3 20.2h15.4a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z" stroke-linejoin="round" />
+        </svg>
+      ) : (
+        <svg viewBox="0 0 24 24" class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="1.6">
+          <circle cx="11" cy="11" r="7" />
+          <path d="M20 20l-3.6-3.6" stroke-linecap="round" />
+        </svg>
+      )
+    }
+  </div>
+
+  <h2 class="headline mt-4 text-lg font-semibold sm:text-xl">{heading}</h2>
+  {message && <p class="mx-auto mt-2 max-w-prose text-sm leading-relaxed text-muted">{message}</p>}
+
+  <div class="mt-6 flex flex-wrap items-center justify-center gap-2 text-sm">
+    {
+      retryHref && (
+        <a
+          href={retryHref}
+          class="lift rounded-full border border-line bg-surface-2 px-4 py-2 hover:border-accent hover:text-accent"
+        >
+          重新載入
+        </a>
+      )
+    }
+    <a
+      href="/"
+      class="lift rounded-full border border-line px-4 py-2 text-muted hover:border-accent hover:text-accent"
+    >
+      回到首頁
+    </a>
+  </div>
+
+  {
+    error?.detail && (
+      <details class="mt-6 text-left">
+        <summary class="text-xs text-muted/70 hover:text-muted">技術細節</summary>
+        <p class="mt-2 rounded-md bg-bg-soft px-3 py-2 font-mono text-[0.7rem] leading-relaxed break-all text-muted/80">
+          {error.message}
+          {' — '}
+          {error.detail}
+        </p>
+      </details>
+    )
+  }
+</div>

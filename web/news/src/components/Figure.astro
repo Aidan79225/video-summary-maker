@@ -1,0 +1,48 @@
+---
+interface Props {
+  src: string | null;
+  alt: string;
+  /** CSS aspect-ratio，固定長寬比避免載入時跳版 */
+  ratio?: string;
+  label?: string;
+  eager?: boolean;
+  class?: string;
+}
+
+const {
+  src,
+  alt,
+  ratio = '16 / 9',
+  label = '無截圖',
+  eager = false,
+  class: className = '',
+} = Astro.props;
+---
+
+<div
+  class:list={['ph relative isolate overflow-hidden rounded-[10px] border border-line-soft', className]}
+  style={`aspect-ratio: ${ratio}`}
+>
+  {
+    src && (
+      <img
+        src={src}
+        alt={alt}
+        loading={eager ? 'eager' : 'lazy'}
+        decoding="async"
+        class="h-full w-full object-cover"
+      />
+    )
+  }
+  <div
+    data-fallback
+    hidden={!!src}
+    class="img-fallback absolute inset-0 gap-2 bg-surface-2 text-center"
+  >
+    <svg viewBox="0 0 24 24" class="h-5 w-5 opacity-50" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+      <rect x="3" y="4" width="18" height="16" rx="2"></rect>
+      <path d="M3 16l5-5 4 4 3-3 6 6" stroke-linecap="round" stroke-linejoin="round"></path>
+    </svg>
+    <span class="px-3 text-[0.72rem] tracking-widest">{label}</span>
+  </div>
+</div>

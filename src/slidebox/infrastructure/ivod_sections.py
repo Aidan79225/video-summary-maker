@@ -31,11 +31,13 @@ _TIMEOUT_SECONDS = 30
 # 產生 ffmpeg 的錯誤訊息；偶發的單點失敗也不該讓整份摘要零截圖。
 _MAX_CONSECUTIVE_FAILURES = 2
 
+DEFAULT_CLIP_SECONDS = 4.0
+
 
 class IvodSectionGateway:
-    def __init__(self, client: IvodClient | None = None, clip_seconds: float = 4.0,
+    def __init__(self, client: IvodClient, clip_seconds: float = DEFAULT_CLIP_SECONDS,
                  runner=subprocess.run, ffmpeg_exe: str | None = None):
-        self._client = client or IvodClient()
+        self._client = client
         self._clip_seconds = clip_seconds
         self._runner = runner
         self._exe = ffmpeg_exe or get_ffmpeg_exe()

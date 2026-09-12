@@ -13,3 +13,20 @@ wheels/
 settings.json
 slidebox_settings.json
 .bin/
+
+# 新聞服務（Django on Pi）
+services/news/.env
+services/news/db.sqlite3
+services/news/db.sqlite3-wal
+services/news/db.sqlite3-shm
+services/news/media/
+services/news/staticfiles/
+services/news/.venv/
+
+# 前端（Astro）
+web/news/node_modules/
+web/news/dist/
+web/news/.astro/
+
+# 使用者自己留在工作目錄的草稿
+docs/spec.md

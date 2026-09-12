@@ -1,0 +1,65 @@
+---
+import { isFixtureMode } from '../lib/api';
+
+interface Props {
+  back?: boolean;
+}
+const { back = false } = Astro.props;
+const fixture = isFixtureMode();
+---
+
+{
+  fixture && (
+    <div class="border-b border-accent/25 bg-accent-soft">
+      <p class="mx-auto max-w-6xl px-4 py-1.5 text-center text-[0.72rem] tracking-wide text-accent-ink sm:text-xs">
+        示範資料模式（USE_FIXTURE=1）—— 目前未連接後端 API，內容為虛構範例，請勿引用。
+      </p>
+    </div>
+  )
+}
+
+<header
+  class="sticky top-0 z-40 border-b border-line-soft bg-bg/80 backdrop-blur-md supports-[backdrop-filter]:bg-bg/65"
+>
+  <div class="mx-auto flex max-w-6xl items-center gap-3 px-4 py-3 sm:px-6">
+    {
+      back && (
+        <a
+          href="/"
+          class="lift -ml-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-line text-muted hover:border-accent hover:text-accent"
+          aria-label="回到首頁"
+        >
+          <svg viewBox="0 0 24 24" class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+            <path d="M15 18l-6-6 6-6" stroke-linecap="round" stroke-linejoin="round" />
+          </svg>
+        </a>
+      )
+    }
+
+    <a href="/" class="group flex min-w-0 items-baseline gap-2">
+      <span class="headline truncate text-[1.05rem] font-semibold tracking-tight sm:text-xl">
+        立院質詢日報
+      </span>
+      <span
+        class="hidden shrink-0 text-[0.7rem] tracking-[0.22em] text-muted uppercase sm:inline"
+      >
+        Legislative Yuan Daily
+      </span>
+    </a>
+
+    <nav class="ml-auto flex items-center gap-1 text-sm">
+      <a
+        href="/"
+        class="rounded-full px-3 py-1.5 text-muted transition-colors hover:bg-surface hover:text-ink"
+      >
+        最新
+      </a>
+      <a
+        href="/#filters"
+        class="hidden rounded-full px-3 py-1.5 text-muted transition-colors hover:bg-surface hover:text-ink sm:inline-block"
+      >
+        篩選
+      </a>
+    </nav>
+  </div>
+</header>

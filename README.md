@@ -210,3 +210,63 @@ src/slidebox/
 設計文件：
 - `docs/superpowers/specs/2026-09-07-slidebox-youtube-slide-summary-design.md`（整體）
 - `docs/superpowers/specs/2026-09-12-slidebox-speech-transcription-design.md`（語音辨識，含所有裁定與實測數據）
+- `docs/superpowers/specs/2026-09-12-slidebox-usability-design.md`（命名、佇列、詳細內容）
+- `docs/superpowers/specs/2026-09-12-slidebox-ivod-design.md`（立法院 IVOD）
+
+---
+
+# 立法院質詢每日新聞
+
+在 slidebox 之上的三段式服務：每天把立法院的質詢片段變成可讀的新聞頁。
+
+```
+GPU 主機（這台）                         Raspberry Pi
+┌────────────────────────┐              ┌──────────────────────────────┐
+│ serve_api.py           │  ◄── HTTP ── │ services/news  Django+ninja  │
+│  FastAPI，包住 slidebox │              │  每日排程 → 呼叫 GPU → 存文章 │
+│  Ollama / ffmpeg 在這  │              │  開 news API                 │
+└────────────────────────┘              │ web/news       Astro 前端    │
+                                        └──────────────────────────────┘
+```
+
+Pi 上不跑任何模型、也不裝 slidebox——兩邊只透過 HTTP 說話。
+
+## 1. 摘要 API（GPU 主機）
+
+```powershell
+uv run --group api serve_api.py
+```
+
+吃一個 YouTube 或 IVOD 網址，非同步產出結構化的摘要材料（含 base64 截圖）。一支影片要幾分鐘，所以是工作佇列而不是同步呼叫：
+
+| 端點 | 說明 |
+|---|---|
+| `GET /health` | Ollama 是否連得上、目前忙不忙 |
+| `POST /jobs` | `{url, detailed, min_slides, max_slides}` → `202 {id}` |
+| `GET /jobs/{id}` | 進度與結果 |
+| `DELETE /jobs/{id}` | 取消 |
+
+環境變數見 `serve_api.py` 的 docstring。設了 `SLIDEBOX_API_KEY` 就會強制 `X-API-Key`。
+
+**要讓 Pi 連得到這個服務，兩件事都要做**（預設只綁 loopback，所以預設狀態下 Pi 是連不到的）：
+
+```powershell
+$env:SLIDEBOX_API_HOST = "0.0.0.0"          # 預設 127.0.0.1
+uv run --group api serve_api.py
+
+# 另開一個「以系統管理員身分」的視窗，放行入站連線（只開給私人網路）
+New-NetFirewallRule -DisplayName "SlideBox API" -Direction Inbound -LocalPort 8800 `
+  -Protocol TCP -Action Allow -Profile Private
+```
+
+綁在非 loopback 位址又沒設 `SLIDEBOX_API_KEY` 時，啟動會印一行警告——任何連得到這個埠的人都能佔用你的 GPU。
+
+## 2. 後端（Pi）
+
+`services/news/` — Django + django-ninja。每天凌晨抓前一天的質詢片段、送去 GPU 主機產生**詳細模式**的摘要、存成文章，並開出 news API。見 `services/news/README.md`。
+
+## 3. 前端（Pi）
+
+`web/news/` — Astro。讀 news API，呈現新聞頁。見 `web/news/README.md`。
+
+設計文件：`docs/superpowers/specs/2026-09-12-news-service-design.md`
