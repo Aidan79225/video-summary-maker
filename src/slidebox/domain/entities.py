@@ -19,9 +19,13 @@ class Transcript:
     duration: float
     cues: tuple[Cue, ...]
     language: str
-    # 是否為 YouTube 的滾動式自動字幕：決定是否做滾動去重、以及是否提示品質。
+    # 是否為 YouTube 的滾動式自動字幕：決定是否做滾動去重。
     # 語音辨識的結果不是滾動字幕，設 False——套用滾動去重只會誤刪內容。
     is_automatic: bool = False
+    # 來源自己知道的品質註記，例如立法院的 AI 逐字稿。is_automatic 講的是
+    # 「滾動字幕」這個技術事實，不是品質標籤：有些來源兩者不重合，所以讓
+    # 來源自己說。空字串表示由 use case 依 is_automatic 判斷。
+    source_note: str = ""
 
 
 @dataclass(frozen=True)
