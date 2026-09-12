@@ -27,6 +27,7 @@ from ..domain.ports import (
     VideoSectionGateway,
 )
 from .chapters import clamp_timestamps, compress_cues, validate_slides
+from .naming import deck_folder_name
 
 # 各階段的進度界線
 _P_SUBTITLES = 0.05
@@ -94,7 +95,9 @@ class BuildDeckUseCase:
 
         slides = self._summarize(compressed, transcript, settings, cb, check)
 
-        out_dir = os.path.join(settings.output_dir, transcript.video_id)
+        out_dir = os.path.join(
+            settings.output_dir, deck_folder_name(transcript.title, transcript.video_id)
+        )
         clips_dir = os.path.join(out_dir, "_clips")
         try:
             check()

@@ -391,3 +391,9 @@ def test_the_audio_download_percentage_is_shown_as_text():
     seen: list[str] = []
     _build_speech().execute("URL", _settings(), lambda f, s: seen.append(s), None)
     assert any("50%" in s for s in seen)
+
+
+def test_the_output_folder_is_named_after_the_video():
+    """攔的 bug：輸出資料夾只用影片 id 命名，資料夾列表全是一串看不懂的雜湊。"""
+    result = _build().execute("URL", _settings(output_dir="OUT"))
+    assert "測試影片 [vid1]" in result.html_path
