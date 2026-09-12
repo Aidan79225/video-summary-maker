@@ -9,7 +9,7 @@ from django.test import SimpleTestCase
 from articles.ivod_source import IvodDailySource, IvodUnavailable
 
 
-def _row(ivod_id, speaker="洪毓祥", features=("ai-transcript",), duration=197):
+def _row(ivod_id, speaker="範例一", features=("ai-transcript",), duration=197):
     return {
         "IVOD_ID": ivod_id,
         "日期": "2026-08-27",
@@ -44,10 +44,10 @@ class IvodSourceTests(SimpleTestCase):
         self.assertEqual(len(clips), 1)
         clip = clips[0]
         self.assertEqual(clip.ivod_id, "171180")
-        self.assertEqual(clip.speaker, "洪毓祥")
+        self.assertEqual(clip.speaker, "範例一")
         self.assertEqual(clip.duration_seconds, 197)
         self.assertIn("171180", clip.ivod_url)
-        self.assertIn("洪毓祥", clip.title)
+        self.assertIn("範例一", clip.title)
         self.assertIn("第23次會議", clip.title)
 
     def test_the_query_asks_for_that_day_and_only_clips(self):

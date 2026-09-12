@@ -34,7 +34,7 @@ class Command(BaseCommand):
         scheduler = BlockingScheduler(timezone=settings.TIME_ZONE)
         hour, minute = options["hour"], options["minute"]
 
-        def job(days: int = 1) -> None:
+        def job(days: int = options["backfill_days"] or 1) -> None:
             # 包起來：例外若冒出排程，APScheduler 會把這個工作移除，之後
             # 就再也不會跑——而使用者不會發現，只會覺得「新聞停更了」。
             try:
@@ -42,6 +42,9 @@ class Command(BaseCommand):
             except Exception:  # noqa: BLE001
                 logger.exception("每日匯入失敗，排程繼續")
 
+        # 每天也跑回補而不只查昨天：立法院的 AI 逐字稿有時晚幾小時才出現，
+        # 而 discover 只收「已經有逐字稿」的片段。晚到排程時間之後的那些，
+        # 沒有回補就再也不會被查到，而且沒有任何訊號。
         scheduler.add_job(job, "cron", hour=hour, minute=minute, id="ingest_ivod",
                           max_instances=1, coalesce=True, misfire_grace_time=3600)
         signal.signal(signal.SIGTERM, lambda *_: scheduler.shutdown(wait=False))

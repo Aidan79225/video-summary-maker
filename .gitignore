@@ -24,3 +24,6 @@ services/news/.venv/
 web/news/node_modules/
 web/news/dist/
 web/news/.astro/
+
+# 使用者自己留在工作目錄的草稿
+docs/spec.md

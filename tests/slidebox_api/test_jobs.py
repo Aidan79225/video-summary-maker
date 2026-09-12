@@ -116,8 +116,11 @@ def test_recent_lists_newest_first_and_is_capped():
 
 
 def test_a_snapshot_never_shows_done_without_its_result():
-    """攔的 bug：狀態先寫、結果後寫，而讀取端在鎖外逐一取屬性——讀到那個
-    瞬間的話，Pi 會判定工作失敗，幾分鐘的 GPU 成品就報銷了。"""
+    """完成的工作一定帶著結果。
+
+    Pi 那邊看到「done 但沒有 result」會判定工作失敗，幾分鐘的 GPU 成品
+    就報銷了。擋住它的是 snapshot（鎖內複製），不是欄位的寫入順序。
+    """
     store = _store()
     job = store.submit("a")
     store.take_next()

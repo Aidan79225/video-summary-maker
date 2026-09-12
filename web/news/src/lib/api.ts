@@ -143,7 +143,9 @@ async function getJson<T>(path: string): Promise<Result<T>> {
       res.status === 404 ? 'notfound' : res.status >= 500 ? 'server' : 'client';
     return {
       ok: false,
-      error: { kind, status: res.status, message: `HTTP ${res.status}`, detail: url },
+      // detail 只放路徑：完整網址含內部位址，而它會顯示在訪客看得到的
+      // 「技術細節」裡。
+      error: { kind, status: res.status, message: `HTTP ${res.status}`, detail: path },
     };
   }
 
@@ -288,4 +290,16 @@ export async function getSpeakers(): Promise<Result<SpeakerList>> {
   const res = await getJson<SpeakerList>('/api/speakers');
   if (!res.ok) return res;
   return { ok: true, data: { items: Array.isArray(res.data?.items) ? res.data.items : [] } };
+}
+
+/**
+ * 這一頁該回什麼 HTTP 狀態。
+ *
+ * 訪客打了 ?date=abc 是**訪客**的問題，不是後端掛了——全部回 503 的話，
+ * 爬蟲會讓 Pi 上的監控看到一堆假的「後端掛了」。
+ */
+export function statusFor(kind: ApiError['kind']): number {
+  if (kind === 'notfound') return 404;
+  if (kind === 'client') return 400;
+  return 503;
 }

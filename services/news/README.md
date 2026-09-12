@@ -80,8 +80,8 @@ uv run python manage.py ingest_ivod --retry-imageless --limit 5
 
 ```bash
 # 一、常駐排程（不想碰 systemd 的話）
-uv run python manage.py run_scheduler          # 每天 04:10
-uv run python manage.py run_scheduler --now    # 啟動時先跑一次
+uv run python manage.py run_scheduler                   # 每天 04:10，啟動時先回補三天
+uv run python manage.py run_scheduler --backfill-days 0 # 不要回補
 
 # 二、系統排程（crontab -e）
 10 4 * * * cd /home/pi/yt-downloader/services/news && /home/pi/.local/bin/uv run python manage.py ingest_ivod >> /var/log/ly-news.log 2>&1
@@ -96,7 +96,7 @@ uv run python manage.py run_scheduler --now    # 啟動時先跑一次
 | `GET /api/articles/{slug}` | 單篇，含每段的條列與完整敘述、完整逐字稿 |
 | `GET /api/speakers` | 委員與篇數 |
 
-圖片欄位回的是**相對路徑**（`/media/articles/171180/01.webp`），由前端接上自己的 API base——回絕對網址要猜對外主機名，在反向代理後面很容易猜錯。
+圖片欄位回的是**相對路徑**（`/media/articles/<ivod_id>/<批次>/01.webp`），由前端接上自己的 API base——回絕對網址要猜對外主機名，在反向代理後面很容易猜錯。
 
 ## 部署到 Raspberry Pi
 

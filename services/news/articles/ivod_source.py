@@ -83,7 +83,10 @@ def _duration(value: object) -> int:
 
 def _clip(raw: dict) -> IvodClip | None:
     ivod_id = raw.get(Field.ID)
-    if ivod_id is None:
+    url = str(raw.get(Field.URL) or "")
+    if ivod_id is None or not url:
+        # 沒有播放網址的話，後面送去 GPU 一定被拒，而那個拒絕會被當成
+        # 「服務不可用」而擋住當天整批。在這裡就不要登記它。
         return None
     meeting = (raw.get(Field.MEETING) or {}).get(Field.MEETING_TITLE) or ""
     return IvodClip(
@@ -92,7 +95,7 @@ def _clip(raw: dict) -> IvodClip | None:
         speaker=str(raw.get(Field.SPEAKER) or ""),
         meeting=str(meeting),
         duration_seconds=_duration(raw.get(Field.DURATION)),
-        ivod_url=str(raw.get(Field.URL) or ""),
+        ivod_url=url,
         has_transcript=Feature.AI_TRANSCRIPT in (raw.get(Field.FEATURES) or []),
     )
 

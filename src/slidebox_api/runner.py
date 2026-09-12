@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import threading
 from collections.abc import Callable
+from dataclasses import replace
 
 from slidebox.domain.entities import Settings
 from slidebox.domain.errors import OperationCancelled
@@ -99,17 +100,18 @@ def video_id_of(url: str) -> str:
 class SlideboxExecutor:
     """用 slidebox 跑完整條 pipeline。
 
-    use case 與設定都從外面傳進來，而且**整個行程只建一次**：建構
-    BuildDeckUseCase 會連帶建立語音辨識器，那個模型載入要 40 秒並佔著
-    VRAM，每個工作重建一次等於每次重付。
-
-    每個工作把自己的參數套進同一個 Settings 實例——安全的前提是同一時間
-    只有一個工作在跑（見 JobWorker），這也是這個服務本來就有的保證。
+    use case 從外面傳進來，而且整個行程只建一次：它持有語音辨識器的快取
+    （模型一旦載入就留在記憶體與 VRAM 裡），每個工作重建一次等於把那份
+    快取丟掉。
     """
 
     def __init__(self, usecase: BuildDeckUseCase, settings: Settings):
         self._usecase = usecase
         self._settings = settings
+        # 基準值另外留一份：每個工作都要從它重設，否則有人送過一次
+        # min_slides=3 之後，後面每一篇都會是 3 頁——而送那一次的人早就
+        # 離開了。
+        self._base = replace(settings)
 
     def __call__(self, job: Job, progress: ProgressCallback,
                  is_cancelled: CancelCheck) -> dict:
@@ -123,12 +125,13 @@ class SlideboxExecutor:
         composition 組出來的 summarizer 持有它的參照、每次生成都重讀——
         複製一份的話，工作自己指定的模型不會生效。
         """
-        for name, value in (
-            ("detailed", job.detailed),
-            ("min_slides", job.min_slides),
-            ("max_slides", job.max_slides),
-            ("model", job.model),
-        ):
-            if value is not None:
-                setattr(self._settings, name, value)
+        overrides = {
+            "detailed": job.detailed,
+            "min_slides": job.min_slides,
+            "max_slides": job.max_slides,
+            "model": job.model,
+        }
+        for name, value in overrides.items():
+            setattr(self._settings, name,
+                    value if value is not None else getattr(self._base, name))
         return self._settings

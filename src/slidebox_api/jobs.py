@@ -170,9 +170,6 @@ class JobStore:
             job.finished_at = time.time()
             if status == JobStatus.DONE:
                 job.progress_fraction = 1.0
-            # status 最後才寫：讀取端是在鎖外逐一取屬性的，先翻狀態會讓
-            # 「done 但 result 還是 None」這個瞬間被讀到——Pi 那邊看到它會
-            # 判定工作失敗，幾分鐘的 GPU 成品就報銷了。
             job.status = status
             self._forget_old_unlocked()
 

@@ -7,17 +7,20 @@ from __future__ import annotations
 
 import base64
 import logging
+import time
 from dataclasses import dataclass, field
+from enum import StrEnum
 from datetime import date, timedelta
 from uuid import uuid4
 
+from django.conf import settings
 from django.core.files.base import ContentFile
 from django.core.files.storage import Storage
 from django.db import transaction
 from django.db.models import Count, F, Q, QuerySet
 from django.utils import timezone
 
-from .gpu_client import GpuApiClient, GpuApiError, JobFailed
+from .gpu_client import GpuApiClient, GpuApiError, JobField, JobFailed, JobStatus
 from .ivod_source import IvodClip, IvodDailySource, IvodUnavailable
 from .models import Article, ArticleStatus, Slide
 
@@ -28,9 +31,28 @@ logger = logging.getLogger(__name__)
 # attempts 歸零重來。
 MAX_ATTEMPTS = 5
 
-# PROCESSING 超過這麼久就視為卡住（處理途中斷電或被 kill）。取兩倍的單篇
-# 上限，正常情況不可能誤判。
-STALE_PROCESSING_SECONDS = 2 * 60 * 60
+# 幾倍的單篇上限之後就視為卡住。用倍數而不是絕對秒數，調大
+# GPU_JOB_TIMEOUT_SECONDS 時才不會反而讓還在正常等待的文章被搶走。
+STALE_FACTOR = 2
+STUCK_JOB_FACTOR = 2
+
+RESUMABLE_STATUSES = frozenset({JobStatus.QUEUED, JobStatus.RUNNING, JobStatus.DONE})
+
+
+class DeckField(StrEnum):
+    """GPU 回傳的成品欄位名。協定的一部分，Pi 上沒有 slidebox，各留一份。"""
+    TITLE = "title"
+    SOURCE_NOTE = "source_note"
+    TRANSCRIPT = "transcript_text"
+    SLIDES = "slides"
+
+
+class SlideField(StrEnum):
+    TITLE = "title"
+    BULLETS = "bullets"
+    DETAIL = "detail"
+    TIMESTAMP = "timestamp"
+    IMAGE = "image_base64"
 
 
 @dataclass
@@ -40,11 +62,15 @@ class IngestReport:
     processed: int = 0
     failed: int = 0
     skipped: int = 0
+    pending: int = 0
     errors: list[str] = field(default_factory=list)
 
     def __str__(self) -> str:
-        return (f"發現 {self.discovered}、新增 {self.created}、完成 {self.processed}、"
-                f"失敗 {self.failed}、略過 {self.skipped}")
+        summary = (f"發現 {self.discovered}、新增 {self.created}、"
+                   f"完成 {self.processed}、失敗 {self.failed}、略過 {self.skipped}")
+        # 積壓要講出來：一天的上限是 20 篇，會期日可能有 50～100 段，剩下
+        # 的若沒有人報告，就會無聲地一直排在那裡。
+        return summary + (f"、仍待處理 {self.pending}" if self.pending else "")
 
 
 def _slug(clip_date: str, ivod_id: str) -> str:
@@ -60,12 +86,12 @@ def discover(day: date, source: IvodDailySource) -> tuple[int, int]:
     clips = source.clips_for(day)
     created = 0
     for clip in clips:
-        _, made = _upsert(clip)
+        _, made = _upsert(clip, day)
         created += 1 if made else 0
     return len(clips), created
 
 
-def _upsert(clip: IvodClip) -> tuple[Article, bool]:
+def _upsert(clip: IvodClip, day: date) -> tuple[Article, bool]:
     article, created = Article.objects.get_or_create(
         ivod_id=clip.ivod_id,
         defaults={
@@ -73,7 +99,7 @@ def _upsert(clip: IvodClip) -> tuple[Article, bool]:
             "title": clip.title,
             "speaker": clip.speaker,
             "meeting": clip.meeting,
-            "date": clip.date or timezone.localdate(),
+            "date": clip.date or day,
             "duration_seconds": clip.duration_seconds,
             "ivod_url": clip.ivod_url,
             "status": ArticleStatus.PENDING,
@@ -126,7 +152,7 @@ def _process(queryset: QuerySet, client: GpuApiClient, timeout: float,
              demote_on_failure: bool = True, claim: bool = True) -> IngestReport:
     """逐篇處理。
 
-    demote_on_failure=False 時失敗只記錄原因、不改狀態：重跑已發佈文章的
+    demote_on_failure=False 時失敗只記錄原因、不動狀態：重跑已發佈文章的
     路徑（例如補截圖）必須這樣，把一篇內容完好、只是缺圖的文章打成 FAILED
     等於讓它立刻從新聞站上消失。
 
@@ -157,6 +183,8 @@ def _process(queryset: QuerySet, client: GpuApiClient, timeout: float,
             _record_failure(article, e, report, demote_on_failure)
         else:
             report.processed += 1
+    report.pending = Article.objects.filter(_claimable()).filter(
+        attempts__lt=MAX_ATTEMPTS).count()
     return report
 
 
@@ -167,10 +195,11 @@ def _record_failure(article: Article, error: Exception, report: IngestReport,
     if demote:
         article.status = ArticleStatus.FAILED
         fields.append("status")
-    else:
-        # 只是重跑失敗，原本的成品還在——狀態留著，文章繼續在站上
-        article.status = ArticleStatus.READY
-        fields.append("status")
+    if isinstance(error, JobFailed):
+        # 工作本身跑完了、結論是失敗。留著這個 id 只會讓下一輪接回去重讀
+        # 同一個失敗結論，永遠不重送。
+        article.gpu_job_id = ""
+        fields.append("gpu_job_id")
     article.save(update_fields=fields)
     report.failed += 1
     report.errors.append(f"{article.ivod_id}: {error}")
@@ -183,7 +212,8 @@ def _claimable():
     卡住的判準是時間：處理途中斷電或被 kill 的文章會永遠停在 PROCESSING，
     沒有這條就再也沒人會碰它。
     """
-    stale_before = timezone.now() - timedelta(seconds=STALE_PROCESSING_SECONDS)
+    stale_before = timezone.now() - timedelta(
+        seconds=STALE_FACTOR * settings.GPU_JOB_TIMEOUT_SECONDS)
     return (Q(status__in=[ArticleStatus.PENDING, ArticleStatus.FAILED])
             | Q(status=ArticleStatus.PROCESSING, updated_at__lt=stale_before))
 
@@ -207,31 +237,62 @@ def _claim(article: Article) -> bool:
 
 def _process_one(article: Article, client: GpuApiClient, timeout: float) -> None:
     """送一篇去 GPU 主機並等它跑完。呼叫前必須已經 _claim 成功。"""
-    job_id = _resume_or_submit(article, client)
+    job_id = _resume_or_submit(article, client, timeout)
     result = client.wait(job_id, timeout=timeout,
                          on_progress=lambda job: logger.info(
                              "文章 %s：%s", article.ivod_id,
-                             job.get("progress_status") or job.get("status")))
+                             job.get(JobField.PROGRESS) or job.get(JobField.STATUS)))
     save_result(article, result)
     article.gpu_job_id = ""
     article.save(update_fields=["gpu_job_id", "updated_at"])
 
 
-def _resume_or_submit(article: Article, client: GpuApiClient) -> str:
-    """有上一輪留下的工作就接回去，否則送一個新的。
+def _resume_or_submit(article: Article, client: GpuApiClient, timeout: float) -> str:
+    """有上一輪留下、而且還可能有成果的工作就接回去，否則送一個新的。
 
     等待途中 Pi 的網路斷個幾十秒就會讓這一輪失敗，而 GPU 那邊其實還在跑
     ——重送等於把幾分鐘的成品丟掉、整支影片再跑一遍。
     """
-    if article.gpu_job_id and client.job(article.gpu_job_id) is not None:
-        logger.info("文章 %s 接回既有工作 %s", article.ivod_id, article.gpu_job_id)
-        return article.gpu_job_id
+    resumable = _resumable_job(article, client, timeout)
+    if resumable is not None:
+        logger.info("文章 %s 接回既有工作 %s", article.ivod_id, resumable)
+        return resumable
 
     job_id = client.submit(article.ivod_url, detailed=True)
     article.gpu_job_id = job_id
     article.save(update_fields=["gpu_job_id", "updated_at"])
     logger.info("文章 %s 已送出，工作 %s", article.ivod_id, job_id)
     return job_id
+
+
+def _resumable_job(article: Article, client: GpuApiClient,
+                   timeout: float) -> str | None:
+    """上一輪的工作 id 還值不值得等。
+
+    只接回還可能有成果的狀態。接回一個 failed 的工作等於每天重讀同一個
+    失敗結論、從來不重送——重試機制會靜悄悄地整個失效，而 attempts 照樣
+    每天加一，五天後永久放棄。
+
+    卡住太久的（GPU 那邊某一步假死）先取消再重送，否則每天都會白等一輪
+    完整的逾時。
+    """
+    if not article.gpu_job_id:
+        return None
+    job = client.job(article.gpu_job_id)
+    if job is None or job.get(JobField.STATUS) not in RESUMABLE_STATUSES:
+        return None
+    if _stuck(job, timeout):
+        logger.warning("工作 %s 卡住太久，取消後重送", article.gpu_job_id)
+        client.cancel(article.gpu_job_id)
+        return None
+    return article.gpu_job_id
+
+
+def _stuck(job: dict, timeout: float) -> bool:
+    started = job.get(JobField.STARTED_AT)
+    if job.get(JobField.STATUS) != JobStatus.RUNNING or not started:
+        return False
+    return time.time() - float(started) > STUCK_JOB_FACTOR * timeout
 
 
 @transaction.atomic
@@ -255,16 +316,16 @@ def save_result(article: Article, payload: dict) -> Article:
     article.slides.all().delete()
     folder = f"{article.ivod_id}/{uuid4().hex[:8]}"
 
-    article.title = payload.get("title") or article.title
-    article.source_note = payload.get("source_note") or ""
-    article.transcript_text = payload.get("transcript_text") or ""
+    article.title = payload.get(DeckField.TITLE) or article.title
+    article.source_note = payload.get(DeckField.SOURCE_NOTE) or ""
+    article.transcript_text = payload.get(DeckField.TRANSCRIPT) or ""
     article.status = ArticleStatus.READY
     article.error = ""
     article.published_at = article.published_at or timezone.now()
     article.save()
 
-    for raw in payload.get("slides") or []:
-        _save_slide(article, raw, folder)
+    for position, raw in enumerate(payload.get(DeckField.SLIDES) or [], start=1):
+        _save_slide(article, raw, folder, position)
 
     # 交易成功之後才刪舊檔。失敗的話什麼都沒動，舊成品原封不動還在。
     transaction.on_commit(lambda: _delete_files(old_files))
@@ -279,17 +340,21 @@ def _delete_files(files: list[tuple[Storage, str]]) -> None:
             logger.warning("刪不掉舊截圖 %s：%s", name, e)
 
 
-def _save_slide(article: Article, raw: dict, folder: str) -> None:
-    index = int(raw.get("index") or 0)
+def _save_slide(article: Article, raw: dict, folder: str, index: int) -> None:
+    """index 用迴圈位置，不用 payload 裡的值。
+
+    上游若少給或給重複的 index，兩筆都會變成 0 而撞上 unique 約束，整篇
+    落地失敗。位置一定是唯一且連續的。
+    """
     slide = Slide(
         article=article,
         index=index,
-        title=str(raw.get("title") or ""),
-        bullets=[str(b) for b in (raw.get("bullets") or [])],
-        detail=str(raw.get("detail") or ""),
-        timestamp=float(raw.get("timestamp") or 0.0),
+        title=str(raw.get(SlideField.TITLE) or ""),
+        bullets=[str(b) for b in (raw.get(SlideField.BULLETS) or [])],
+        detail=str(raw.get(SlideField.DETAIL) or ""),
+        timestamp=float(raw.get(SlideField.TIMESTAMP) or 0.0),
     )
-    encoded = raw.get("image_base64")
+    encoded = raw.get(SlideField.IMAGE)
     if encoded:
         try:
             content = base64.b64decode(encoded)
@@ -318,5 +383,6 @@ def ingest_day(day: date, source: IvodDailySource, client: GpuApiClient,
     processed = process_pending(client, limit=limit, timeout=timeout)
     report.processed = processed.processed
     report.failed = processed.failed
+    report.pending = processed.pending
     report.errors.extend(processed.errors)
     return report

@@ -5,7 +5,7 @@ import Figure from '../components/Figure.astro';
 import Filters from '../components/Filters.astro';
 import Notice from '../components/Notice.astro';
 import Pagination from '../components/Pagination.astro';
-import { getArticles, getSpeakers, mediaUrl } from '../lib/api';
+import { getArticles, getSpeakers, mediaUrl, statusFor } from '../lib/api';
 import { displayTitle, formatDateWithWeekday, humanDuration } from '../lib/format';
 
 const PAGE_SIZE = 12;
@@ -23,7 +23,7 @@ const [listRes, speakersRes] = await Promise.all([
 
 // 後端掛掉時仍然 render 可讀的頁面，但回報 503 讓監控看得出來
 if (!listRes.ok) {
-  Astro.response.status = listRes.error.kind === 'notfound' ? 404 : 503;
+  Astro.response.status = statusFor(listRes.error.kind);
 }
 
 const speakers = speakersRes.ok ? speakersRes.data.items : [];

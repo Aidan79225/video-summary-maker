@@ -3,13 +3,13 @@ from __future__ import annotations
 
 import atexit
 import base64
+import time
 import inspect
 import shutil
 import tempfile
 from datetime import date
 
 from django.core.files.storage import default_storage
-from django.db.utils import IntegrityError
 from django.test import SimpleTestCase, TestCase, override_settings
 
 from articles.gpu_client import GpuApiClient, GpuApiError, JobFailed
@@ -29,7 +29,7 @@ MEDIA = tempfile.mkdtemp(prefix="news_media_")
 atexit.register(shutil.rmtree, MEDIA, ignore_errors=True)
 
 
-def _clip(ivod_id="171180", speaker="洪毓祥"):
+def _clip(ivod_id="900001", speaker="範例一"):
     return IvodClip(
         ivod_id=ivod_id, date="2026-08-27", speaker=speaker,
         meeting="第11屆第5會期第23次會議", duration_seconds=197,
@@ -40,8 +40,8 @@ def _clip(ivod_id="171180", speaker="洪毓祥"):
 
 def _payload(slides=2, with_image=True):
     return {
-        "video_id": "171180",
-        "title": "2026-08-27 洪毓祥－第11屆第5會期第23次會議",
+        "video_id": "900001",
+        "title": "2026-08-27 範例一－第11屆第5會期第23次會議",
         "source_note": "逐字稿由立法院 AI 自動產生，可能有辨識錯誤",
         "transcript_text": "00:00 主席 各位同仁",
         "slides": [{
@@ -72,9 +72,14 @@ class FakeClient:
         self._error = error
         self._known_jobs = known_jobs or {}
         self.submitted = []
+        self.cancelled = []
 
     def job(self, job_id):
         return self._known_jobs.get(job_id)
+
+    def cancel(self, job_id):
+        self.cancelled.append(job_id)
+        self._known_jobs.pop(job_id, None)
 
     def submit(self, url, detailed=True, min_slides=None, max_slides=None):
         self.submitted.append((url, detailed))
@@ -93,10 +98,10 @@ class DiscoverTests(TestCase):
     def test_a_clip_becomes_a_pending_article(self):
         found, created = discover(date(2026, 8, 27), FakeSource())
         self.assertEqual((found, created), (1, 1))
-        article = Article.objects.get(ivod_id="171180")
+        article = Article.objects.get(ivod_id="900001")
         self.assertEqual(article.status, ArticleStatus.PENDING)
-        self.assertEqual(article.slug, "2026-08-27-171180")
-        self.assertEqual(article.speaker, "洪毓祥")
+        self.assertEqual(article.slug, "2026-08-27-900001")
+        self.assertEqual(article.speaker, "範例一")
 
     def test_running_twice_does_not_duplicate(self):
         discover(date(2026, 8, 27), FakeSource())
@@ -108,10 +113,10 @@ class DiscoverTests(TestCase):
         """攔的 bug：每次排程都 update 一遍，已完成的文章會被打回待處理，
         於是每天重做一次同樣的事、也重花一次 GPU 時間。"""
         discover(date(2026, 8, 27), FakeSource())
-        article = Article.objects.get(ivod_id="171180")
+        article = Article.objects.get(ivod_id="900001")
         save_result(article, _payload())
         discover(date(2026, 8, 27), FakeSource())
-        self.assertEqual(Article.objects.get(ivod_id="171180").status, ArticleStatus.READY)
+        self.assertEqual(Article.objects.get(ivod_id="900001").status, ArticleStatus.READY)
 
 
 @override_settings(MEDIA_ROOT=MEDIA)
@@ -122,7 +127,7 @@ class ProcessTests(TestCase):
     def test_a_processed_article_gets_its_slides_and_images(self):
         report = process_pending(FakeClient(), limit=10, timeout=60)
         self.assertEqual(report.processed, 1)
-        article = Article.objects.get(ivod_id="171180")
+        article = Article.objects.get(ivod_id="900001")
         self.assertEqual(article.status, ArticleStatus.READY)
         self.assertEqual(article.slides.count(), 2)
         first = article.slides.first()
@@ -141,7 +146,7 @@ class ProcessTests(TestCase):
     def test_a_page_without_a_screenshot_is_still_saved(self):
         process_pending(FakeClient(result=_payload(with_image=False)), limit=10,
                         timeout=60)
-        article = Article.objects.get(ivod_id="171180")
+        article = Article.objects.get(ivod_id="900001")
         self.assertEqual(article.slides.count(), 2)
         self.assertFalse(article.slides.first().image)
 
@@ -151,7 +156,7 @@ class ProcessTests(TestCase):
             report = process_pending(FakeClient(error=JobFailed("還沒有逐字稿")),
                                      limit=10, timeout=60)
         self.assertEqual(report.failed, 1)
-        article = Article.objects.get(ivod_id="171180")
+        article = Article.objects.get(ivod_id="900001")
         self.assertEqual(article.status, ArticleStatus.FAILED)
         self.assertIn("逐字稿", article.error)
         # 失敗的下一輪還會被撿起來——立法院的逐字稿有時晚幾小時才出現
@@ -174,7 +179,7 @@ class ProcessTests(TestCase):
 
     def test_reprocessing_replaces_the_old_slides_instead_of_piling_up(self):
         process_pending(FakeClient(), limit=10, timeout=60)
-        article = Article.objects.get(ivod_id="171180")
+        article = Article.objects.get(ivod_id="900001")
         save_result(article, _payload(slides=3))
         self.assertEqual(article.slides.count(), 3)
 
@@ -195,7 +200,7 @@ class IngestDayTests(TestCase):
                             limit=10, timeout=60)
         self.assertEqual((report.discovered, report.created, report.processed),
                          (1, 1, 0 + 1))
-        self.assertEqual(Article.objects.get(ivod_id="171180").status, ArticleStatus.READY)
+        self.assertEqual(Article.objects.get(ivod_id="900001").status, ArticleStatus.READY)
 
     def test_an_unreachable_legislature_api_does_not_crash_the_run(self):
         """Pi 半夜跑排程，立法院那邊偶爾就是連不上。下一輪會再試。"""
@@ -220,7 +225,7 @@ class RetryImagelessTests(TestCase):
         client = FakeClient()
         report = retry_imageless(client, limit=10, timeout=60)
         self.assertEqual(report.processed, 1)
-        article = Article.objects.get(ivod_id="171180")
+        article = Article.objects.get(ivod_id="900001")
         self.assertTrue(article.slides.first().image)
 
     def test_an_article_that_already_has_screenshots_is_left_alone(self):
@@ -240,7 +245,7 @@ class SaveResultDurabilityTests(TestCase):
 
     def setUp(self):
         discover(date(2026, 8, 27), FakeSource())
-        self.article = Article.objects.get(ivod_id="171180")
+        self.article = Article.objects.get(ivod_id="900001")
         save_result(self.article, _payload())
 
     def _files(self):
@@ -254,8 +259,8 @@ class SaveResultDurabilityTests(TestCase):
         self.assertTrue(before)
 
         broken = _payload(slides=2)
-        broken["slides"][1]["index"] = broken["slides"][0]["index"]  # 撞 unique
-        with self.assertRaises(IntegrityError):
+        broken["slides"][1]["timestamp"] = "不是數字"   # 上游給了壞資料
+        with self.assertRaises(ValueError):
             save_result(self.article, broken)
 
         self.article.refresh_from_db()
@@ -286,7 +291,7 @@ class SaveResultDurabilityTests(TestCase):
         """攔的 bug：Django 的 storage 從不覆寫，撞名會加隨機後綴。"""
         save_result(self.article, _payload())
         for name in self._files():
-            self.assertRegex(name, r"articles/171180/[0-9a-f]{8}/\d{2}\.webp$")
+            self.assertRegex(name, r"articles/900001/[0-9a-f]{8}/\d{2}\.webp$")
 
 
 
@@ -298,10 +303,58 @@ class ClientContractTests(SimpleTestCase):
     """
 
     def test_the_fake_offers_every_method_ingest_uses(self):
-        for name in ("submit", "wait", "job"):
+        for name in ("submit", "wait", "job", "cancel"):
             with self.subTest(method=name):
                 self.assertTrue(hasattr(FakeClient, name))
                 self.assertEqual(
                     list(inspect.signature(getattr(FakeClient, name)).parameters),
                     list(inspect.signature(getattr(GpuApiClient, name)).parameters),
                 )
+
+
+@override_settings(MEDIA_ROOT=MEDIA)
+class ResumeTests(TestCase):
+    """斷線之後接回 GPU 上的工作。"""
+
+    def setUp(self):
+        discover(date(2026, 8, 27), FakeSource())
+        self.article = Article.objects.get(ivod_id="900001")
+
+    def _run(self, client):
+        return process_pending(client, limit=10, timeout=60)
+
+    def test_an_unfinished_job_is_picked_back_up_instead_of_resubmitted(self):
+        """等待途中 Pi 斷線幾十秒，GPU 那邊其實還在跑。重送等於把幾分鐘的
+        成品丟掉、整支影片再跑一遍。"""
+        self.article.gpu_job_id = "J"
+        self.article.save(update_fields=["gpu_job_id"])
+        client = FakeClient(known_jobs={"J": {"status": "running"}})
+        self._run(client)
+        self.assertEqual(client.submitted, [])
+
+    def test_a_failed_job_is_not_picked_back_up(self):
+        """攔的 bug：只檢查「這個 id 還在不在」就接回去，會每天重讀同一個
+        失敗結論、從來不重送——重試機制靜悄悄地整個失效，而 attempts 照樣
+        每天加一，幾天後永久放棄。"""
+        self.article.gpu_job_id = "J"
+        self.article.save(update_fields=["gpu_job_id"])
+        client = FakeClient(known_jobs={"J": {"status": "failed", "error": "壞了"}})
+        self._run(client)
+        self.assertEqual(len(client.submitted), 1)
+
+    def test_a_finished_job_keeps_its_reason_but_drops_the_id(self):
+        """失敗之後那個 id 不該留著，否則下一輪又會接回去。"""
+        with self.assertLogs("articles.ingest", level="WARNING"):
+            self._run(FakeClient(error=JobFailed("還沒有逐字稿")))
+        self.article.refresh_from_db()
+        self.assertEqual(self.article.gpu_job_id, "")
+
+    def test_a_job_stuck_for_far_too_long_is_cancelled_and_resubmitted(self):
+        """GPU 某一步假死時，接回去只是每天白等一輪完整的逾時。"""
+        self.article.gpu_job_id = "J"
+        self.article.save(update_fields=["gpu_job_id"])
+        client = FakeClient(known_jobs={
+            "J": {"status": "running", "started_at": time.time() - 10_000}})
+        self._run(client)
+        self.assertEqual(client.cancelled, ["J"])
+        self.assertEqual(len(client.submitted), 1)

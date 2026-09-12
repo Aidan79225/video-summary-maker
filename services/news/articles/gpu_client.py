@@ -17,6 +17,15 @@ from enum import StrEnum
 _SUBMIT_TIMEOUT = 30.0
 _POLL_TIMEOUT = 30.0
 
+# 輪詢時連續幾次連不上才放棄。Pi 的 Wi-Fi 抖一下就丟掉一整天的新聞太貴，
+# 而 GPU 那邊其實還在跑。
+_POLL_RETRIES = 5
+_RETRY_SECONDS = 3.0
+
+# 這些 4xx 是「這一次請求的問題」，不是服務掛了——把它們當成服務層級的
+# 錯誤會讓一篇壞掉的文章擋住當天整批。
+_REQUEST_ERROR_CODES = frozenset({400, 405, 409, 413, 422})
+
 
 class JobStatus(StrEnum):
     """GPU 那邊的工作狀態。這是 HTTP 契約的一部分，不是共用程式碼——
@@ -26,6 +35,16 @@ class JobStatus(StrEnum):
     DONE = "done"
     FAILED = "failed"
     CANCELLED = "cancelled"
+
+
+class JobField(StrEnum):
+    """GPU 那邊回的欄位名。跟 JobStatus 一樣是協定的一部分，兩邊各留一份。"""
+    ID = "id"
+    STATUS = "status"
+    RESULT = "result"
+    ERROR = "error"
+    PROGRESS = "progress_status"
+    STARTED_AT = "started_at"
 
 
 class GpuApiError(Exception):
@@ -62,6 +81,13 @@ class GpuApiClient:
         self._sleep = sleep
         self._now = now
 
+    def cancel(self, job_id: str) -> None:
+        """要求 GPU 那邊停掉一個工作；它已經不在了就算成功。"""
+        try:
+            self._call(f"/jobs/{job_id}", "DELETE", timeout=_POLL_TIMEOUT)
+        except JobNotFound:
+            pass
+
     def job(self, job_id: str) -> dict | None:
         """查一個既有的工作；GPU 那邊不認得就回 None。
 
@@ -81,7 +107,7 @@ class GpuApiClient:
         if max_slides:
             body["max_slides"] = max_slides
         job = self._call("/jobs", "POST", body=body, timeout=_SUBMIT_TIMEOUT)
-        job_id = job.get("id")
+        job_id = job.get(JobField.ID)
         if not job_id:
             raise GpuApiError("摘要 API 沒有回傳工作 id")
         return str(job_id)
@@ -94,18 +120,29 @@ class GpuApiClient:
         下一次排程重跑時，成品很可能已經好了。
         """
         deadline = self._now() + timeout
+        failures = 0
         while True:
-            job = self._call(f"/jobs/{job_id}", "GET", timeout=_POLL_TIMEOUT)
+            try:
+                job = self._call(f"/jobs/{job_id}", "GET", timeout=_POLL_TIMEOUT)
+            except JobNotFound:
+                raise
+            except GpuApiError:
+                failures += 1
+                if failures > _POLL_RETRIES:
+                    raise
+                self._sleep(_RETRY_SECONDS)
+                continue
+            failures = 0
             if on_progress is not None:
                 on_progress(job)
-            status = job.get("status")
+            status = job.get(JobField.STATUS)
             if status == JobStatus.DONE:
-                result = job.get("result")
+                result = job.get(JobField.RESULT)
                 if not isinstance(result, dict):
                     raise JobFailed("工作回報完成，但沒有結果")
                 return result
             if status == JobStatus.FAILED:
-                raise JobFailed(str(job.get("error") or "未知的失敗")[:500])
+                raise JobFailed(str(job.get(JobField.ERROR) or "未知的失敗")[:500])
             if status == JobStatus.CANCELLED:
                 raise JobFailed("工作被取消")
             if self._now() >= deadline:
@@ -123,6 +160,8 @@ class GpuApiClient:
             detail = e.read().decode("utf-8", "replace")[:300]
             if e.code == 404:
                 raise JobNotFound(f"摘要 API 不認得 {path}") from e
+            if e.code in _REQUEST_ERROR_CODES:
+                raise JobFailed(f"摘要 API 拒絕這個請求（{e.code}）：{detail}") from e
             raise GpuApiError(f"摘要 API 回應 {e.code}：{detail}") from e
         except (OSError, ValueError) as e:
             raise GpuApiError(f"摘要 API 連線失敗：{str(e)[:200]}") from e

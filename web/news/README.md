@@ -44,7 +44,8 @@ node ./dist/server/entry.mjs       # 等同 npm run preview / npm start
 
 | 變數 | 預設 | 說明 |
 | --- | --- | --- |
-| `PUBLIC_API_BASE` | `http://localhost:8000` | 後端 API base。所有 `/api/...` 路徑與 `/media/...` 圖片都接在它後面。結尾的斜線會自動去掉。 |
+| `PUBLIC_API_BASE` | `http://localhost:8000` | 後端 API base，**SSR 在伺服器端用的**，可以填內網位址。結尾的斜線會自動去掉。 |
+| `PUBLIC_MEDIA_BASE` | 同 `PUBLIC_API_BASE` | 圖片的 base。圖片網址會**原樣送到瀏覽器**，所以這裡要填手機連得到的位址；單機開發時兩者相同，不必設。 |
 | `USE_FIXTURE` | `0` | 設為 `1` 時完全不連後端，改用 `src/fixtures/sample.json` 的假資料。 |
 | `API_TIMEOUT_MS` | `8000` | 單一 API 請求的逾時毫秒數。後端沒起來時不會卡住整個頁面。 |
 | `HOST` | `localhost` | 正式站監聽位址，對外服務要設 `0.0.0.0`。 |
@@ -54,7 +55,7 @@ node ./dist/server/entry.mjs       # 等同 npm run preview / npm start
 所以正式站改了 `PUBLIC_API_BASE` 只要 `systemctl restart`，**不需要重新 build**。
 
 所有 API 呼叫都發生在伺服器端（SSR），瀏覽器不會直接連到 Django，
-因此 `PUBLIC_API_BASE` 可以填內網位址（例如 `http://127.0.0.1:8000`）。
+因此 `PUBLIC_API_BASE` 可以填內網位址（例如 `http://127.0.0.1:8000`）——但圖片是瀏覽器自己去抓的，那個位址手機連不到，所以要另外設 `PUBLIC_MEDIA_BASE`，或在 Pi 上用 nginx 同時代理 `/api` 與 `/media`。
 但要注意：圖片 `<img src>` 是**瀏覽器**去抓的，所以圖片能不能顯示取決於使用者的裝置
 是否連得到這個 base；若手機要看得到圖，`PUBLIC_API_BASE` 要填手機也連得到的位址
 （或在前面放一個同時反向代理 `/api` 與 `/media` 的 nginx）。

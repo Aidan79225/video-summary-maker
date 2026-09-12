@@ -17,7 +17,7 @@ atexit.register(shutil.rmtree, MEDIA, ignore_errors=True)
 IMAGE = b"\x00\x01fake-webp\xff"
 
 
-def _article(ivod_id="171180", speaker="洪毓祥", day="2026-08-27", status=None,
+def _article(ivod_id="900001", speaker="範例一", day="2026-08-27", status=None,
              slides=2, with_image=True):
     article = Article.objects.create(
         ivod_id=ivod_id,
@@ -62,8 +62,8 @@ class ApiTests(TestCase):
         body = self.client.get("/api/articles").json()
         self.assertEqual(body["count"], 1)
         card = body["items"][0]
-        self.assertEqual(card["speaker"], "洪毓祥")
-        self.assertEqual(card["slug"], "2026-08-27-171180")
+        self.assertEqual(card["speaker"], "範例一")
+        self.assertEqual(card["slug"], "2026-08-27-900001")
         self.assertEqual(card["slide_count"], 2)
         self.assertIn("完整敘述", card["teaser"])
         self.assertTrue(card["cover_image_url"].startswith("/media/"))
@@ -76,11 +76,11 @@ class ApiTests(TestCase):
         self.assertEqual(self.client.get("/api/articles").json()["count"], 0)
 
     def test_filtering_by_date_and_speaker_and_text(self):
-        _article(ivod_id="1", speaker="洪毓祥", day="2026-08-27")
-        _article(ivod_id="2", speaker="徐巧芯", day="2026-08-26")
+        _article(ivod_id="1", speaker="範例一", day="2026-08-27")
+        _article(ivod_id="2", speaker="範例二", day="2026-08-26")
         cases = [
             ("?date=2026-08-26", 1),
-            ("?speaker=洪毓祥", 1),
+            ("?speaker=範例一", 1),
             ("?q=無人載具", 2),
             ("?q=完全沒有這個字串", 0),
         ]
@@ -112,7 +112,7 @@ class ApiTests(TestCase):
 
     def test_the_detail_page_has_what_an_article_needs(self):
         _article()
-        body = self.client.get("/api/articles/2026-08-27-171180").json()
+        body = self.client.get("/api/articles/2026-08-27-900001").json()
         self.assertEqual(len(body["slides"]), 2)
         slide = body["slides"][0]
         self.assertEqual(slide["index"], 1)
@@ -132,19 +132,19 @@ class ApiTests(TestCase):
 
     def test_a_page_without_a_screenshot_still_renders(self):
         _article(with_image=False)
-        body = self.client.get("/api/articles/2026-08-27-171180").json()
+        body = self.client.get("/api/articles/2026-08-27-900001").json()
         self.assertIsNone(body["slides"][0]["image_url"])
         self.assertIsNone(body["cover_image_url"])
 
     def test_speakers_are_listed_with_counts(self):
-        _article(ivod_id="1", speaker="洪毓祥", day="2026-08-27")
-        _article(ivod_id="2", speaker="洪毓祥", day="2026-08-26")
-        _article(ivod_id="3", speaker="徐巧芯", day="2026-08-25")
+        _article(ivod_id="1", speaker="範例一", day="2026-08-27")
+        _article(ivod_id="2", speaker="範例一", day="2026-08-26")
+        _article(ivod_id="3", speaker="範例二", day="2026-08-25")
         items = self.client.get("/api/speakers").json()["items"]
         by_name = {i["name"]: i for i in items}
-        self.assertEqual(by_name["洪毓祥"]["count"], 2)
-        self.assertEqual(by_name["洪毓祥"]["latest_date"], "2026-08-27")
-        self.assertEqual(by_name["徐巧芯"]["count"], 1)
+        self.assertEqual(by_name["範例一"]["count"], 2)
+        self.assertEqual(by_name["範例一"]["latest_date"], "2026-08-27")
+        self.assertEqual(by_name["範例二"]["count"], 1)
 
     def test_the_newest_article_comes_first(self):
         _article(ivod_id="1", day="2026-08-25")
@@ -171,7 +171,7 @@ class MediaServingTests(TestCase):
 
     def test_every_slide_image_url_serves_too(self):
         _article()
-        body = self.client.get("/api/articles/2026-08-27-171180").json()
+        body = self.client.get("/api/articles/2026-08-27-900001").json()
         for slide in body["slides"]:
             with self.subTest(index=slide["index"]):
                 self.assertEqual(self.client.get(slide["image_url"]).status_code, 200)

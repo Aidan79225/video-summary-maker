@@ -1,5 +1,5 @@
 ---
-import { apiBase, isFixtureMode } from '../lib/api';
+import { isFixtureMode } from '../lib/api';
 
 const year = new Date().getFullYear();
 const fixture = isFixtureMode();
@@ -27,7 +27,7 @@ const fixture = isFixtureMode();
           </a>
         </p>
         <p class="mt-2 text-xs break-all text-muted/70">
-          {fixture ? '資料來源：示範資料（src/fixtures/sample.json）' : `資料來源：${apiBase()}`}
+          {fixture ? '資料來源：示範資料（src/fixtures/sample.json）' : '資料來源：立法院議事轉播 IVOD'}
         </p>
       </div>
     </div>

@@ -3,7 +3,7 @@ import Base from '../../layouts/Base.astro';
 import Notice from '../../components/Notice.astro';
 import SlideBlock from '../../components/SlideBlock.astro';
 import Transcript from '../../components/Transcript.astro';
-import { getArticle, safeExternalUrl } from '../../lib/api';
+import { getArticle, safeExternalUrl, statusFor } from '../../lib/api';
 import { displayTitle, formatDateWithWeekday, humanDuration, mmss } from '../../lib/format';
 
 const slug = String(Astro.params.slug ?? '');
@@ -11,7 +11,7 @@ const res = slug ? await getArticle(slug) : null;
 
 if (!res || !res.ok) {
   const kind = res?.ok === false ? res.error.kind : 'notfound';
-  Astro.response.status = kind === 'notfound' ? 404 : 503;
+  Astro.response.status = statusFor(kind);
 }
 
 const article = res && res.ok ? res.data : null;

@@ -53,11 +53,11 @@ Django 只透過 HTTP 跟 GPU 主機說話。這讓 Pi 不必裝 PySide6／faste
 ## GPU API（`src/slidebox_api/`）
 
 ```
-GET    /health              → {ok, ollama_reachable, models, busy, queued}
+GET    /health              → {ok, model, ollama_host, ollama_reachable, queued, busy}
 POST   /jobs                → 202 {id, status}
-GET    /jobs/{id}           → {id, status, progress, error, result}
+GET    /jobs/{id}           → {id, status, progress_fraction, progress_status, error, result}
 GET    /jobs                → 最近的工作
-DELETE /jobs/{id}           → 取消（排隊中直接移除，執行中送取消訊號）
+DELETE /jobs/{id}           → 取消（排隊中直接標記，執行中送取消訊號；兩者都查得到結果）
 ```
 
 `POST /jobs` 的 body：`{url, detailed=true, min_slides, max_slides, model?}`。

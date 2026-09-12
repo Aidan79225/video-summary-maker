@@ -62,9 +62,16 @@ DATABASES = {
     "default": {
         "ENGINE": "django.db.backends.sqlite3",
         "NAME": os.environ.get("DJANGO_DB_PATH", str(BASE_DIR / "db.sqlite3")),
-        # Pi 的 SD 卡很慢，而排程與 API 會同時讀寫。加長鎖等待時間比讓
-        # 使用者看到 "database is locked" 好。
-        "OPTIONS": {"timeout": 20},
+        "OPTIONS": {
+            # Pi 的 SD 卡很慢，而排程與 API 會同時讀寫。
+            "timeout": 20,
+            # 沒有 IMMEDIATE 的話，「先 SELECT 再寫」的交易要到寫入那一刻
+            # 才升鎖，此時另一個寫入者已經進來就直接 database is locked，
+            # 連 timeout 都不會等。
+            "transaction_mode": "IMMEDIATE",
+            # WAL 讓讀不會被寫擋住：排程在跑的時候，網站還是要能出得來。
+            "init_command": "PRAGMA journal_mode=WAL;",
+        },
     }
 }
 

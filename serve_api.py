@@ -55,7 +55,20 @@ def ollama_probe(host: str):
     return reachable
 
 
+def warn_if_exposed_without_key() -> None:
+    """不擋，只吵：使用者可能真的只在信任的區網裡跑。
+
+    但「綁在對外介面又沒有任何驗證」值得在啟動時說一次，而不是等出事
+    才發現——任何連得到這個埠的人都能佔用 GPU。
+    """
+    host = os.environ.get("SLIDEBOX_API_HOST", DEFAULT_HOST)
+    if host not in LOOPBACK and not os.environ.get("SLIDEBOX_API_KEY"):
+        print(f"⚠ 監聽在 {host} 但沒有設 SLIDEBOX_API_KEY：任何連得到這個埠的人"
+              "都能佔用你的 GPU。", file=sys.stderr)
+
+
 def build() -> FastAPI:
+    warn_if_exposed_without_key()
     settings = build_settings()
     store = JobStore()
     # use case 只建一次：它會連帶建立語音辨識器，模型載入要 40 秒並佔著
@@ -77,10 +90,5 @@ if __name__ == "__main__":
     import uvicorn
 
     host = os.environ.get("SLIDEBOX_API_HOST", DEFAULT_HOST)
-    if host not in LOOPBACK and not os.environ.get("SLIDEBOX_API_KEY"):
-        # 不擋，只吵：使用者可能真的只在信任的區網裡跑。但「綁在對外介面
-        # 又沒有任何驗證」值得在啟動時說一次，而不是等出事才發現。
-        print("⚠ 監聽在非 loopback 位址但沒有設 SLIDEBOX_API_KEY："
-              "任何連得到這個埠的人都能佔用你的 GPU。", file=sys.stderr)
     uvicorn.run(app, host=host, port=int(os.environ.get("SLIDEBOX_API_PORT",
                                                         str(DEFAULT_PORT))))
