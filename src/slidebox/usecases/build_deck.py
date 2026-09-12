@@ -26,7 +26,12 @@ from ..domain.ports import (
     Summarizer,
     VideoSectionGateway,
 )
-from .chapters import clamp_timestamps, compress_cues, validate_slides
+from .chapters import (
+    clamp_timestamps,
+    compress_cues,
+    full_transcript,
+    validate_slides,
+)
 from .naming import deck_folder_name
 
 # 各階段的進度界線
@@ -95,6 +100,13 @@ class BuildDeckUseCase:
 
         slides = self._summarize(compressed, transcript, settings, cb, check)
 
+        # 逐字稿在摘要之後才算：取消發生在摘要階段的話，這幾十毫秒的字串
+        # 處理就白做了。內容無損，字元預算只約束餵給模型的那一份。
+        transcript_text = (
+            full_transcript(transcript.cues, transcript.is_automatic)
+            if settings.detailed else ""
+        )
+
         out_dir = os.path.join(
             settings.output_dir, deck_folder_name(transcript.title, transcript.video_id)
         )
@@ -117,7 +129,7 @@ class BuildDeckUseCase:
         check()
         cb(_P_FRAMES, "產生 HTML…")
         deck = Deck(source_url=url, video_title=transcript.title, slides=slides,
-                    source_note=note)
+                    source_note=note, transcript_text=transcript_text)
         html_path = os.path.join(out_dir, "slides.html")
         self._renderer.render(deck, html_path)
 
@@ -200,6 +212,7 @@ class BuildDeckUseCase:
                     settings.max_slides,
                     hint,
                     self._scaled(cb, _P_SUBTITLES, _P_SUMMARY),
+                    settings.detailed,
                 )
             except SummarizerOutputInvalid as e:
                 # 完全不是 JSON 的回應和「JSON 但欄位不合格」一樣值得重試一次；

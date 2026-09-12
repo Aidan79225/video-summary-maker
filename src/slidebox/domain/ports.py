@@ -33,12 +33,15 @@ class Summarizer(Protocol):
         max_slides: int,
         hint: str,
         progress: ProgressCallback,
+        detailed: bool = False,
     ) -> tuple[Slide, ...]:
         """回傳 image_path 皆為 None 的 Slide 序列。
 
         compressed 是 compress_cues() 的產出——壓縮是純邏輯，不是
         summarizer 的責任。hint 為空字串表示首次嘗試，非空時是上一次
         的驗證錯誤，會附進提示裡要求模型修正。
+
+        detailed 為 True 時另外要求每頁一段完整敘述，填進 Slide.detail。
         """
         ...
 

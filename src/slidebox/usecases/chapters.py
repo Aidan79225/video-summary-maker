@@ -245,3 +245,30 @@ def validate_slides(slides: Sequence[Slide], min_slides: int, max_slides: int) -
         if not slide.bullets:
             problems.append(f"第 {slide.index} 頁沒有任何重點條列")
     return problems
+
+
+# --- 完整逐字稿 ---
+
+_MARKER_RE = re.compile(r"^\[(\d+)\] ", re.MULTILINE)
+
+
+def readable_transcript(text: str) -> str:
+    """把 `[秒數] 文字` 的行首標記換成 `mm:ss 文字`。
+
+    秒數標記是給模型抄的（見 compress_cues），人要看的是分秒。超過一小時
+    不換成 hh:mm:ss——分鐘持續累加（62:05）不會誤讀，也省掉一種格式。
+    """
+    def repl(m: re.Match[str]) -> str:
+        total = int(m.group(1))
+        return f"{total // 60:02d}:{total % 60:02d} "
+
+    return _MARKER_RE.sub(repl, text)
+
+
+def full_transcript(cues: Sequence[Cue], is_automatic: bool = True) -> str:
+    """整份逐字稿，不套用字元預算——這是給人讀的，不進模型的 context。
+
+    只做去重與時間分段，內容一字不刪：使用者要的正是「不看影片也知道
+    全部講了什麼」。
+    """
+    return readable_transcript(_group(_dedupe(cues, is_automatic), 15.0))

@@ -134,3 +134,50 @@ def test_the_source_note_is_escaped(tmp_path):
     html = _render(tmp_path, deck)
     assert "<b>x</b>" not in html
     assert "&lt;b&gt;" in html
+
+
+# --- 詳細模式 ---
+
+
+def test_detail_paragraph_is_rendered_when_present(tmp_path):
+    deck = Deck("https://x", "影片", (
+        Slide(1, "標題", ("重點",), 0.0, None, "這一段的完整敘述。"),
+    ))
+    assert "這一段的完整敘述。" in _render(tmp_path, deck)
+
+
+def test_detail_is_escaped_like_everything_else(tmp_path):
+    """detail 跟標題條列一樣來自 LLM 讀的第三方字幕，不跳脫等於執行別人的程式碼。"""
+    deck = Deck("https://x", "影片", (
+        Slide(1, "標題", ("重點",), 0.0, None, "<script>alert(1)</script>"),
+    ))
+    html = _render(tmp_path, deck)
+    assert "<script>alert(1)</script>" not in html
+    assert "&lt;script&gt;" in html
+
+
+def test_no_empty_paragraph_in_normal_mode(tmp_path):
+    deck = Deck("https://x", "影片", (Slide(1, "標題", ("重點",), 0.0),))
+    assert '<p class="detail">' not in _render(tmp_path, deck)
+
+
+def test_transcript_appendix_is_collapsed_so_it_does_not_bury_the_slides(tmp_path):
+    """逐字稿動輒數萬字。直接攤平會把投影片推到螢幕外，等於毀掉原本的用途。"""
+    deck = Deck("https://x", "影片", (Slide(1, "標題", ("重點",), 0.0),),
+                transcript_text="00:00 逐字稿內容")
+    html = _render(tmp_path, deck)
+    assert "<details" in html
+    assert "逐字稿內容" in html
+
+
+def test_transcript_keeps_its_line_breaks(tmp_path):
+    """逐字稿靠每行開頭的時間找位置；折成一整段就失去可讀性。"""
+    deck = Deck("https://x", "影片", (Slide(1, "標題", ("重點",), 0.0),),
+                transcript_text="00:00 第一行\n00:15 第二行")
+    html = _render(tmp_path, deck)
+    assert "<pre" in html or "white-space" in html
+
+
+def test_no_appendix_when_there_is_no_transcript(tmp_path):
+    deck = Deck("https://x", "影片", (Slide(1, "標題", ("重點",), 0.0),))
+    assert "<details" not in _render(tmp_path, deck)

@@ -31,9 +31,22 @@ header .source { font-size: 13px; color: #8a6d3b; margin: 8px 0 0; }
 .slide ul { margin: 0; padding-left: 20px; }
 .slide li { margin-bottom: 6px; }
 .noimg { font-size: 12px; color: #a8adba; margin-bottom: 12px; }
+.slide .detail { margin: 14px 0 0; padding-top: 12px; border-top: 1px solid #ecedf1; }
+details.transcript {
+  max-width: 900px; margin: 8px auto 40px; padding: 16px 24px;
+  background: #fff; border-radius: 12px; box-shadow: 0 1px 3px rgba(0,0,0,.08);
+}
+details.transcript summary { cursor: pointer; font-weight: 600; }
+details.transcript pre {
+  white-space: pre-wrap; word-break: break-word;
+  font-family: inherit; font-size: 14px; color: #4a4f5c; margin: 16px 0 0;
+}
 @media (prefers-color-scheme: dark) {
   body { background: #14161a; color: #e3e6ec; }
   .slide { background: #1e2128; box-shadow: none; }
+  .slide .detail { border-top-color: #2c303a; }
+  details.transcript { background: #1e2128; box-shadow: none; }
+  details.transcript pre { color: #b6bcc9; }
   header a { color: #7aa2d8; }
 }
 """
@@ -61,6 +74,9 @@ def _render_slide(slide: Slide) -> str:
     # 不跳脫等於把第三方內容當程式碼執行。
     title = html.escape(slide.title)
     bullets = "".join(f"<li>{html.escape(b)}</li>" for b in slide.bullets)
+    # detail 同樣來自模型讀的第三方字幕，一樣要跳脫
+    detail = (f'<p class="detail">{html.escape(slide.detail)}</p>'
+              if slide.detail.strip() else "")
     uri = _data_uri(slide.image_path)
     image = (
         f'<img src="{uri}" alt="{title}">' if uri
@@ -69,7 +85,7 @@ def _render_slide(slide: Slide) -> str:
     return (
         '<section class="slide">'
         f'<div class="meta">{slide.index:02d} · {_mmss(slide.timestamp)}</div>'
-        f"<h2>{title}</h2>{image}<ul>{bullets}</ul>"
+        f"<h2>{title}</h2>{image}<ul>{bullets}</ul>{detail}"
         "</section>"
     )
 
@@ -82,13 +98,20 @@ class HtmlDeckRenderer:
         source = (f'<p class="source">{html.escape(deck.source_note)}</p>'
                   if deck.source_note else "")
         body = "".join(_render_slide(s) for s in deck.slides)
+        # 逐字稿預設收合：它比投影片長一個數量級，攤開就把成品推到螢幕外。
+        # 用 <pre> 保留換行——每行開頭的時間是使用者找位置的唯一線索。
+        transcript = (
+            '<details class="transcript"><summary>完整逐字稿</summary>'
+            f"<pre>{html.escape(deck.transcript_text)}</pre></details>"
+            if deck.transcript_text.strip() else ""
+        )
         document = (
             '<!DOCTYPE html>\n<html lang="zh-Hant">\n<head>\n'
             '<meta charset="utf-8">\n'
             '<meta name="viewport" content="width=device-width, initial-scale=1">\n'
             f"<title>{title}</title>\n<style>{_CSS}</style>\n</head>\n<body>\n"
             f'<header><h1>{title}</h1><a href="{url}">{url}</a>{source}</header>\n'
-            f"{body}\n</body>\n</html>\n"
+            f"{body}\n{transcript}\n</body>\n</html>\n"
         )
         os.makedirs(os.path.dirname(os.path.abspath(dest_path)), exist_ok=True)
         with open(dest_path, "w", encoding="utf-8") as f:

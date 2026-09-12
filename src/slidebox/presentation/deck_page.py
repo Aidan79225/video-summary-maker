@@ -7,6 +7,7 @@ from collections.abc import Callable
 from PySide6.QtCore import QUrl
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
+    QCheckBox,
     QComboBox,
     QFileDialog,
     QHBoxLayout,
@@ -110,6 +111,13 @@ class DeckPage(QWidget):
         opt_row.addWidget(self.max_spin)
         layout.addLayout(opt_row)
 
+        self.detail_check = QCheckBox("詳細內容（每頁加一段完整敘述，並附上完整逐字稿）")
+        self.detail_check.setToolTip(
+            "適合不想看影片但要知道全部內容的情況。\n生成時間較長，HTML 檔也較大。"
+        )
+        self.detail_check.stateChanged.connect(self._persist)
+        layout.addWidget(self.detail_check)
+
         layout.addStretch(1)
 
         # 動作
@@ -151,7 +159,8 @@ class DeckPage(QWidget):
         # 這是 musicbox commit bf7ed26 修過的實際 bug，直接沿用作法。
         s = self._settings
         widgets = (self.url_edit, self.dir_edit, self.model_combo,
-                   self.quality_combo, self.min_spin, self.max_spin)
+                   self.quality_combo, self.min_spin, self.max_spin,
+                   self.detail_check)
         for w in widgets:
             w.blockSignals(True)
         self.dir_edit.setText(s.output_dir)
@@ -160,6 +169,7 @@ class DeckPage(QWidget):
         self.quality_combo.setCurrentIndex(idx)
         self.min_spin.setValue(s.min_slides)
         self.max_spin.setValue(s.max_slides)
+        self.detail_check.setChecked(s.detailed)
         for w in widgets:
             w.blockSignals(False)
 
@@ -169,6 +179,7 @@ class DeckPage(QWidget):
         self._settings.max_height = _QUALITIES[self.quality_combo.currentIndex()][1]
         self._settings.min_slides = self.min_spin.value()
         self._settings.max_slides = self.max_spin.value()
+        self._settings.detailed = self.detail_check.isChecked()
         self._save()
 
     def _on_range_changed(self) -> None:
@@ -258,5 +269,6 @@ class DeckPage(QWidget):
     def _set_busy(self, busy: bool) -> None:
         self.action_btn.setText("取消" if busy else "生成摘要")
         for w in (self.url_edit, self.dir_edit, self.model_combo,
-                  self.quality_combo, self.min_spin, self.max_spin):
+                  self.quality_combo, self.min_spin, self.max_spin,
+                  self.detail_check):
             w.setEnabled(not busy)

@@ -40,10 +40,13 @@ class FakeSummarizer:
         self._batches = list(batches)
         self.hints: list[str] = []
         self.compressed: list[str] = []
+        self.detailed_flags: list[bool] = []
 
-    def summarize(self, compressed, duration, min_slides, max_slides, hint, progress):
+    def summarize(self, compressed, duration, min_slides, max_slides, hint, progress,
+                  detailed=False):
         self.compressed.append(compressed)
         self.hints.append(hint)
+        self.detailed_flags.append(detailed)
         progress(0.0, "開始")
         progress(0.5, "一半")
         progress(None, "長度未知")
@@ -59,7 +62,8 @@ class RaisingThenSucceedingSummarizer:
         self._error = error
         self.calls = 0
 
-    def summarize(self, compressed, duration, min_slides, max_slides, hint, progress):
+    def summarize(self, compressed, duration, min_slides, max_slides, hint, progress,
+                  detailed=False):
         self.calls += 1
         if self.calls == 1:
             raise SummarizerOutputInvalid(self._error)

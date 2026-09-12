@@ -80,3 +80,18 @@ def test_top_level_non_dict_returns_default(tmp_path):
     p = tmp_path / "s.json"
     p.write_text(json.dumps(["not", "a", "dict"]), encoding="utf-8")
     assert JsonSettingsRepository(str(p)).load(_default()) == _default()
+
+
+def test_detailed_survives_a_save_and_load_round_trip(tmp_path):
+    """攔的 bug：新欄位漏掉 save/load 任一邊，勾了「詳細內容」重開就消失。"""
+    path = str(tmp_path / "s.json")
+    repo = JsonSettingsRepository(path)
+    repo.save(Settings(output_dir="OUT", detailed=True))
+    assert repo.load(Settings(output_dir="D")).detailed is True
+
+
+def test_detailed_defaults_to_off_for_older_settings_files(tmp_path):
+    """舊設定檔沒有這個欄位；預設開啟會讓每個人的生成無故變慢一倍。"""
+    path = tmp_path / "s.json"
+    path.write_text('{"output_dir": "OUT"}', encoding="utf-8")
+    assert JsonSettingsRepository(str(path)).load(Settings(output_dir="D")).detailed is False

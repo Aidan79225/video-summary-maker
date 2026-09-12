@@ -7,7 +7,7 @@ import pytest
 
 from slidebox.domain.errors import SummarizerOutputInvalid
 from slidebox.infrastructure.ollama_summarizer import (
-    SLIDES_SCHEMA,
+    slides_schema,
     parse_summary_response,
 )
 
@@ -80,6 +80,23 @@ def test_missing_slides_key_raises():
 
 
 def test_schema_requires_the_three_fields():
-    item = SLIDES_SCHEMA["properties"]["slides"]["items"]
+    item = slides_schema(False)["properties"]["slides"]["items"]
     assert set(item["required"]) == {"title", "bullets", "timestamp"}
     assert item["properties"]["timestamp"]["type"] == "number"
+
+
+def test_detail_is_carried_through_when_the_model_supplies_it():
+    slides = parse_summary_response(
+        '{"slides":[{"title":"章","bullets":["點"],"timestamp":0,"detail":"完整敘述"}]}'
+    )
+    assert slides[0].detail == "完整敘述"
+
+
+def test_missing_or_non_string_detail_degrades_to_empty():
+    """一般模式的回應本來就沒有 detail；缺欄位不該讓整批摘要作廢。"""
+    slides = parse_summary_response(
+        '{"slides":[{"title":"章","bullets":["點"],"timestamp":0},'
+        '{"title":"章","bullets":["點"],"timestamp":0,"detail":123}]}'
+    )
+    assert slides[0].detail == ""
+    assert slides[1].detail == ""

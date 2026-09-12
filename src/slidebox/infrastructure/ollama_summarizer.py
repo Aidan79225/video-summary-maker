@@ -14,24 +14,37 @@ from ..domain.errors import SummarizerOutputInvalid, SummarizerUnavailable
 from ..domain.ports import ProgressCallback
 
 # 傳給 Ollama 的 format：文法層級約束，格式錯誤幾乎不可能發生
-SLIDES_SCHEMA: dict = {
-    "type": "object",
-    "properties": {
-        "slides": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "properties": {
-                    "title": {"type": "string"},
-                    "bullets": {"type": "array", "items": {"type": "string"}},
-                    "timestamp": {"type": "number"},
+
+
+def slides_schema(detailed: bool) -> dict:
+    """詳細模式多一個 detail 欄位，而且放進 required。
+
+    只加進 properties 不放 required 等於沒加：小模型會直接省略選填欄位，
+    使用者勾了「詳細內容」卻拿到跟一般模式一樣的成品，還完全看不出原因。
+    """
+    properties: dict = {
+        "title": {"type": "string"},
+        "bullets": {"type": "array", "items": {"type": "string"}},
+        "timestamp": {"type": "number"},
+    }
+    required = ["title", "bullets", "timestamp"]
+    if detailed:
+        properties["detail"] = {"type": "string"}
+        required.append("detail")
+    return {
+        "type": "object",
+        "properties": {
+            "slides": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": properties,
+                    "required": required,
                 },
-                "required": ["title", "bullets", "timestamp"],
-            },
-        }
-    },
-    "required": ["slides"],
-}
+            }
+        },
+        "required": ["slides"],
+    }
 
 
 def _to_float(value: object) -> float:
@@ -74,11 +87,13 @@ def parse_summary_response(payload: str) -> tuple[Slide, ...]:
         if not isinstance(raw, dict):
             continue
         title = raw.get("title")
+        detail = raw.get("detail")
         slides.append(Slide(
             index=i,
             title=title if isinstance(title, str) else "",
             bullets=_to_bullets(raw.get("bullets")),
             timestamp=_to_float(raw.get("timestamp")),
+            detail=detail if isinstance(detail, str) else "",
         ))
     return tuple(slides)
 
@@ -92,16 +107,31 @@ _SYSTEM = """你是影片摘要助手。使用者會給你一支影片的字幕�
 - title：該章節的標題，繁體中文，不超過 20 字
 - bullets：2 到 4 條重點，每條繁體中文、不超過 40 字
 - timestamp：該章節開始的秒數。**必須直接使用字幕行方括號裡出現過的數字**，不要自己計算。
+"""
 
-章節要平均涵蓋整支影片，不要全部集中在開頭。只輸出 JSON。"""
+# 詳細模式追加的欄位說明。字數上限刻意壓在 300 字：15 頁 × 300 字加上原本的
+# 字幕，總量才不會逼近 num_ctx——超出時 Ollama 會從頭截斷提示，症狀是摘要
+# 只涵蓋影片後半段，而且沒有任何錯誤訊息。
+_DETAIL_FIELD = """- detail：該章節的完整敘述，繁體中文、150 到 300 字。把這段影片實際說了什麼
+  完整寫出來，包含舉的例子、提到的數字與得到的結論，讓沒看過影片的人只讀這段
+  也能完全理解。不要只是把 bullets 換句話說，也不要加入字幕裡沒有的內容。
+"""
+
+_TAIL = '\n章節要平均涵蓋整支影片，不要全部集中在開頭。只輸出 JSON。'
+
+
+def _system(detailed: bool) -> str:
+    return _SYSTEM + (_DETAIL_FIELD if detailed else "") + _TAIL
 
 
 def _build_user_prompt(compressed: str, duration: float, min_slides: int,
-                       max_slides: int, hint: str) -> str:
+                       max_slides: int, hint: str, detailed: bool = False) -> str:
     parts = [
         f"影片總長度：{int(duration)} 秒。",
         f"請產出 {min_slides} 到 {max_slides} 頁投影片。",
     ]
+    if detailed:
+        parts.append("每一頁都必須包含 detail 欄位。")
     if hint:
         parts.append(hint)
     parts.append("以下是字幕：\n" + compressed)
@@ -130,15 +160,16 @@ class OllamaSummarizer:
         self._timeout = timeout
 
     def summarize(self, compressed, duration, min_slides, max_slides, hint,
-                  progress: ProgressCallback) -> tuple[Slide, ...]:
+                  progress: ProgressCallback, detailed: bool = False
+                  ) -> tuple[Slide, ...]:
         body = {
             "model": self._model,
             "messages": [
-                {"role": "system", "content": _SYSTEM},
+                {"role": "system", "content": _system(detailed)},
                 {"role": "user", "content": _build_user_prompt(
-                    compressed, duration, min_slides, max_slides, hint)},
+                    compressed, duration, min_slides, max_slides, hint, detailed)},
             ],
-            "format": SLIDES_SCHEMA,
+            "format": slides_schema(detailed),
             "stream": True,
             "options": {
                 # 必須顯式設定：Ollama 預設 context 很小，不設會讓長字幕被

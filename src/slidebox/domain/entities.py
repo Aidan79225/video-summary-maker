@@ -45,6 +45,9 @@ class Slide:
     bullets: tuple[str, ...]
     timestamp: float
     image_path: str | None = None
+    # 詳細模式下該章節的完整敘述；一般模式為空字串。條列是「提醒你看過什麼」，
+    # 這一段是「沒看影片也能懂」，兩者用途不同，不能互相取代。
+    detail: str = ""
 
 
 @dataclass(frozen=True)
@@ -55,6 +58,8 @@ class Deck:
     # 內容來源的註記，例如「由語音辨識產生」。寫在成品裡而不只是狀態列：
     # 狀態列幾毫秒後就被蓋掉，而 HTML 會被分享、會被日後重看。
     source_note: str = ""
+    # 詳細模式下附在成品末尾的完整逐字稿；一般模式為空字串。
+    transcript_text: str = ""
 
     @property
     def missing_images(self) -> int:
@@ -87,3 +92,6 @@ class Settings:
     # 沒有字幕時的語音辨識模型。large-v3-turbo 在 CPU 上比 medium 還快、品質
     # 最佳；實測日韓 3.9～4.9 倍即時。改 small 約快兩成，但日文明顯較差。
     whisper_model: str = "large-v3-turbo"
+    # 詳細模式：每頁多產一段完整敘述，並在 HTML 末尾附上完整逐字稿。
+    # 給「不想看影片但要知道全部內容」的情況，代價是生成較慢、檔案較大。
+    detailed: bool = False

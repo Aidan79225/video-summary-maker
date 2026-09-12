@@ -397,3 +397,33 @@ def test_the_output_folder_is_named_after_the_video():
     """攔的 bug：輸出資料夾只用影片 id 命名，資料夾列表全是一串看不懂的雜湊。"""
     result = _build().execute("URL", _settings(output_dir="OUT"))
     assert "測試影片 [vid1]" in result.html_path
+
+
+# --- 詳細模式 ---
+
+
+def test_detailed_mode_tells_the_summarizer_to_write_the_long_form():
+    summ = FakeSummarizer([make_slides(3)])
+    _build(summ=summ).execute("URL", _settings(detailed=True))
+    assert summ.detailed_flags == [True]
+
+
+def test_normal_mode_does_not_ask_for_the_long_form():
+    summ = FakeSummarizer([make_slides(3)])
+    _build(summ=summ).execute("URL", _settings())
+    assert summ.detailed_flags == [False]
+
+
+def test_detailed_mode_attaches_the_whole_transcript_to_the_deck():
+    """攔的 bug：只讓模型多寫一段就算數。使用者要的是「不看影片也知道全部」，
+    而摘要一定有損；逐字稿是唯一無損的那份。"""
+    result = _build().execute("URL", _settings(detailed=True))
+    assert "第一句" in result.deck.transcript_text
+    assert "第二句" in result.deck.transcript_text
+    assert "00:30" in result.deck.transcript_text
+
+
+def test_normal_mode_leaves_the_transcript_out():
+    """一般模式下 HTML 不該多出好幾萬字——那是使用者沒有要的體積。"""
+    result = _build().execute("URL", _settings())
+    assert result.deck.transcript_text == ""
