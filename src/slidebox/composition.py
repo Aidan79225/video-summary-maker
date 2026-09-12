@@ -3,7 +3,8 @@ from __future__ import annotations
 
 import os
 
-from .domain.entities import Settings
+from .domain.entities import Settings, Slide
+from .domain.ports import CancelCheck, ProgressCallback
 from .infrastructure.ffmpeg_frames import FfmpegFrameExtractor
 from .infrastructure.html_renderer import HtmlDeckRenderer
 from .infrastructure.ollama_summarizer import OllamaModelCatalog, OllamaSummarizer
@@ -34,15 +35,25 @@ class CurrentSettingsSummarizer:
     生成時炸成 TypeError。
     """
 
-    def __init__(self, settings: Settings):
+    def __init__(self, settings: Settings, factory=OllamaSummarizer):
         self._settings = settings
+        self._factory = factory
 
-    def summarize(self, compressed, duration, min_slides, max_slides, hint,
-                  progress, detailed=False):
+    def summarize(
+        self,
+        compressed: str,
+        duration: float,
+        min_slides: int,
+        max_slides: int,
+        hint: str,
+        progress: ProgressCallback,
+        detailed: bool = False,
+        is_cancelled: CancelCheck | None = None,
+    ) -> tuple[Slide, ...]:
         s = self._settings
-        impl = OllamaSummarizer(s.ollama_host, s.model, s.num_ctx)
-        return impl.summarize(
-            compressed, duration, min_slides, max_slides, hint, progress, detailed)
+        impl = self._factory(s.ollama_host, s.model, s.num_ctx)
+        return impl.summarize(compressed, duration, min_slides, max_slides,
+                              hint, progress, detailed, is_cancelled)
 
 
 def build_main_window() -> MainWindow:

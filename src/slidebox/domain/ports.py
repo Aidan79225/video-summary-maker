@@ -34,6 +34,7 @@ class Summarizer(Protocol):
         hint: str,
         progress: ProgressCallback,
         detailed: bool = False,
+        is_cancelled: CancelCheck | None = None,
     ) -> tuple[Slide, ...]:
         """回傳 image_path 皆為 None 的 Slide 序列。
 
@@ -42,6 +43,10 @@ class Summarizer(Protocol):
         的驗證錯誤，會附進提示裡要求模型修正。
 
         detailed 為 True 時另外要求每頁一段完整敘述，填進 Slide.detail。
+
+        is_cancelled 要在生成途中反覆檢查並 raise OperationCancelled：這是整條
+        pipeline 最久的一步（詳細模式可達數分鐘），只在開始前檢查一次等於
+        不能取消。
         """
         ...
 

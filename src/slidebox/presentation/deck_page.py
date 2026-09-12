@@ -39,6 +39,19 @@ from .workers import BuildDeckWorker
 # 畫質下拉：顯示文字 → max_height（沿用 musicbox 的形狀）
 _QUALITIES = [("最高", None), ("1080p", 1080), ("720p", 720), ("480p", 480)]
 
+# 連續失敗幾次就停下整個佇列。「一支失敗不停佇列」的理由在「這支影片有
+# 問題」時成立；連續失敗代表的是環境壞掉（Ollama 沒開、模型名稱打錯），
+# 此時繼續跑只會在幾秒內把整排燒成紅色，使用者得一支一支重貼。
+MAX_CONSECUTIVE_FAILURES = 2
+
+# 清單列上的錯誤訊息截斷長度：Ollama 的原始錯誤可以很長，整串塞進
+# QListWidget 會撐出橫向捲軸。
+_MAX_MESSAGE = 70
+
+# 關視窗時最多等 worker 幾毫秒。下載片段與抽幀無法中斷，等得太短就等於
+# 沒等；等得太久使用者會以為當掉。
+_SHUTDOWN_WAIT_MS = 30_000
+
 # 佇列每一項的狀態符號。純文字符號，不依賴任何圖示資源。
 _ICONS = {
     PENDING: "⏳",
@@ -63,7 +76,15 @@ class DeckPage(QWidget):
         self._settings = settings
         self._save = save
         self._worker: BuildDeckWorker | None = None
+        # 已經送出結果、但 QThread 還沒真正收尾的 worker 留在這裡。少了這一
+        # 步，_on_done 一鬆手，Python 就會在 thread 還在跑時銷毀 QThread，
+        # Qt 直接中止整個行程——跟關視窗時那個崩潰是同一個原因。
+        self._retiring: set[BuildDeckWorker] = set()
         self._queue = JobQueue()
+        self._consecutive_failures = 0
+        # 使用者選的是「哪一項」，不是「第幾列」：移除或清除已完成會讓列號
+        # 位移，記列號會讓選取自己跳到別支影片，接著按移除就刪錯人。
+        self._selected_item: QueueItem | None = None
 
         self._build_ui()
         self._load_models()
@@ -141,19 +162,23 @@ class DeckPage(QWidget):
         self.detail_check.setToolTip(
             "適合不想看影片但要知道全部內容的情況。\n生成時間較長，HTML 檔也較大。"
         )
-        self.detail_check.stateChanged.connect(self._persist)
+        # PySide6 6.7 起 stateChanged 改名 checkStateChanged，舊名仍可用但已棄用
+        signal = getattr(self.detail_check, "checkStateChanged", None)
+        (signal or self.detail_check.stateChanged).connect(self._persist)
         layout.addWidget(self.detail_check)
 
         # 佇列
         self.queue_list = QListWidget()
         self.queue_list.itemDoubleClicked.connect(self._open_item)
-        self.queue_list.currentRowChanged.connect(lambda _: self._refresh_buttons())
+        self.queue_list.currentRowChanged.connect(self._on_row_changed)
         layout.addWidget(self.queue_list, 1)
 
         # 動作
         action_row = QHBoxLayout()
         self.remove_btn = QPushButton("移除")
         self.remove_btn.clicked.connect(self._remove_selected)
+        self.retry_btn = QPushButton("重試")
+        self.retry_btn.clicked.connect(self._retry_selected)
         self.clear_btn = QPushButton("清除已完成")
         self.clear_btn.clicked.connect(self._clear_finished)
         self.open_btn = QPushButton("開啟 HTML")
@@ -161,6 +186,7 @@ class DeckPage(QWidget):
         self.action_btn = QPushButton("開始")
         self.action_btn.setMinimumHeight(36)
         self.action_btn.clicked.connect(self._on_action)
+        action_row.addWidget(self.retry_btn)
         action_row.addWidget(self.remove_btn)
         action_row.addWidget(self.clear_btn)
         action_row.addStretch(1)
@@ -248,9 +274,15 @@ class DeckPage(QWidget):
         self._refresh()
         self._start_next()
 
+    def _on_row_changed(self, row: int) -> None:
+        self._selected_item = (
+            self._queue.items[row] if 0 <= row < len(self._queue.items) else None)
+        self._refresh_buttons()
+
     def _selected(self) -> QueueItem | None:
-        row = self.queue_list.currentRow()
-        return self._queue.items[row] if 0 <= row < len(self._queue.items) else None
+        """目前選的項目；已經被移除的話就當成沒有選。"""
+        item = self._selected_item
+        return item if item is not None and item in self._queue.items else None
 
     def _remove_selected(self) -> None:
         item = self._selected()
@@ -261,6 +293,15 @@ class DeckPage(QWidget):
             return
         self._refresh()
 
+    def _retry_selected(self) -> None:
+        item = self._selected()
+        if item is None or not self._queue.retry(item):
+            return
+        # 使用者親手按下重試，等於說「環境我修好了」——連續失敗計數歸零
+        self._consecutive_failures = 0
+        self._refresh()
+        self._start_next()
+
     def _clear_finished(self) -> None:
         self._queue.clear_finished()
         self._refresh()
@@ -269,11 +310,20 @@ class DeckPage(QWidget):
         item = self._selected()
         # 沒選任何一項時開最後一個完成的——「做完就想看」是最常見的動作
         if item is None or item.status != DONE:
-            item = next((i for i in reversed(self._queue.items) if i.status == DONE), None)
+            fallback = next(
+                (i for i in reversed(self._queue.items) if i.status == DONE), None)
+            # 但要說清楚開的是哪一支：靜默改開別支影片會讓人以為成品錯了
+            if fallback is not None and item is not None:
+                self.status.setText(
+                    f"這一項還沒有成品，改開啟最近完成的：{fallback.display}")
+            item = fallback
         self._open_item_data(item)
 
-    def _open_item(self, _list_item: QListWidgetItem) -> None:
-        self._open_item_data(self._selected())
+    def _open_item(self, list_item: QListWidgetItem) -> None:
+        # 直接由被點的那一列反查，不依賴「Qt 會先更新 currentRow」這個隱性順序
+        row = self.queue_list.row(list_item)
+        if 0 <= row < len(self._queue.items):
+            self._open_item_data(self._queue.items[row])
 
     def _open_item_data(self, item: QueueItem | None) -> None:
         if item is not None and item.html_path and os.path.exists(item.html_path):
@@ -292,7 +342,10 @@ class DeckPage(QWidget):
         self._start_next()
 
     def _start_next(self) -> None:
-        if self._worker is not None and self._worker.isRunning():
+        # 守衛看佇列狀態，不看 QThread.isRunning()：finished signal 是跨執行緒
+        # 排進事件迴圈的，送達時 worker thread 往往還沒真的結束，isRunning()
+        # 仍是 True，於是下一項永遠停在等待且毫無訊息。佇列狀態才是單一真相。
+        if self._queue.running is not None:
             return
         if not self.model_combo.currentText().strip():
             self.status.setText("請先選擇或輸入模型名稱。")
@@ -313,6 +366,7 @@ class DeckPage(QWidget):
         self._worker.finished_ok.connect(lambda r, it=item: self._on_done(r, it))
         self._worker.failed.connect(lambda m, it=item: self._on_fail(m, it))
         self._worker.cancelled.connect(lambda it=item: self._on_cancelled(it))
+        self._worker.finished.connect(lambda w=self._worker: self._retire(w))
         self._worker.start()
 
     def _on_progress(self, frac, status: str) -> None:
@@ -324,6 +378,8 @@ class DeckPage(QWidget):
         self.status.setText(status)
 
     def _on_done(self, result, item: QueueItem) -> None:
+        self._release_worker()
+        self._consecutive_failures = 0
         self.progress.setRange(0, 100)
         self.progress.setValue(100)
         self._queue.finish(item, result.html_path, result.deck.video_title)
@@ -339,14 +395,26 @@ class DeckPage(QWidget):
         self._start_next()
 
     def _on_fail(self, message: str, item: QueueItem) -> None:
+        self._release_worker()
+        self._consecutive_failures += 1
         self.progress.setRange(0, 100)
         self._queue.fail(item, message)
         self.status.setText(f"❌ 失敗：{message}")
+        if self._consecutive_failures >= MAX_CONSECUTIVE_FAILURES:
+            # 連續失敗代表環境壞掉，不是這支影片的問題。停下來保住剩下的
+            # 項目，使用者修好之後選起來按「重試」即可。
+            self.status.setText(
+                f"❌ 連續 {self._consecutive_failures} 項失敗，已暫停佇列。"
+                f"請確認 Ollama 與模型設定，修好後選起來按「重試」。\n最後的錯誤：{message}"
+            )
+            self._refresh()
+            return
         self._refresh()
-        # 一支失敗不該讓整排停下——使用者可能排完就去做別的事了
+        # 單獨一支失敗不該讓整排停下——使用者可能排完就去做別的事了
         self._start_next()
 
     def _on_cancelled(self, item: QueueItem) -> None:
+        self._release_worker()
         self.progress.setRange(0, 100)
         self.progress.setValue(0)
         self._queue.cancel(item)
@@ -356,18 +424,64 @@ class DeckPage(QWidget):
         )
         self._refresh()   # 取消就是停下來，不自動接續下一項
 
+    def _release_worker(self) -> None:
+        """結果已經收下，但 QThread 要等它自己的 finished 訊號才算真的結束。"""
+        if self._worker is not None:
+            self._retiring.add(self._worker)
+        self._worker = None
+
+    def _retire(self, worker: BuildDeckWorker) -> None:
+        """QThread 的 finished 訊號送達（主執行緒）後才放手。"""
+        worker.wait()
+        self._retiring.discard(worker)
+
+    def shutdown(self) -> bool:
+        """關視窗時呼叫：要求取消並等它停下來。回傳是否已經停妥。
+
+        沒有這一步的話，Python 會在還有 QThread 在跑時銷毀它，Qt 直接中止
+        整個行程（0xC0000409「應用程式已停止運作」），而且 use case 裡
+        finally 的暫存清理全部不會跑，_clips 與音訊暫存檔就留在硬碟上。
+        """
+        worker = self._worker
+        if worker is None or not worker.isRunning():
+            self._wait_for_retiring()
+            return True
+        worker.cancel()
+        self.status.setText("正在停止…（部分步驟無法中斷，請稍候）")
+        # 邊等邊讓畫面還能重繪，否則使用者看到的是沒有反應的當掉視窗
+        from PySide6.QtWidgets import QApplication
+        deadline = _SHUTDOWN_WAIT_MS
+        while deadline > 0 and worker.isRunning():
+            QApplication.processEvents()
+            worker.wait(50)
+            deadline -= 50
+        stopped = not worker.isRunning()
+        self._wait_for_retiring()
+        return stopped
+
+    def _wait_for_retiring(self) -> None:
+        """等那些已經交出結果、正在收尾的 thread 真的結束。"""
+        for worker in list(self._retiring):
+            worker.wait(_SHUTDOWN_WAIT_MS)
+        self._retiring.clear()
+
     # --- 畫面狀態 ---
     def _refresh(self) -> None:
-        row = self.queue_list.currentRow()
+        # 用物件身分而不是索引還原選取：移除或清除已完成會讓索引位移，
+        # 使用者會發現選取自己跳到別支影片，接著按「移除」就刪錯人。
+        previous = self._selected()
+        self._selected_item = previous
         self.queue_list.blockSignals(True)
         self.queue_list.clear()
         for item in self._queue.items:
             text = f"{_ICONS.get(item.status, '')} {item.display}"
             if item.message:
-                text += f" — {item.message}"
+                text += f" — {item.message[:_MAX_MESSAGE]}"
             self.queue_list.addItem(text)
-        if 0 <= row < self.queue_list.count():
-            self.queue_list.setCurrentRow(row)
+        if previous is not None:
+            index = next(
+                (n for n, i in enumerate(self._queue.items) if i is previous), -1)
+            self.queue_list.setCurrentRow(index)
         self.queue_list.blockSignals(False)
         self._refresh_buttons()
 
@@ -379,6 +493,8 @@ class DeckPage(QWidget):
         )
         selected = self._selected()
         self.remove_btn.setEnabled(selected is not None and selected.status != RUNNING)
+        self.retry_btn.setEnabled(
+            selected is not None and selected.status in (FAILED, CANCELLED))
         self.open_btn.setEnabled(
             any(i.status == DONE and i.html_path for i in self._queue.items)
         )

@@ -5,6 +5,7 @@ UI 只負責把按鈕接上去。
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 
 PENDING = "pending"
@@ -17,7 +18,25 @@ CANCELLED = "cancelled"
 _FINISHED = (DONE, FAILED, CANCELLED)
 
 
-@dataclass
+# 從各種 YouTube 網址形式取出 11 碼影片 id
+_ID_RE = re.compile(r"(?:[?&]v=|youtu\.be/|/shorts/|/embed/)([A-Za-z0-9_-]{11})")
+
+
+def video_key(url: str) -> str:
+    """同一支影片的不同網址形式要算成同一個東西。
+
+    `youtu.be/X`、`watch?v=X`、`watch?v=X&t=30` 都是同一支影片；兩項都跑
+    不只白等一倍時間，第二次還會覆寫第一次的成品資料夾（資料夾名用的是
+    影片 id）。認不出 id 的網址就拿整串字串比。
+    """
+    m = _ID_RE.search(url)
+    return m.group(1) if m else url
+
+
+# eq=False：佇列項目天生是 identity 物件，不是值。用值相等的話，remove()
+# 刪掉的會是「第一個長得一樣的」而不是使用者選的那一個——重跑同一支影片
+# 就會出現兩列一模一樣的項目。
+@dataclass(eq=False)
 class QueueItem:
     """佇列裡的一項。label 是影片標題——排隊當下還不知道，完成後才填。"""
     url: str
@@ -52,7 +71,9 @@ class JobQueue:
         url = url.strip()
         if not url:
             return None
-        if any(i.url == url and i.status in (PENDING, RUNNING) for i in self.items):
+        key = video_key(url)
+        if any(video_key(i.url) == key and i.status in (PENDING, RUNNING)
+               for i in self.items):
             return None
         item = QueueItem(url=url)
         self.items.append(item)
@@ -82,6 +103,18 @@ class JobQueue:
 
     def cancel(self, item: QueueItem) -> None:
         item.status = CANCELLED
+
+    def retry(self, item: QueueItem) -> bool:
+        """把失敗或取消的項目放回等待佇列；回傳是否真的放回去了。
+
+        環境壞掉（例如 Ollama 沒開、模型名稱打錯）時整排都會失敗，沒有
+        重試路徑就得一支一支重貼網址。
+        """
+        if item.status not in _FINISHED or item not in self.items:
+            return False
+        item.status = PENDING
+        item.message = ""
+        return True
 
     def remove(self, item: QueueItem) -> bool:
         """移除一項；執行中的不給移除，回傳是否真的移除了。

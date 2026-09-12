@@ -66,3 +66,36 @@ Windows 檔名處理：移除 `\ / : * ? " < > |`，控制字元換成空格（�
 **詳細敘述整段照抄韓文原文。** 第一次實測（韓文影片，5 頁），`title` 與 `bullets` 都是繁體中文，但 `detail` 五段全是韓文字幕原文——「把這段影片實際說了什麼完整寫出來」這句話把模型推向逐字複製。修法是在 system 提示最前面加上「所有輸出一律使用繁體中文。影片若是外語，翻譯成繁體中文再寫，不要照抄原文」，並在 `detail` 的欄位說明裡明寫「**嚴禁照抄字幕原文**」。
 
 **composition root 的轉發層沒跟上 port 的新參數。** `Summarizer.summarize` 加了 `detailed`，但 `build_main_window` 裡那個區域類別 `_CurrentSummarizer` 的簽章少一個參數——所有單元測試都綠，使用者按下生成才會炸成 `TypeError`。修法是把它提升成模組層級的 `CurrentSettingsSummarizer`，並加一個用 `inspect.signature` 比對 port 與實作的測試，讓同一類錯誤下次在測試就被擋下。
+
+---
+
+## 審查後的修正
+
+一輪完整的唯讀審查（含實測探針）之後修掉的東西。兩個 Critical 都是佇列把既有的隱患從「偶爾」變成「常態」：
+
+### C1：佇列會隨機停在兩項之間
+
+`_start_next` 原本用 `QThread.isRunning()` 當守衛。`finished_ok` 是跨執行緒排進事件迴圈的，送達時 worker thread 往往還沒真的收尾，`isRunning()` 仍是 `True`，於是下一項永遠停在 ⏳ 而且沒有任何訊息。審查者實測：緊迫事件迴圈下 **58/60 次**跑出「跑到一半停住」。
+
+修法有兩道：守衛改看 `self._queue.running`（單一真相），以及結束的 slot 一進來就先 `_release_worker()`。測試端也一起修——原本的 `_pump` 每輪 `time.sleep(0.01)`，那 10 毫秒剛好讓 worker 收尾完畢，把競態完全遮住（實測：加 sleep 0/60 次重現，不加 58/60 次）。現在改用 `processEvents(AllEvents, 1)` 緊貼著送達。
+
+### C2：生成中關掉視窗會中止行程
+
+全專案沒有任何 `closeEvent`。Python 在 QThread 還在跑時銷毀它，Qt 直接 `qFatal`，使用者看到「應用程式已停止運作」（ExitCode 0xC0000409），而且 use case 裡 `finally` 的暫存清理全部沒跑。
+
+修法：`MainWindow.closeEvent` 轉發給 `DeckPage.shutdown()`——要求取消，邊等邊 `processEvents` 讓畫面還能重繪，最多等 30 秒。
+
+修這個的過程中自己踩到同一個坑：`_release_worker()` 把 `self._worker` 設成 None 之後，下一個 worker 一指派，上一個就在還沒收尾時被回收，整個 pytest 行程被中止（症狀是「測試跑到一半就沒了」）。所以另外用 `self._retiring` 集合持有到 `QThread.finished` 真的送達主執行緒為止。測試也加了 autouse fixture，每個測試結束都把還在跑的 worker 收掉。
+
+### 其餘
+
+- **詳細模式沒有驗證 detail 真的有內容**：JSON schema 的 `required` 擋得住「少了欄位」，擋不住空字串。`validate_slides` 加上 `detailed` 參數，太短或空白就落進既有的「回饋錯誤重試一次」機制。
+- **詳細模式的輸出與字幕共用 num_ctx**：頁數上限可以拉到 50，50 × 400 字的輸出加上 20000 字的字幕會超出 32768，Ollama 從頭靜默截斷。新增 `_budget()`，詳細模式下先替輸出留位置。
+- **環境壞掉時整排燒光**：連續 2 項失敗就暫停佇列，並加上「重試」把失敗的項目放回等待。
+- **選取用索引還原**：清除已完成之後選取會跳到別支影片，接著按「移除」就刪錯人。改成記住項目本身。
+- **`QueueItem` 是值相等的 dataclass**：`remove()` 刪的是「第一個長得一樣的」。改 `@dataclass(eq=False)`——佇列項目天生是 identity 物件。
+- **同一支影片兩種網址會排兩次**，而且第二次會覆寫第一次的成品資料夾（資料夾名用 video id）。新增 `video_key()` 取 11 碼 id 比對。
+- **Ollama 串流途中不能取消**：詳細模式一等就是好幾分鐘，整個佇列卡住。`is_cancelled` 傳進 `Summarizer` port，在串流迴圈裡檢查。
+- 兩個假的測試（`white-space` 在 CSS 裡永遠成立、轉發層測試只斷言 Python 的可變語意）換成真的。
+
+**刻意沒做**：佇列不持久化（關 app 就要重貼）。這是新功能不是修 bug，而且要決定「關掉時正在跑的那一項算什麼狀態」，留給使用者定奪。

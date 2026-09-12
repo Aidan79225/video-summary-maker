@@ -17,11 +17,25 @@ def test_the_forwarding_summarizer_takes_exactly_what_the_port_declares():
     assert list(impl.parameters) == list(port.parameters)
 
 
-def test_the_forwarder_reads_the_settings_object_live():
-    """設定是可變物件，使用者換模型後不該需要重開 app。"""
+def test_the_forwarder_builds_the_summarizer_with_the_settings_of_the_moment():
+    """使用者換模型後不該需要重開 app：每次生成都要用當下的 model／host。
+
+    攔的 bug：在 __init__ 就把 OllamaSummarizer 建好（等於把當時的模型名稱
+    凍住），之後改設定完全沒有作用。
+    """
     from slidebox.composition import CurrentSettingsSummarizer
 
+    built: list[tuple] = []
+
+    class FakeImpl:
+        def __init__(self, host, model, num_ctx):
+            built.append((host, model, num_ctx))
+
+        def summarize(self, *args):
+            return ()
+
     settings = Settings(output_dir="OUT", model="a")
-    fwd = CurrentSettingsSummarizer(settings)
+    fwd = CurrentSettingsSummarizer(settings, factory=FakeImpl)
     settings.model = "b"
-    assert fwd._settings.model == "b"
+    fwd.summarize("字幕", 60.0, 1, 3, "", lambda f, s: None)
+    assert built == [(settings.ollama_host, "b", settings.num_ctx)]

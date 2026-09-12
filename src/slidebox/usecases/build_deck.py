@@ -34,6 +34,27 @@ from .chapters import (
 )
 from .naming import deck_folder_name
 
+# 詳細模式下每頁輸出約略會用掉的字元（150～300 字的敘述加上標題條列，
+# 取上緣）。輸出與提示共用 num_ctx，所以要從預算裡先扣掉。
+_DETAIL_CHARS_PER_SLIDE = 400
+# 字幕再怎麼被擠壓也要留下的量，否則摘要會失去全片涵蓋
+_MIN_BUDGET = 4000
+
+
+def _budget(settings: Settings) -> int:
+    """這次要餵給模型的字幕字元上限。
+
+    一般模式就是設定值。詳細模式的輸出量是一般模式的近十倍，而 Ollama 的
+    num_ctx 是提示與生成共用的——頁數上限拉到 50 時，20000 字的字幕加上
+    50 × 400 字的輸出會超出 32768，此時 Ollama 會從頭靜默截斷提示，症狀是
+    「摘要只涵蓋影片後半段」而且沒有任何錯誤訊息。
+    """
+    if not settings.detailed:
+        return settings.char_budget
+    room = settings.num_ctx - settings.max_slides * _DETAIL_CHARS_PER_SLIDE
+    return max(_MIN_BUDGET, min(settings.char_budget, room))
+
+
 # 各階段的進度界線
 _P_SUBTITLES = 0.05
 _P_SUMMARY = 0.40
@@ -95,10 +116,11 @@ class BuildDeckUseCase:
         check()
         cb(_P_SUBTITLES, "整理字幕…" + (f"（{note}）" if note else ""))
         compressed = compress_cues(
-            transcript.cues, settings.char_budget, is_automatic=transcript.is_automatic
+            transcript.cues, _budget(settings), is_automatic=transcript.is_automatic
         )
 
-        slides = self._summarize(compressed, transcript, settings, cb, check)
+        slides = self._summarize(
+            compressed, transcript, settings, cb, check, cancelled)
 
         # 逐字稿在摘要之後才算：取消發生在摘要階段的話，這幾十毫秒的字串
         # 處理就白做了。內容無損，字元預算只約束餵給模型的那一份。
@@ -197,6 +219,7 @@ class BuildDeckUseCase:
         settings: Settings,
         cb: ProgressCallback,
         check,
+        cancelled: CancelCheck,
     ) -> tuple[Slide, ...]:
         """摘要並驗證；不合格時把錯誤回饋給模型，最多重試一次。"""
         hint = ""
@@ -213,6 +236,7 @@ class BuildDeckUseCase:
                     hint,
                     self._scaled(cb, _P_SUBTITLES, _P_SUMMARY),
                     settings.detailed,
+                    cancelled,
                 )
             except SummarizerOutputInvalid as e:
                 # 完全不是 JSON 的回應和「JSON 但欄位不合格」一樣值得重試一次；
@@ -225,7 +249,8 @@ class BuildDeckUseCase:
                 continue
             # 時間戳越界是小毛病，夾回去即可，不算驗證失敗
             slides = clamp_timestamps(slides, transcript.duration)
-            problems = validate_slides(slides, settings.min_slides, settings.max_slides)
+            problems = validate_slides(
+                slides, settings.min_slides, settings.max_slides, settings.detailed)
             if not problems:
                 return slides
             hint = "上一次的輸出有這些問題，請修正後重新產出：" + "；".join(problems)

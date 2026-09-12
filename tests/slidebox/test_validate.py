@@ -66,3 +66,26 @@ def test_clamp_preserves_other_fields():
     assert out[0].index == 3
     assert out[0].bullets == ("a", "b")
     assert out[0].image_path == "x.webp"
+
+
+# --- 詳細模式 ---
+
+
+def test_detailed_mode_rejects_pages_with_no_detail_at_all():
+    """攔的 bug：schema 的 required 擋得住「少了欄位」，擋不住空字串。
+    使用者勾了詳細、等了兩倍時間，拿到的成品跟一般模式一模一樣，
+    而且完成訊息還說「✅ 完成」——沒有任何線索。"""
+    slides = (Slide(1, "標題", ("重點",), 0.0, None, ""),)
+    assert validate_slides(slides, 1, 5, detailed=True)
+    assert not validate_slides(slides, 1, 5)
+
+
+def test_detailed_mode_rejects_a_token_gesture_of_a_paragraph():
+    """要求 150～300 字，回三個字等於沒做。"""
+    slides = (Slide(1, "標題", ("重點",), 0.0, None, "就是這樣"),)
+    assert validate_slides(slides, 1, 5, detailed=True)
+
+
+def test_a_real_paragraph_passes():
+    slides = (Slide(1, "標題", ("重點",), 0.0, None, "這一段講的是" + "內容" * 30),)
+    assert validate_slides(slides, 1, 5, detailed=True) == []

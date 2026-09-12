@@ -36,17 +36,24 @@ class FakeSubtitleGateway:
 class FakeSummarizer:
     """依序回傳預設的多批結果，用來模擬「第一次不合格、重試後合格」。"""
 
-    def __init__(self, batches: list[tuple[Slide, ...]]):
+    def __init__(self, batches: list[tuple[Slide, ...]], on_summarize=None):
+        self._on_summarize = on_summarize
         self._batches = list(batches)
         self.hints: list[str] = []
         self.compressed: list[str] = []
         self.detailed_flags: list[bool] = []
+        self.saw_cancel = False
 
     def summarize(self, compressed, duration, min_slides, max_slides, hint, progress,
-                  detailed=False):
+                  detailed=False, is_cancelled=None):
         self.compressed.append(compressed)
         self.hints.append(hint)
         self.detailed_flags.append(detailed)
+        if self._on_summarize is not None:
+            self._on_summarize()
+        # 比照真實 adapter 在生成途中檢查取消——use case 若傳進來的是死的
+        # 取消函式，saw_cancel 永遠是 False，接線就壞了而沒人知道
+        self.saw_cancel = bool(is_cancelled and is_cancelled())
         progress(0.0, "開始")
         progress(0.5, "一半")
         progress(None, "長度未知")
@@ -63,7 +70,7 @@ class RaisingThenSucceedingSummarizer:
         self.calls = 0
 
     def summarize(self, compressed, duration, min_slides, max_slides, hint, progress,
-                  detailed=False):
+                  detailed=False, is_cancelled=None):
         self.calls += 1
         if self.calls == 1:
             raise SummarizerOutputInvalid(self._error)
@@ -107,9 +114,12 @@ class FakeRenderer:
         self.rendered.append((deck, dest_path))
 
 
-def make_slides(n: int) -> tuple[Slide, ...]:
+def make_slides(n: int, detail: bool = False) -> tuple[Slide, ...]:
+    """detail=True 產出通過詳細模式驗證的長度（見 chapters._MIN_DETAIL）。"""
+    body = "這一段講的是" + "內容" * 30 if detail else ""
     return tuple(
-        Slide(index=i, title=f"第 {i} 段", bullets=(f"重點 {i}",), timestamp=float(i * 30))
+        Slide(index=i, title=f"第 {i} 段", bullets=(f"重點 {i}",),
+              timestamp=float(i * 30), detail=body)
         for i in range(1, n + 1)
     )
 

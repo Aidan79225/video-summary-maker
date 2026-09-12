@@ -17,7 +17,13 @@ from PySide6.QtWidgets import QApplication  # noqa: E402
 from slidebox.domain.entities import Deck, DeckResult, Settings, Slide  # noqa: E402
 from slidebox.domain.errors import OperationCancelled  # noqa: E402
 from slidebox.presentation.deck_page import DeckPage  # noqa: E402
-from slidebox.usecases.queue import CANCELLED, DONE, PENDING, RUNNING  # noqa: E402
+from slidebox.usecases.queue import (  # noqa: E402
+    CANCELLED,
+    DONE,
+    FAILED,
+    PENDING,
+    RUNNING,
+)
 
 
 @pytest.fixture(scope="module")
@@ -49,20 +55,43 @@ class Catalog:
         return ["qwen3.5:9b"]
 
 
+_PAGES: list[DeckPage] = []
+
+
+@pytest.fixture(autouse=True)
+def _shutdown_pages():
+    """每個測試結束都把還在跑的 worker 收掉。
+
+    留著一個還在跑的 QThread 到測試結束，Python 會在它還在跑時銷毀它，
+    Qt 直接中止整個 pytest 行程——症狀是測試「跑到一半就沒了」。
+    """
+    yield
+    while _PAGES:
+        _PAGES.pop().shutdown()
+
+
 def _page(tmp_path, usecase) -> DeckPage:
     settings = Settings(output_dir=str(tmp_path))
-    return DeckPage(usecase, Catalog(), settings, save=lambda: None)
+    page = DeckPage(usecase, Catalog(), settings, save=lambda: None)
+    _PAGES.append(page)
+    return page
 
 
 def _pump(page, predicate, timeout=5.0):
-    """處理 Qt 事件直到條件成立；回傳是否成立。"""
+    """處理 Qt 事件直到條件成立；回傳是否成立。
+
+    刻意不在迴圈裡 sleep：Python 這邊一睡，worker thread 早就收尾完畢，
+    「signal 先到、thread 還沒結束」這個競態就永遠測不出來。改用 Qt 自己
+    的 maxtime 阻塞，讓事件盡可能貼著 worker 的收尾送達。
+    """
     import time
+
+    from PySide6.QtCore import QEventLoop
     deadline = time.time() + timeout
     while time.time() < deadline:
-        QApplication.processEvents()
+        QApplication.processEvents(QEventLoop.AllEvents, 1)
         if predicate():
             return True
-        time.sleep(0.01)
     QApplication.processEvents()
     return predicate()
 
@@ -144,3 +173,80 @@ def test_settings_are_locked_while_a_job_runs_but_freed_afterwards(app, tmp_path
     assert _pump(page, lambda: not page.model_combo.isEnabled())
     uc.gate.set()
     assert _pump(page, lambda: page.model_combo.isEnabled())
+
+
+# --- 審查後補強 ---
+
+
+def test_the_queue_never_stalls_between_two_items(app, tmp_path):
+    """攔的 bug：用 QThread.isRunning() 當守衛有競態——finished signal 送達時
+    worker thread 還沒真的結束，_start_next 直接 return，下一項就永遠停在
+    等待，而且沒有任何訊息。排十支去睡覺，回來看到第四支之後全停住。"""
+    uc = GatedUseCase()
+    uc.gate.set()                      # 每一項都立刻完成，把交接的縫隙壓到最小
+    page = _page(tmp_path, uc)
+    for url in "ABCDE":
+        _add(page, url)
+    assert _pump(page, lambda: len(uc.urls) == 5, timeout=10.0), (
+        f"佇列停住了，只跑了 {uc.urls}"
+    )
+    assert _pump(page, lambda: all(i.status == DONE for i in page._queue.items))
+
+
+def test_closing_the_window_stops_the_worker_instead_of_crashing(app, tmp_path):
+    """攔的 bug：QThread 還在跑就被銷毀，Qt 直接中止行程（0xC0000409），
+    使用者看到「應用程式已停止運作」，而且 finally 的暫存清理全部沒跑。"""
+    from slidebox.presentation.main_window import MainWindow
+
+    uc = GatedUseCase()
+    page = _page(tmp_path, uc)
+    win = MainWindow(page)
+    _add(page, "A")
+    assert _pump(page, lambda: page._queue.items[0].status == RUNNING)
+    win.close()
+    assert page._worker is None or not page._worker.isRunning()
+
+
+def test_consecutive_failures_stop_the_queue(app, tmp_path):
+    uc = GatedUseCase()
+    uc.gate.set()
+    uc.fail_urls = {"A", "B", "C"}
+    page = _page(tmp_path, uc)
+    for url in "ABC":
+        _add(page, url)
+    assert _pump(page, lambda: page._queue.items[1].status == FAILED, timeout=10.0)
+    # 連續兩次失敗就停下，第三項維持等待，而不是跟著燒掉
+    assert _pump(page, lambda: page._queue.items[2].status == PENDING)
+    assert page._queue.running is None
+    assert "C" not in uc.urls
+
+
+def test_a_failed_item_can_be_retried_from_the_ui(app, tmp_path):
+    uc = GatedUseCase()
+    uc.gate.set()
+    uc.fail_urls = {"A"}
+    page = _page(tmp_path, uc)
+    _add(page, "A")
+    assert _pump(page, lambda: page._queue.items[0].status == FAILED)
+    uc.fail_urls = set()
+    page.queue_list.setCurrentRow(0)
+    page._retry_selected()
+    assert _pump(page, lambda: page._queue.items[0].status == DONE)
+
+
+def test_clearing_finished_items_keeps_the_selection_on_the_same_item(app, tmp_path):
+    """攔的 bug：用索引還原選取，清掉前面的項目後選取會跳到下一項；
+    使用者接著按「移除」，移掉的是別支影片。"""
+    uc = GatedUseCase()
+    uc.gate.set()
+    page = _page(tmp_path, uc)
+    _add(page, "A")
+    assert _pump(page, lambda: page._queue.items[0].status == DONE)
+    uc.gate.clear()                            # 之後排的都會停在閘門前
+    for url in "BCD":
+        _add(page, url)
+    assert _pump(page, lambda: page._queue.items[1].status == RUNNING)
+    page.queue_list.setCurrentRow(2)           # C
+    page._clear_finished()                     # A 被清掉，列號整個往前移
+    assert page._selected() is not None
+    assert page._selected().url == "C"

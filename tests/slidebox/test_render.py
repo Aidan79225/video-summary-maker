@@ -175,7 +175,10 @@ def test_transcript_keeps_its_line_breaks(tmp_path):
     deck = Deck("https://x", "影片", (Slide(1, "標題", ("重點",), 0.0),),
                 transcript_text="00:00 第一行\n00:15 第二行")
     html = _render(tmp_path, deck)
-    assert "<pre" in html or "white-space" in html
+    # 不能用 "white-space" 當條件：那段字在 _CSS 裡，每一份 HTML 都有，
+    # 就算逐字稿被折成一整段測試照樣綠。
+    assert "<pre" in html
+    assert "00:00 第一行\n00:15 第二行" in html
 
 
 def test_no_appendix_when_there_is_no_transcript(tmp_path):

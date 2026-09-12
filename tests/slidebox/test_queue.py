@@ -111,3 +111,58 @@ def test_clearing_finished_items_leaves_the_queue_itself_alone():
     q.start_next()
     q.clear_finished()
     assert [i.url for i in q.items] == ["B"]
+
+
+# --- 審查後補強 ---
+
+
+def test_two_items_with_identical_fields_are_still_two_different_items():
+    """攔的 bug：QueueItem 若用值相等，remove() 刪掉的是「第一個長得一樣的」，
+    不是使用者選的那一個。重跑同一支影片就會出現兩列一模一樣的項目。"""
+    q = JobQueue()
+    a = q.add("A")
+    q.start_next()
+    q.finish(a, "OUT/a.html", "影片 A")
+    b = q.add("A")
+    q.start_next()
+    q.finish(b, "OUT/a.html", "影片 A")
+    q.remove(b)
+    assert q.items == [a]
+    assert q.items[0] is a
+
+
+def test_the_same_video_pasted_in_two_url_forms_is_only_queued_once():
+    """youtu.be/X 與 watch?v=X 是同一支影片；兩項都跑不只白等一倍時間，
+    第二次還會覆寫第一次的成品資料夾（資料夾名用的是 video id）。"""
+    q = JobQueue()
+    assert q.add("https://www.youtube.com/watch?v=dQw4w9WgXcQ") is not None
+    assert q.add("https://youtu.be/dQw4w9WgXcQ") is None
+    assert q.add("https://www.youtube.com/watch?v=dQw4w9WgXcQ&t=30") is None
+    assert len(q.items) == 1
+
+
+def test_urls_without_a_recognisable_id_still_compare_as_plain_text():
+    q = JobQueue()
+    assert q.add("https://example.com/video") is not None
+    assert q.add("https://example.com/video") is None
+    assert q.add("https://example.com/other") is not None
+
+
+def test_a_failed_item_can_be_put_back_in_the_queue():
+    """環境壞掉（Ollama 沒開）時整排會失敗；沒有重試路徑就得一支一支重貼。"""
+    q = JobQueue()
+    item = q.add("A")
+    q.start_next()
+    q.fail(item, "連不上 Ollama")
+    assert q.retry(item) is True
+    assert item.status == PENDING
+    assert item.message == ""
+    assert q.start_next() is item
+
+
+def test_the_running_item_cannot_be_retried():
+    q = JobQueue()
+    item = q.add("A")
+    q.start_next()
+    assert q.retry(item) is False
+    assert item.status == RUNNING

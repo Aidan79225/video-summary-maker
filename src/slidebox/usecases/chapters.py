@@ -123,6 +123,9 @@ def parse_vtt(text: str) -> tuple[Cue, ...]:
 # （「…很好」接「好的…」），沒有這道門檻就會把正常內容當成重複刪掉。
 _MIN_OVERLAP = 3
 
+# 合併字幕的時間窗。摘要與逐字稿必須用同一個值，否則兩邊的時間戳對不起來。
+_WINDOW = 15.0
+
 
 def _dedupe(cues: Sequence[Cue], is_automatic: bool = True) -> list[tuple[float, str]]:
     """移除滾動字幕的重複內容，回傳 (起始秒數, 新增文字)。
@@ -187,7 +190,8 @@ def _group(pairs: Sequence[tuple[float, str]], window: float, keep: float = 1.0)
 
 
 def compress_cues(
-    cues: Sequence[Cue], char_budget: int, window: float = 15.0, is_automatic: bool = True
+    cues: Sequence[Cue], char_budget: int, window: float = _WINDOW,
+    is_automatic: bool = True,
 ) -> str:
     """把數千句字幕壓成帶秒數標記的段落文字，長度不超過 char_budget。
 
@@ -228,11 +232,21 @@ def clamp_timestamps(slides: Sequence[Slide], duration: float) -> tuple[Slide, .
     return tuple(out)
 
 
-def validate_slides(slides: Sequence[Slide], min_slides: int, max_slides: int) -> list[str]:
+# 詳細模式下一段敘述至少要有的字數。要求是 150～300 字，這個門檻只抓
+# 「空字串」與「就是這樣」這種敷衍，不去管稍微短一點的正常輸出。
+_MIN_DETAIL = 40
+
+
+def validate_slides(slides: Sequence[Slide], min_slides: int, max_slides: int,
+                    detailed: bool = False) -> list[str]:
     """回傳問題描述清單；空清單表示通過。
 
     不檢查時間戳——那一律由 clamp_timestamps 先處理掉。這裡抓的是
     「模型沒照指示做」的問題，需要重試才能修正。
+
+    detailed 時多檢查 detail：JSON schema 的 required 只擋得住「少了欄位」，
+    擋不住空字串。少了這一關，使用者勾了詳細、等了兩倍時間，拿到的成品
+    跟一般模式一模一樣，而完成訊息照樣說「✅ 完成」。
     """
     problems: list[str] = []
     if len(slides) < min_slides:
@@ -244,6 +258,9 @@ def validate_slides(slides: Sequence[Slide], min_slides: int, max_slides: int) -
             problems.append(f"第 {slide.index} 頁的標題是空白")
         if not slide.bullets:
             problems.append(f"第 {slide.index} 頁沒有任何重點條列")
+        if detailed and len(slide.detail.strip()) < _MIN_DETAIL:
+            problems.append(
+                f"第 {slide.index} 頁的 detail 太短或空白，需要 150 到 300 字的完整敘述")
     return problems
 
 
@@ -271,4 +288,4 @@ def full_transcript(cues: Sequence[Cue], is_automatic: bool = True) -> str:
     只做去重與時間分段，內容一字不刪：使用者要的正是「不看影片也知道
     全部講了什麼」。
     """
-    return readable_transcript(_group(_dedupe(cues, is_automatic), 15.0))
+    return readable_transcript(_group(_dedupe(cues, is_automatic), _WINDOW))

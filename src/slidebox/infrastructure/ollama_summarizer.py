@@ -10,8 +10,12 @@ import urllib.error
 import urllib.request
 
 from ..domain.entities import Slide
-from ..domain.errors import SummarizerOutputInvalid, SummarizerUnavailable
-from ..domain.ports import ProgressCallback
+from ..domain.errors import (
+    OperationCancelled,
+    SummarizerOutputInvalid,
+    SummarizerUnavailable,
+)
+from ..domain.ports import CancelCheck, ProgressCallback
 
 # 傳給 Ollama 的 format：文法層級約束，格式錯誤幾乎不可能發生
 
@@ -164,8 +168,8 @@ class OllamaSummarizer:
         self._timeout = timeout
 
     def summarize(self, compressed, duration, min_slides, max_slides, hint,
-                  progress: ProgressCallback, detailed: bool = False
-                  ) -> tuple[Slide, ...]:
+                  progress: ProgressCallback, detailed: bool = False,
+                  is_cancelled: CancelCheck | None = None) -> tuple[Slide, ...]:
         body = {
             "model": self._model,
             "messages": [
@@ -186,6 +190,11 @@ class OllamaSummarizer:
         try:
             with _post_json(f"{self._host}/api/chat", body, self._timeout) as resp:
                 for line in resp:
+                    # 生成是整條 pipeline 最久的一步；只在開始前檢查一次
+                    # 等於不能取消。離開 with 會關掉連線，Ollama 那端也會
+                    # 跟著停止生成。
+                    if is_cancelled is not None and is_cancelled():
+                        raise OperationCancelled()
                     line = line.strip()
                     if not line:
                         continue
@@ -199,6 +208,8 @@ class OllamaSummarizer:
                         progress(None, f"產生摘要中…（{len(''.join(chunks))} 字）")
                     if event.get("done"):
                         break
+        except OperationCancelled:
+            raise
         except urllib.error.HTTPError as e:
             detail = e.read().decode("utf-8", "replace")[:200]
             if e.code == 404:

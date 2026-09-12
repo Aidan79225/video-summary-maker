@@ -403,7 +403,7 @@ def test_the_output_folder_is_named_after_the_video():
 
 
 def test_detailed_mode_tells_the_summarizer_to_write_the_long_form():
-    summ = FakeSummarizer([make_slides(3)])
+    summ = FakeSummarizer([make_slides(3, detail=True)])
     _build(summ=summ).execute("URL", _settings(detailed=True))
     assert summ.detailed_flags == [True]
 
@@ -417,7 +417,8 @@ def test_normal_mode_does_not_ask_for_the_long_form():
 def test_detailed_mode_attaches_the_whole_transcript_to_the_deck():
     """攔的 bug：只讓模型多寫一段就算數。使用者要的是「不看影片也知道全部」，
     而摘要一定有損；逐字稿是唯一無損的那份。"""
-    result = _build().execute("URL", _settings(detailed=True))
+    summ = FakeSummarizer([make_slides(3, detail=True)])
+    result = _build(summ=summ).execute("URL", _settings(detailed=True))
     assert "第一句" in result.deck.transcript_text
     assert "第二句" in result.deck.transcript_text
     assert "00:30" in result.deck.transcript_text
@@ -427,3 +428,49 @@ def test_normal_mode_leaves_the_transcript_out():
     """一般模式下 HTML 不該多出好幾萬字——那是使用者沒有要的體積。"""
     result = _build().execute("URL", _settings())
     assert result.deck.transcript_text == ""
+
+
+def test_detailed_mode_leaves_room_in_the_context_for_the_long_answers():
+    """攔的 bug：詳細模式的輸出量近十倍，而 num_ctx 是提示與生成共用的。
+    頁數上限拉到 50 時字幕不縮，Ollama 會從頭靜默截斷提示——症狀是摘要
+    只涵蓋影片後半段，而且沒有任何錯誤訊息。"""
+    from slidebox.usecases.build_deck import _budget
+
+    normal = _settings(max_slides=50)
+    assert _budget(normal) == normal.char_budget
+
+    detailed = _settings(max_slides=50, detailed=True)
+    assert _budget(detailed) < normal.char_budget
+    assert _budget(detailed) + 50 * 400 <= detailed.num_ctx
+
+
+def test_a_modest_page_count_does_not_shrink_the_subtitles():
+    """預設 15 頁還在 num_ctx 的餘裕內，不該無謂地砍掉字幕。"""
+    from slidebox.usecases.build_deck import _budget
+
+    assert _budget(_settings(max_slides=15, detailed=True)) == _settings().char_budget
+
+
+def test_detailed_mode_retries_when_the_model_returns_empty_detail():
+    """攔的 bug：模型回 "detail": "" 時 schema 全部放行，使用者等了兩倍時間
+    拿到跟一般模式一樣的成品。要落進既有的「回饋錯誤重試一次」機制。"""
+    summ = FakeSummarizer([make_slides(3), make_slides(3, detail=True)])
+    result = _build(summ=summ).execute("URL", _settings(detailed=True))
+    assert len(summ.hints) == 2
+    assert "detail" in summ.hints[1]
+    assert all(s.detail for s in result.deck.slides)
+
+
+def test_the_summarizer_gets_a_live_cancel_check():
+    """攔的 bug：傳一個永遠回 False 的取消函式下去，adapter 那邊怎麼檢查都
+    沒用。只斷言「有拋出 OperationCancelled」會被 use case 自己的 check()
+    蒙混過去——要看 adapter 本人有沒有看到取消。"""
+    cancelled = {"value": False}
+    # 生成進行到一半時使用者按下取消
+    summ = FakeSummarizer([make_slides(3)],
+                          on_summarize=lambda: cancelled.__setitem__("value", True))
+    usecase = _build(summ=summ)
+
+    with pytest.raises(OperationCancelled):
+        usecase.execute("URL", _settings(), None, lambda: cancelled["value"])
+    assert summ.saw_cancel
