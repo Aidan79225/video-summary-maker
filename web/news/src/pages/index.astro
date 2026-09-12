@@ -1,0 +1,169 @@
+---
+import Base from '../layouts/Base.astro';
+import ArticleCardView from '../components/ArticleCard.astro';
+import Figure from '../components/Figure.astro';
+import Filters from '../components/Filters.astro';
+import Notice from '../components/Notice.astro';
+import Pagination from '../components/Pagination.astro';
+import { getArticles, getSpeakers, mediaUrl } from '../lib/api';
+import { displayTitle, formatDateWithWeekday, humanDuration } from '../lib/format';
+
+const PAGE_SIZE = 12;
+
+const url = Astro.url;
+const date = url.searchParams.get('date')?.trim() ?? '';
+const speaker = url.searchParams.get('speaker')?.trim() ?? '';
+const q = url.searchParams.get('q')?.trim() ?? '';
+const page = Math.max(1, Number(url.searchParams.get('page')) || 1);
+
+const [listRes, speakersRes] = await Promise.all([
+  getArticles({ date, speaker, q, page, page_size: PAGE_SIZE }),
+  getSpeakers(),
+]);
+
+// 後端掛掉時仍然 render 可讀的頁面，但回報 503 讓監控看得出來
+if (!listRes.ok) {
+  Astro.response.status = listRes.error.kind === 'notfound' ? 404 : 503;
+}
+
+const speakers = speakersRes.ok ? speakersRes.data.items : [];
+const list = listRes.ok ? listRes.data : null;
+const items = list?.items ?? [];
+
+const hasFilter = Boolean(date || speaker || q);
+const showLead = !hasFilter && page === 1 && items.length > 1;
+const lead = showLead ? items[0] : null;
+const rest = showLead ? items.slice(1) : items;
+
+const leadCover = lead ? mediaUrl(lead.cover_image_url) : null;
+const retryHref = `${url.pathname}${url.search}`;
+const params = { date: date || undefined, speaker: speaker || undefined, q: q || undefined };
+
+const latestDate = items[0]?.date ?? '';
+---
+
+<Base title={hasFilter ? '篩選結果' : ''}>
+  <!-- 報頭 -->
+  <section class="border-b border-line-soft bg-bg-soft/60">
+    <div class="mx-auto max-w-6xl px-4 py-10 sm:px-6 sm:py-14">
+      <p class="text-[0.7rem] tracking-[0.3em] text-accent uppercase">Legislative Yuan · Daily</p>
+      <h1 class="headline mt-3 text-3xl font-semibold sm:text-[2.6rem] sm:leading-[1.2]">
+        把質詢台上的幾分鐘<br class="hidden sm:block" />
+        整理成看得懂的重點
+      </h1>
+      <p class="mt-4 max-w-xl text-sm leading-relaxed text-muted sm:text-base">
+        每天彙整立法院 IVOD 的質詢影音，逐段附上畫面截圖、重點條列與完整敘述，並保留可展開的原始逐字稿。
+      </p>
+      {
+        list && (
+          <p class="mt-5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted/80">
+            <span class="tabular">共 {list.count} 篇報導</span>
+            {latestDate && (
+              <>
+                <span aria-hidden="true" class="text-line">·</span>
+                <span class="tabular">最新：{formatDateWithWeekday(latestDate)}</span>
+              </>
+            )}
+          </p>
+        )
+      }
+    </div>
+  </section>
+
+  <div class="mx-auto max-w-6xl px-4 py-8 sm:px-6 sm:py-10">
+    <Filters
+      date={date}
+      speaker={speaker}
+      q={q}
+      speakers={speakers}
+      speakersFailed={!speakersRes.ok}
+    />
+
+    {
+      !listRes.ok && (
+        <div class="mt-10">
+          <Notice error={listRes.error} retryHref={retryHref} />
+        </div>
+      )
+    }
+
+    {
+      listRes.ok && items.length === 0 && (
+        <div class="mt-10">
+          <Notice
+            title={hasFilter ? '這個條件下沒有報導' : '目前還沒有任何報導'}
+            body={
+              hasFilter
+                ? '試著放寬條件——換一個日期、清掉關鍵字，或改看全部委員。'
+                : '後端資料庫裡還沒有文章。等當天的 IVOD 處理完成後，這裡就會出現。'
+            }
+            retryHref={hasFilter ? '/' : retryHref}
+          />
+        </div>
+      )
+    }
+
+    {
+      lead && (
+        <a
+          href={`/article/${lead.slug}`}
+          class="rise lift group mt-10 grid gap-5 overflow-hidden rounded-[var(--radius-card)] border border-line bg-surface md:grid-cols-2 md:gap-0"
+        >
+          <Figure
+            src={leadCover}
+            alt={`${lead.speaker}｜${displayTitle(lead.title)}`}
+            ratio="16 / 10"
+            eager={true}
+            label="無封面截圖"
+            class="rounded-none border-0 md:h-full"
+          />
+          <div class="flex flex-col justify-center gap-3 px-4 pb-5 md:px-8 md:py-8">
+            <p class="flex flex-wrap items-center gap-x-2 gap-y-1 text-[0.72rem] text-muted">
+              <span class="rounded-full bg-accent-soft px-2 py-0.5 font-medium text-accent-ink">
+                最新
+              </span>
+              <time datetime={lead.date} class="tabular">
+                {formatDateWithWeekday(lead.date)}
+              </time>
+              <span aria-hidden="true" class="text-line">
+                ·
+              </span>
+              <span>{lead.speaker}</span>
+            </p>
+            <h2 class="headline text-2xl font-semibold transition-colors group-hover:text-accent-ink sm:text-[1.75rem]">
+              {displayTitle(lead.title)}
+            </h2>
+            <p class="line-clamp-5 text-sm leading-relaxed text-muted sm:text-[0.95rem]">
+              {lead.teaser}
+            </p>
+            <p class="tabular mt-1 text-[0.7rem] text-muted/70">
+              {lead.slide_count} 段重點 · {humanDuration(lead.duration_seconds)}
+            </p>
+          </div>
+        </a>
+      )
+    }
+
+    {
+      rest.length > 0 && (
+        <>
+          <h2 class="mt-12 mb-4 flex items-center gap-3 text-[0.72rem] tracking-[0.2em] text-muted uppercase">
+            {hasFilter ? '符合條件的報導' : '更多報導'}
+            <span class="h-px flex-1 bg-line-soft" />
+          </h2>
+          <div class="grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
+            {rest.map((a, i) => (
+              <ArticleCardView article={a} index={i} eager={!showLead && i < 3} />
+            ))}
+          </div>
+        </>
+      )
+    }
+
+    {
+      list && (
+        <Pagination page={list.page} pages={list.pages} base="/" params={params} />
+      )
+    }
+  </div>
+</Base>

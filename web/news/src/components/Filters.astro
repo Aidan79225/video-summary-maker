@@ -1,0 +1,119 @@
+---
+import type { Speaker } from '../lib/types';
+import { buildQuery } from '../lib/format';
+
+interface Props {
+  date?: string;
+  speaker?: string;
+  q?: string;
+  speakers: Speaker[];
+  /** 讀不到委員清單時，改用純文字輸入 */
+  speakersFailed?: boolean;
+  action?: string;
+}
+
+const { date = '', speaker = '', q = '', speakers, speakersFailed = false, action = '/' } =
+  Astro.props;
+
+const current = { date, speaker, q };
+const hasAny = Boolean(date || speaker || q);
+const chips = [
+  date ? { key: 'date', label: `日期：${date}` } : null,
+  speaker ? { key: 'speaker', label: `委員：${speaker}` } : null,
+  q ? { key: 'q', label: `關鍵字：${q}` } : null,
+].filter(Boolean) as { key: string; label: string }[];
+
+const field =
+  'w-full rounded-lg border border-line bg-bg-soft px-3 py-2 text-sm text-ink placeholder:text-muted/60 transition-colors focus:border-accent focus:outline-none';
+const label = 'mb-1.5 block text-[0.7rem] tracking-wider text-muted';
+---
+
+<section id="filters" class="scroll-mt-24">
+  <form
+    method="get"
+    action={action}
+    class="rounded-[var(--radius-card)] border border-line bg-surface/70 p-4 sm:p-5"
+  >
+    <div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-[11rem_13rem_minmax(0,1fr)_auto] lg:items-end">
+      <div>
+        <label class={label} for="f-date">日期</label>
+        <input id="f-date" type="date" name="date" value={date} class={field} />
+      </div>
+
+      <div>
+        <label class={label} for="f-speaker">委員</label>
+        {
+          speakersFailed || speakers.length === 0 ? (
+            <input
+              id="f-speaker"
+              type="text"
+              name="speaker"
+              value={speaker}
+              placeholder="輸入委員姓名"
+              class={field}
+            />
+          ) : (
+            <select id="f-speaker" name="speaker" class={field}>
+              <option value="">全部委員</option>
+              {speakers.map((s) => (
+                <option value={s.name} selected={s.name === speaker}>
+                  {s.name}（{s.count}）
+                </option>
+              ))}
+            </select>
+          )
+        }
+      </div>
+
+      <div class="sm:col-span-2 lg:col-span-1">
+        <label class={label} for="f-q">關鍵字</label>
+        <input
+          id="f-q"
+          type="search"
+          name="q"
+          value={q}
+          placeholder="例如：國防、健保點值、光電"
+          class={field}
+        />
+      </div>
+
+      <div class="flex gap-2 sm:col-span-2 lg:col-span-1">
+        <button
+          type="submit"
+          class="lift flex-1 rounded-lg border border-accent/40 bg-accent-soft px-5 py-2 text-sm font-medium text-accent-ink hover:border-accent lg:flex-none"
+        >
+          篩選
+        </button>
+        {
+          hasAny && (
+            <a
+              href={action}
+              class="lift flex items-center justify-center rounded-lg border border-line px-4 py-2 text-sm text-muted hover:border-danger hover:text-danger"
+            >
+              清除
+            </a>
+          )
+        }
+      </div>
+    </div>
+
+    {
+      chips.length > 0 && (
+        <div class="mt-3 flex flex-wrap items-center gap-2 border-t border-line-soft pt-3">
+          <span class="text-[0.7rem] text-muted/70">目前條件</span>
+          {chips.map((c) => (
+            <a
+              href={`${action}${buildQuery(current, { [c.key]: undefined, page: undefined })}`}
+              class="group inline-flex items-center gap-1.5 rounded-full border border-line bg-bg-soft px-2.5 py-1 text-[0.72rem] text-ink-2 transition-colors hover:border-danger hover:text-danger"
+            >
+              {c.label}
+              <span aria-hidden="true" class="text-muted group-hover:text-danger">
+                ×
+              </span>
+            </a>
+          ))}
+        </div>
+      )
+    }
+  </form>
+</section>

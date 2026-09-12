@@ -1,0 +1,71 @@
+---
+import type { ArticleCard } from '../lib/types';
+import { mediaUrl } from '../lib/api';
+import { displayTitle, formatDateWithWeekday, humanDuration } from '../lib/format';
+import Figure from './Figure.astro';
+
+interface Props {
+  article: ArticleCard;
+  index?: number;
+  eager?: boolean;
+}
+
+const { article, index = 0, eager = false } = Astro.props;
+const cover = mediaUrl(article.cover_image_url);
+const title = displayTitle(article.title);
+---
+
+<article
+  class="rise lift group relative flex flex-col overflow-hidden rounded-[var(--radius-card)] border border-line bg-surface"
+  style={`--d: ${Math.min(index, 8) * 55}ms`}
+>
+  <Figure
+    src={cover}
+    alt={`${article.speaker}｜${title}`}
+    ratio="16 / 9"
+    eager={eager}
+    label="無封面截圖"
+    class="rounded-none border-0 border-b border-line-soft"
+  />
+
+  <div class="flex flex-1 flex-col gap-2.5 px-4 py-4 sm:px-5">
+    <div class="flex flex-wrap items-center gap-x-2 gap-y-1 text-[0.72rem] text-muted">
+      <time datetime={article.date} class="tabular">{formatDateWithWeekday(article.date)}</time>
+      <span aria-hidden="true" class="text-line">·</span>
+      <a
+        href={`/speaker/${encodeURIComponent(article.speaker)}`}
+        class="relative z-10 rounded-full bg-accent-soft px-2 py-0.5 font-medium text-accent-ink transition-opacity hover:opacity-80"
+      >
+        {article.speaker}
+      </a>
+    </div>
+
+    <h2 class="headline text-[1.05rem] font-semibold sm:text-lg">
+      <a
+        href={`/article/${article.slug}`}
+        class="transition-colors before:absolute before:inset-0 before:content-[''] group-hover:text-accent-ink"
+      >
+        {title}
+      </a>
+    </h2>
+
+    <p class="line-clamp-4 text-sm leading-relaxed text-muted">{article.teaser}</p>
+
+    <div
+      class="mt-auto flex items-center gap-3 border-t border-line-soft pt-3 text-[0.7rem] text-muted/80"
+    >
+      <span class="tabular">{article.slide_count} 段重點</span>
+      <span aria-hidden="true" class="text-line">·</span>
+      <span class="tabular">{humanDuration(article.duration_seconds)}</span>
+      <span
+        class="ml-auto inline-flex items-center gap-1 text-accent opacity-0 transition-opacity group-hover:opacity-100"
+        aria-hidden="true"
+      >
+        閱讀
+        <svg viewBox="0 0 24 24" class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M5 12h13M13 6l6 6-6 6" stroke-linecap="round" stroke-linejoin="round"></path>
+        </svg>
+      </span>
+    </div>
+  </div>
+</article>

@@ -1,0 +1,55 @@
+---
+import { parseTranscript } from '../lib/format';
+
+interface Props {
+  text: string;
+  sourceNote?: string;
+}
+
+const { text, sourceNote } = Astro.props;
+const lines = parseTranscript(text);
+---
+
+<section class="mt-14">
+  <details class="rounded-[var(--radius-card)] border border-line bg-surface">
+    <summary
+      class="flex items-center gap-3 px-4 py-4 sm:px-6"
+      aria-label={`展開完整逐字稿，共 ${lines.length} 行`}
+    >
+      <span class="headline text-base font-semibold sm:text-lg">完整逐字稿</span>
+      <span class="tabular text-xs text-muted">{lines.length} 行</span>
+      <svg
+        class="chev ml-auto h-4 w-4 text-muted"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="2"
+        aria-hidden="true"
+      >
+        <path d="M6 9l6 6 6-6" stroke-linecap="round" stroke-linejoin="round"></path>
+      </svg>
+    </summary>
+
+    <div class="border-t border-line-soft px-4 py-5 sm:px-6">
+      {
+        sourceNote && (
+          <p class="mb-4 text-xs leading-relaxed text-muted/80">{sourceNote}</p>
+        )
+      }
+      {
+        lines.length === 0 ? (
+          <p class="text-sm text-muted">這篇沒有可顯示的逐字稿。</p>
+        ) : (
+          <div class="max-h-[70vh] overflow-y-auto pr-1 text-[0.92rem] leading-loose text-ink-2">
+            {lines.map((l) => (
+              <p class="ts-line">
+                <span class="tabular pt-0.5 text-[0.78rem] text-muted/70 select-none">{l.time}</span>
+                <span>{l.body}</span>
+              </p>
+            ))}
+          </div>
+        )
+      }
+    </div>
+  </details>
+</section>

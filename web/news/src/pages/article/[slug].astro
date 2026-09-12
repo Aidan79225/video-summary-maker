@@ -1,0 +1,145 @@
+---
+import Base from '../../layouts/Base.astro';
+import Notice from '../../components/Notice.astro';
+import SlideBlock from '../../components/SlideBlock.astro';
+import Transcript from '../../components/Transcript.astro';
+import { getArticle } from '../../lib/api';
+import { displayTitle, formatDateWithWeekday, humanDuration, mmss } from '../../lib/format';
+
+const slug = String(Astro.params.slug ?? '');
+const res = slug ? await getArticle(slug) : null;
+
+if (!res || !res.ok) {
+  const kind = res?.ok === false ? res.error.kind : 'notfound';
+  Astro.response.status = kind === 'notfound' ? 404 : 503;
+}
+
+const article = res && res.ok ? res.data : null;
+const title = article ? displayTitle(article.title) : '找不到報導';
+const slides = article?.slides ?? [];
+const retryHref = Astro.url.pathname;
+---
+
+<Base title={title} description={article?.teaser} back={true}>
+  {
+    (!res || !res.ok) && (
+      <div class="mx-auto max-w-6xl px-4 py-16 sm:px-6">
+        <Notice
+          error={res && !res.ok ? res.error : { kind: 'notfound', message: '缺少文章代碼' }}
+          retryHref={retryHref}
+        />
+      </div>
+    )
+  }
+
+  {
+    article && (
+      <article class="mx-auto max-w-4xl px-4 py-8 sm:px-6 sm:py-12">
+        <!-- 頁首 -->
+        <header class="rise">
+          <div class="flex flex-wrap items-center gap-x-2.5 gap-y-1.5 text-sm">
+            <a
+              href={`/speaker/${encodeURIComponent(article.speaker)}`}
+              class="lift rounded-full bg-accent-soft px-3 py-1 text-[0.82rem] font-medium text-accent-ink"
+            >
+              {article.speaker}
+            </a>
+            <time datetime={article.date} class="tabular text-muted">
+              {formatDateWithWeekday(article.date)}
+            </time>
+          </div>
+
+          <h1 class="headline mt-4 text-[1.7rem] font-semibold sm:text-4xl">{title}</h1>
+
+          {article.teaser && (
+            <p class="prose-cn mt-5 border-l-2 border-accent/40 pl-4 text-[1.05rem] sm:text-[1.12rem]">
+              {article.teaser}
+            </p>
+          )}
+
+          <dl class="mt-6 flex flex-wrap items-center gap-x-5 gap-y-2 border-y border-line-soft py-3 text-[0.8rem] text-muted">
+            <div class="flex items-center gap-1.5">
+              <dt class="text-muted/60">會議</dt>
+              <dd class="text-ink-2">{article.meeting}</dd>
+            </div>
+            <div class="flex items-center gap-1.5">
+              <dt class="text-muted/60">影片長度</dt>
+              <dd class="tabular text-ink-2">
+                {humanDuration(article.duration_seconds)}（{mmss(article.duration_seconds)}）
+              </dd>
+            </div>
+            <div class="flex items-center gap-1.5">
+              <dt class="text-muted/60">重點段落</dt>
+              <dd class="tabular text-ink-2">{slides.length} 段</dd>
+            </div>
+            <a
+              href={article.ivod_url}
+              target="_blank"
+              rel="noopener noreferrer"
+              class="lift ml-auto inline-flex items-center gap-1.5 rounded-full border border-line px-3 py-1 text-ink-2 hover:border-accent hover:text-accent"
+            >
+              <svg viewBox="0 0 24 24" class="h-3 w-3" fill="currentColor" aria-hidden="true">
+                <path d="M8 5.5v13l11-6.5z" />
+              </svg>
+              觀看 IVOD 原片
+            </a>
+          </dl>
+
+          {article.source_note && (
+            <p class="mt-5 flex items-start gap-2.5 rounded-lg border-l-2 border-accent/50 bg-surface px-4 py-3 text-[0.8rem] leading-relaxed text-muted">
+              <svg
+                viewBox="0 0 24 24"
+                class="mt-0.5 h-4 w-4 shrink-0 text-accent/80"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.7"
+                aria-hidden="true"
+              >
+                <circle cx="12" cy="12" r="9" />
+                <path d="M12 11v5" stroke-linecap="round" />
+                <circle cx="12" cy="7.8" r="0.9" fill="currentColor" stroke="none" />
+              </svg>
+              <span>{article.source_note}</span>
+            </p>
+          )}
+        </header>
+
+        <!-- 逐段內容 -->
+        {slides.length > 0 ? (
+          <div class="mt-10 space-y-10 sm:mt-14 sm:space-y-12">
+            {slides.map((s, i) => (
+              <SlideBlock slide={s} ivodUrl={article.ivod_url} order={i + 1} total={slides.length} />
+            ))}
+          </div>
+        ) : (
+          <div class="mt-12">
+            <Notice
+              title="這篇還沒有分段重點"
+              body="後端沒有回傳任何段落。你仍然可以展開下方的完整逐字稿，或直接觀看 IVOD 原片。"
+              retryHref={retryHref}
+            />
+          </div>
+        )}
+
+        <!-- 完整逐字稿 -->
+        <Transcript text={article.transcript_text} sourceNote={article.source_note} />
+
+        <!-- 後續導覽 -->
+        <nav class="mt-12 flex flex-wrap gap-3 border-t border-line-soft pt-8 text-sm">
+          <a
+            href={`/speaker/${encodeURIComponent(article.speaker)}`}
+            class="lift rounded-full border border-line bg-surface px-4 py-2 hover:border-accent hover:text-accent"
+          >
+            看 {article.speaker} 的其他報導
+          </a>
+          <a
+            href={`/?date=${encodeURIComponent(article.date)}`}
+            class="lift rounded-full border border-line px-4 py-2 text-muted hover:border-accent hover:text-accent"
+          >
+            看 {article.date} 的所有報導
+          </a>
+        </nav>
+      </article>
+    )
+  }
+</Base>

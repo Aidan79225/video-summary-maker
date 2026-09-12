@@ -1,0 +1,206 @@
+@import "tailwindcss";
+
+/* ------------------------------------------------------------------
+   設計 token：深色優先，淺色透過 prefers-color-scheme 覆蓋。
+   @theme 裡的顏色指向 --c-* 變數，所以切換配色只要換那一組變數。
+   ------------------------------------------------------------------ */
+@theme {
+  --font-sans:
+    ui-sans-serif, -apple-system, "Segoe UI", Roboto, "Noto Sans TC",
+    "PingFang TC", "Heiti TC", "Microsoft JhengHei", "微軟正黑體",
+    sans-serif;
+  --font-serif:
+    "Noto Serif TC", "Source Han Serif TC", "Songti TC", "PingFang TC",
+    Georgia, "Times New Roman", "Microsoft JhengHei", serif;
+
+  --color-bg: var(--c-bg);
+  --color-bg-soft: var(--c-bg-soft);
+  --color-surface: var(--c-surface);
+  --color-surface-2: var(--c-surface-2);
+  --color-line: var(--c-line);
+  --color-line-soft: var(--c-line-soft);
+  --color-ink: var(--c-ink);
+  --color-ink-2: var(--c-ink-2);
+  --color-muted: var(--c-muted);
+  --color-accent: var(--c-accent);
+  --color-accent-soft: var(--c-accent-soft);
+  --color-accent-ink: var(--c-accent-ink);
+  --color-danger: var(--c-danger);
+
+  --radius-card: 14px;
+}
+
+:root {
+  color-scheme: dark;
+  --c-bg: #0a0c10;
+  --c-bg-soft: #0e1116;
+  --c-surface: #13171e;
+  --c-surface-2: #1a1f28;
+  --c-line: #242b36;
+  --c-line-soft: #1b212a;
+  --c-ink: #e9ecf1;
+  --c-ink-2: #c3cad6;
+  --c-muted: #8b95a5;
+  --c-accent: #e8b35c;
+  --c-accent-soft: rgba(232, 179, 92, 0.14);
+  --c-accent-ink: #f3cd8c;
+  --c-danger: #ef7d6a;
+}
+
+@media (prefers-color-scheme: light) {
+  :root {
+    color-scheme: light;
+    --c-bg: #faf9f7;
+    --c-bg-soft: #f3f1ed;
+    --c-surface: #ffffff;
+    --c-surface-2: #f5f3ef;
+    --c-line: #e2ded7;
+    --c-line-soft: #eceae5;
+    --c-ink: #16181d;
+    --c-ink-2: #33383f;
+    --c-muted: #6b7280;
+    --c-accent: #9a6512;
+    --c-accent-soft: rgba(154, 101, 18, 0.1);
+    --c-accent-ink: #7c5210;
+    --c-danger: #b2402b;
+  }
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+  scroll-behavior: smooth;
+}
+
+body {
+  background-color: var(--c-bg);
+  color: var(--c-ink);
+  font-family: var(--font-sans);
+  line-height: 1.75;
+  letter-spacing: 0.01em;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+::selection {
+  background: var(--c-accent-soft);
+  color: var(--c-accent-ink);
+}
+
+:focus-visible {
+  outline: 2px solid var(--c-accent);
+  outline-offset: 3px;
+  border-radius: 4px;
+}
+
+/* 中文閱讀：標題用襯線、字距收一點；內文行高拉開 */
+.headline {
+  font-family: var(--font-serif);
+  letter-spacing: -0.01em;
+  line-height: 1.35;
+  text-wrap: balance;
+}
+
+.prose-cn {
+  line-height: 2;
+  letter-spacing: 0.02em;
+  color: var(--c-ink-2);
+  text-wrap: pretty;
+}
+
+.tabular {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum";
+}
+
+/* 圖片佔位：固定長寬比，載入前不會跳版 */
+.ph {
+  background:
+    linear-gradient(135deg, var(--c-surface-2) 0%, var(--c-surface) 60%);
+}
+
+.img-fallback {
+  display: grid;
+  place-items: center;
+  color: var(--c-muted);
+  font-size: 0.8rem;
+  letter-spacing: 0.08em;
+}
+
+/* 進場動態 —— 細緻就好，不搶戲 */
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.rise {
+  animation: rise 0.5s cubic-bezier(0.22, 0.9, 0.3, 1) both;
+  animation-delay: var(--d, 0ms);
+}
+
+.lift {
+  transition:
+    transform 0.25s cubic-bezier(0.22, 0.9, 0.3, 1),
+    border-color 0.25s ease,
+    background-color 0.25s ease,
+    box-shadow 0.25s ease;
+}
+
+@media (hover: hover) {
+  .lift:hover {
+    transform: translateY(-3px);
+    box-shadow: 0 14px 34px -18px rgba(0, 0, 0, 0.65);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+  .rise {
+    animation: none;
+    opacity: 1;
+    transform: none;
+  }
+  .lift:hover {
+    transform: none;
+  }
+}
+
+/* 逐字稿 <details> */
+.ts-line {
+  display: grid;
+  grid-template-columns: 3.6rem 1fr;
+  gap: 0.75rem;
+  padding: 0.2rem 0;
+}
+
+details > summary {
+  list-style: none;
+  cursor: pointer;
+}
+details > summary::-webkit-details-marker {
+  display: none;
+}
+details[open] .chev {
+  transform: rotate(180deg);
+}
+.chev {
+  transition: transform 0.25s ease;
+}
+
+[hidden] {
+  display: none !important;
+}

@@ -1,0 +1,36 @@
+---
+import { apiBase, isFixtureMode } from '../lib/api';
+
+const year = new Date().getFullYear();
+const fixture = isFixtureMode();
+---
+
+<footer class="mt-20 border-t border-line-soft bg-bg-soft">
+  <div class="mx-auto max-w-6xl px-4 py-10 sm:px-6">
+    <div class="flex flex-col gap-6 sm:flex-row sm:items-start sm:justify-between">
+      <div class="max-w-md">
+        <p class="headline text-base font-semibold">立院質詢日報</p>
+        <p class="mt-2 text-sm leading-relaxed text-muted">
+          內容整理自立法院 IVOD 公開影音。逐字稿由立法院 AI 自動產生，可能有辨識錯誤；
+          摘要為自動整理，正式引用請以院方原始影音與公報為準。
+        </p>
+      </div>
+      <div class="text-sm text-muted">
+        <p>
+          <a
+            href="https://ivod.ly.gov.tw/"
+            rel="noopener noreferrer"
+            target="_blank"
+            class="underline decoration-line underline-offset-4 transition-colors hover:text-accent"
+          >
+            立法院隨選視訊（IVOD）
+          </a>
+        </p>
+        <p class="mt-2 text-xs break-all text-muted/70">
+          {fixture ? '資料來源：示範資料（src/fixtures/sample.json）' : `資料來源：${apiBase()}`}
+        </p>
+      </div>
+    </div>
+    <p class="mt-8 text-xs text-muted/60">© {year} 立院質詢日報</p>
+  </div>
+</footer>
