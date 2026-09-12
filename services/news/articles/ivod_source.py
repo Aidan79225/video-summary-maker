@@ -1,0 +1,113 @@
+"""立法院開放資料：查某一天有哪些質詢片段。
+
+只用 stdlib：Pi 上少一個相依就少一個要維護的東西。查詢參數是實測確認過
+的（`日期`、`影片種類` 都在 API 的 supported_filter_fields 裡）。
+"""
+from __future__ import annotations
+
+import json
+import urllib.parse
+import urllib.request
+from dataclasses import dataclass
+from datetime import date
+
+_PAGE_SIZE = 100
+_TIMEOUT = 30.0
+
+
+class IvodUnavailable(Exception):
+    """立法院的 API 這次拿不到。屬於暫時性問題，下次排程會再試。"""
+
+
+@dataclass(frozen=True)
+class IvodClip:
+    ivod_id: str
+    date: str
+    speaker: str
+    meeting: str
+    duration_seconds: int
+    ivod_url: str
+    has_transcript: bool
+
+    @property
+    def title(self) -> str:
+        """與 slidebox 產生的標題同一個形狀，讓兩邊看起來是同一件事。"""
+        head = " ".join(p for p in (self.date, self.speaker) if p)
+        return f"{head}－{self.meeting}" if head and self.meeting else head or self.meeting
+
+
+def _http_get(url: str) -> str:
+    with urllib.request.urlopen(url, timeout=_TIMEOUT) as resp:
+        return resp.read().decode("utf-8")
+
+
+def _duration(value: object) -> int:
+    """清單端點給秒數（197），單筆端點給 "00:03:17"。兩種都要吃。"""
+    if isinstance(value, (int, float)):
+        return int(value)
+    parts = str(value or "").split(":")
+    try:
+        numbers = [float(p) for p in parts]
+    except ValueError:
+        return 0
+    total = 0.0
+    for number in numbers:
+        total = total * 60 + number
+    return int(total)
+
+
+def _clip(raw: dict) -> IvodClip | None:
+    ivod_id = raw.get("IVOD_ID")
+    if ivod_id is None:
+        return None
+    meeting = (raw.get("會議資料") or {}).get("標題") or ""
+    features = raw.get("支援功能")
+    return IvodClip(
+        ivod_id=str(ivod_id),
+        date=str(raw.get("日期") or ""),
+        speaker=str(raw.get("委員名稱") or ""),
+        meeting=str(meeting),
+        duration_seconds=_duration(raw.get("影片長度")),
+        ivod_url=str(raw.get("IVOD_URL") or ""),
+        has_transcript="ai-transcript" in (features or []),
+    )
+
+
+class IvodDailySource:
+    def __init__(self, base: str, fetch=_http_get):
+        self._base = base.rstrip("/")
+        self._fetch = fetch
+
+    def clips_for(self, day: date, only_with_transcript: bool = True) -> list[IvodClip]:
+        """某一天的質詢片段，最早的排前面。
+
+        只收 Clip（一位委員的一段發言）。完整會議是 8 小時的錄影，壓成十幾
+        頁不是新聞，而且它的影片主機實測連不上、拿不到截圖。
+        """
+        clips: list[IvodClip] = []
+        page = 1
+        while True:
+            payload = self._page(day, page)
+            rows = payload.get("ivods")
+            if not isinstance(rows, list) or not rows:
+                break
+            clips.extend(c for c in (_clip(r) for r in rows if isinstance(r, dict))
+                         if c is not None)
+            if page >= int(payload.get("total_page") or 1):
+                break
+            page += 1
+        if only_with_transcript:
+            clips = [c for c in clips if c.has_transcript]
+        return sorted(clips, key=lambda c: int(c.ivod_id))
+
+    def _page(self, day: date, page: int) -> dict:
+        query = urllib.parse.urlencode({
+            "日期": day.isoformat(),
+            "影片種類": "Clip",
+            "limit": _PAGE_SIZE,
+            "page": page,
+        })
+        try:
+            return json.loads(self._fetch(f"{self._base}?{query}"))
+        except (OSError, ValueError) as e:
+            raise IvodUnavailable(f"立法院 API 取得失敗：{str(e)[:200]}") from e

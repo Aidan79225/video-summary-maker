@@ -1,0 +1,53 @@
+"""常駐排程：每天固定時間跑一次匯入。
+
+    python manage.py run_scheduler
+
+想用系統排程的人可以不要這個指令，直接用 cron 或 systemd timer 跑
+`manage.py ingest_ivod`——兩邊跑的是同一段程式碼。
+"""
+from __future__ import annotations
+
+import logging
+import signal
+
+from django.conf import settings
+from django.core.management import call_command
+from django.core.management.base import BaseCommand
+
+logger = logging.getLogger(__name__)
+
+
+class Command(BaseCommand):
+    help = "每天固定時間自動匯入立法院當日的質詢摘要"
+
+    def add_arguments(self, parser) -> None:
+        parser.add_argument("--hour", type=int, default=settings.INGEST_HOUR)
+        parser.add_argument("--minute", type=int, default=10)
+        parser.add_argument("--now", action="store_true", help="啟動時先跑一次")
+
+    def handle(self, *args, **options) -> None:
+        from apscheduler.schedulers.blocking import BlockingScheduler
+
+        scheduler = BlockingScheduler(timezone=settings.TIME_ZONE)
+        hour, minute = options["hour"], options["minute"]
+
+        def job() -> None:
+            # 包起來：例外若冒出排程，APScheduler 會把這個工作移除，之後
+            # 就再也不會跑——而使用者不會發現，只會覺得「新聞停更了」。
+            try:
+                call_command("ingest_ivod")
+            except Exception:  # noqa: BLE001
+                logger.exception("每日匯入失敗，排程繼續")
+
+        scheduler.add_job(job, "cron", hour=hour, minute=minute, id="ingest_ivod",
+                          max_instances=1, coalesce=True, misfire_grace_time=3600)
+        signal.signal(signal.SIGTERM, lambda *_: scheduler.shutdown(wait=False))
+
+        self.stdout.write(
+            f"排程已啟動：每天 {hour:02d}:{minute:02d}（{settings.TIME_ZONE}）")
+        if options["now"]:
+            job()
+        try:
+            scheduler.start()
+        except (KeyboardInterrupt, SystemExit):
+            self.stdout.write("排程停止")
