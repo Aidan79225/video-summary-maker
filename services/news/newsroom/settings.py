@@ -4,6 +4,8 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+from newsroom.guards import DEV_SECRET_KEY
+
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 
@@ -16,9 +18,9 @@ def _env_list(name: str, default: str) -> list[str]:
     return [item.strip() for item in os.environ.get(name, default).split(",") if item.strip()]
 
 
-# 正式部署請務必設 DJANGO_SECRET_KEY。預設值只夠開發用，而且會讓
-# DEBUG=False 的部署帶著一把大家都知道的鑰匙。
-SECRET_KEY = os.environ.get("DJANGO_SECRET_KEY", "dev-only-not-for-production")
+# 正式部署請務必設 DJANGO_SECRET_KEY。這個預設值只夠開發用——它寫在公開
+# 的原始碼裡，所以 DEBUG=False 時 wsgi/asgi 會直接拒絕啟動（見 guards.py）。
+SECRET_KEY = os.environ.get("DJANGO_SECRET_KEY", DEV_SECRET_KEY)
 DEBUG = _env_bool("DJANGO_DEBUG", False)
 ALLOWED_HOSTS = _env_list("DJANGO_ALLOWED_HOSTS", "localhost,127.0.0.1,[::1]")
 CSRF_TRUSTED_ORIGINS = _env_list("DJANGO_CSRF_TRUSTED_ORIGINS", "")

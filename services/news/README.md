@@ -21,11 +21,21 @@ API 在 <http://localhost:8000/api/health>，互動式文件在 <http://localhos
 
 管理後台（可選）：`uv run python manage.py createsuperuser`，然後開 `/admin/`。
 
+## 正式部署前一定要做的一件事
+
+```bash
+python -c "import secrets; print(secrets.token_urlsafe(64))"
+```
+
+把結果設成 `DJANGO_SECRET_KEY`。這個專案的原始碼是公開的，預設值等於全世界都知道——用它簽 session 與 CSRF 等於沒簽，而且**不會有任何症狀**。所以 `DEBUG=False` 時只要金鑰還是預設值，wsgi/asgi 會直接拒絕啟動（`newsroom/guards.py`）。
+
+離線工作（`migrate`、`ingest_ivod`、測試）不受影響——那些不對外服務，沒有這個風險。
+
 ## 環境變數
 
 | 變數 | 預設 | 說明 |
 |---|---|---|
-| `DJANGO_SECRET_KEY` | 開發用的假值 | **正式部署一定要設** |
+| `DJANGO_SECRET_KEY` | 開發用的假值 | **一定要設**；`DEBUG=False` 時沒設會直接拒絕啟動 |
 | `DJANGO_DEBUG` | `False` | |
 | `DJANGO_ALLOWED_HOSTS` | `localhost,127.0.0.1,[::1]` | 逗號分隔；要加 Pi 的位址 |
 | `DJANGO_DB_PATH` | `services/news/db.sqlite3` | |
