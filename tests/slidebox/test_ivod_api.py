@@ -5,7 +5,7 @@ import json
 
 import pytest
 
-from slidebox.domain.errors import NoSubtitlesAvailable, SubtitleDownloadFailed
+from slidebox.domain.errors import SubtitleDownloadFailed
 from slidebox.infrastructure.ivod_api import IvodClient, IvodSubtitleGateway
 
 RECORD = {
@@ -120,7 +120,7 @@ def test_a_record_whose_segments_are_all_empty_is_not_silently_accepted():
     record = {**RECORD, "transcript": {"whisperx": [
         {"start": 0.0, "end": 1.0, "text": ""}]}}
     gateway, _ = _gateway(FakeFetch({"data": record}))
-    with pytest.raises(NoSubtitlesAvailable):
+    with pytest.raises(SubtitleDownloadFailed):
         gateway.fetch(URL, ())
 
 
@@ -141,3 +141,89 @@ def test_a_different_id_is_fetched_again():
     client.record("171180")
     client.record("17704")
     assert len(fetch.urls) == 2
+
+
+# --- 審查後補強 ---
+
+
+def test_a_record_without_a_transcript_is_not_cached():
+    """攔的 bug：無條件快取會讓「立法院產生逐字稿後再試一次」永遠失敗——
+    錯誤訊息明明就叫使用者稍後重試，佇列也有重試按鈕。"""
+    empty = {**RECORD, "transcript": {}}
+    fetch = FakeFetch({"data": empty})
+    gateway = IvodSubtitleGateway(IvodClient(fetch=fetch))
+    with pytest.raises(SubtitleDownloadFailed):
+        gateway.fetch(URL, ())
+    # 立法院這時把逐字稿產出來了
+    fetch._payload = {"data": RECORD}
+    assert len(gateway.fetch(URL, ()).cues) == 2
+
+
+def test_a_complete_record_is_still_cached():
+    fetch = FakeFetch()
+    client = IvodClient(fetch=fetch)
+    client.record("171180")
+    client.record("171180")
+    assert len(fetch.urls) == 1
+
+
+def test_a_segment_with_an_unparseable_time_is_skipped_not_fatal():
+    """攔的 bug：裸 float() 遇到 "00:01:02" 會 ValueError，一路衝到 UI 顯示
+    「could not convert string to float」——使用者完全看不懂，也繞過了
+    「要不要改走語音」的判斷。"""
+    record = {**RECORD, "transcript": {"whisperx": [
+        {"start": "00:01:02", "end": 5.0, "text": "壞掉的一段"},
+        {"start": 10.0, "end": 12.0, "text": "正常的一段"},
+    ]}}
+    gateway, _ = _gateway(FakeFetch({"data": record}))
+    assert [c.text for c in gateway.fetch(URL, ()).cues] == ["正常的一段"]
+
+
+def test_a_transcript_that_is_a_list_does_not_crash():
+    """空物件被序列化成 [] 是常見的 API 行為；非空 list 也要擋住。"""
+    record = {**RECORD, "transcript": [{"whisperx": []}]}
+    gateway, _ = _gateway(FakeFetch({"data": record}))
+    with pytest.raises(SubtitleDownloadFailed):
+        gateway.fetch(URL, ())
+
+
+def test_a_response_whose_data_is_not_an_object_is_reported_clearly():
+    gateway, _ = _gateway(FakeFetch({"data": ["不是物件"]}))
+    with pytest.raises(SubtitleDownloadFailed) as e:
+        gateway.fetch(URL, ())
+    assert "格式" in str(e.value)
+
+
+def test_a_non_ivod_url_is_refused_instead_of_hitting_the_list_endpoint():
+    gateway, fetch = _gateway()
+    with pytest.raises(SubtitleDownloadFailed):
+        gateway.fetch("https://www.youtube.com/watch?v=dQw4w9WgXcQ", ())
+    assert fetch.urls == []
+
+
+def test_the_duration_falls_back_to_the_last_segment_when_it_is_missing():
+    record = {**RECORD}
+    del record["影片長度"]
+    gateway, _ = _gateway(FakeFetch({"data": record}))
+    assert gateway.fetch(URL, ()).duration == pytest.approx(22.0)
+
+
+def test_a_full_session_still_gets_a_usable_title():
+    """完整會議沒有委員名稱以外的線索；標題不能只剩下會議名。"""
+    record = {**RECORD, "委員名稱": "完整會議"}
+    gateway, _ = _gateway(FakeFetch({"data": record}))
+    title = gateway.fetch(URL, ()).title
+    assert "完整會議" in title and "2026-08-27" in title
+
+
+def test_a_record_with_no_names_at_all_still_has_a_title():
+    record = {k: v for k, v in RECORD.items() if k not in ("委員名稱", "日期", "會議資料")}
+    gateway, _ = _gateway(FakeFetch({"data": record}))
+    assert gateway.fetch(URL, ()).title.strip() != ""
+
+
+def test_a_record_with_no_video_url_is_reported():
+    record = {k: v for k, v in RECORD.items() if k != "video_url"}
+    client = IvodClient(fetch=FakeFetch({"data": record}))
+    with pytest.raises(SubtitleDownloadFailed):
+        client.video_url("171180")

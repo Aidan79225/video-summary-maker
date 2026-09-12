@@ -41,13 +41,36 @@ def test_the_forwarder_builds_the_summarizer_with_the_settings_of_the_moment():
     assert built == [(settings.ollama_host, "b", settings.num_ctx)]
 
 
-def test_the_pipeline_can_be_built_without_touching_the_ui():
-    """長期目標是讓無介面的服務每天跑一輪。build_usecase 一旦需要 Qt 或
-    設定檔，那條路就走不通了。"""
-    from slidebox.composition import build_usecase
+def test_the_pipeline_can_be_built_without_qt():
+    """長期目標是讓無介面的服務每天跑一輪產出網頁。
 
-    usecase = build_usecase(Settings(output_dir="OUT"))
-    assert usecase is not None
+    攔的 bug：composition 在 module 層級 import presentation，於是
+    `from slidebox.composition import build_usecase` 會拉進十幾個 PySide6
+    模組——無頭機器沒有 libGL/xcb，連 import 都會失敗。在本行程裡測不
+    出來（開發機裝得起 PySide6），所以開一個把 PySide6 擋掉的子行程。
+    """
+    import subprocess
+    import sys
+
+    code = (
+        "import sys;"
+        "sys.path.insert(0, 'src');"
+        "sys.modules['PySide6'] = None;"
+        "from slidebox.composition import build_usecase;"
+        "from slidebox.domain.entities import Settings;"
+        "build_usecase(Settings(output_dir='OUT'));"
+        "print('ok')"
+    )
+    result = subprocess.run([sys.executable, "-c", code], capture_output=True,
+                            text=True, cwd=_repo_root())
+    assert result.returncode == 0, result.stderr[-800:]
+    assert "ok" in result.stdout
+
+
+def _repo_root() -> str:
+    import os
+    here = os.path.abspath(__file__)
+    return os.path.dirname(os.path.dirname(os.path.dirname(here)))
 
 
 def test_an_ivod_url_reaches_the_ivod_gateways():

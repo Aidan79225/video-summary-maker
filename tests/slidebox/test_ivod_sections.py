@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import subprocess
 
 import pytest
 
@@ -86,9 +87,9 @@ def test_one_failed_timestamp_only_costs_that_page(tmp_path):
     assert paths[1] is not None
 
 
-def test_an_unreachable_stream_stops_after_the_first_attempt(tmp_path):
-    """完整會議的影片主機實測連不上，每次嘗試要等 20 秒逾時。15 頁就是
-    5 分鐘的空等——輸入開不起來時，後面每一個時間點都注定一樣的結果。"""
+def test_an_unreachable_stream_gives_up_after_two_failures(tmp_path):
+    """完整會議的影片主機實測連不上，每次嘗試要等滿逾時。15 頁就是好幾
+    分鐘的空等——整支影片取不到時，後面每個時間點都注定一樣的結果。"""
     runner = FakeRunner(fail_at=range(20), stderr="Error opening input: Connection timed out")
     statuses = []
     paths = IvodSectionGateway(FakeClient(), runner=runner, ffmpeg_exe="ffmpeg"
@@ -96,8 +97,47 @@ def test_an_unreachable_stream_stops_after_the_first_attempt(tmp_path):
         URL, [0.0, 30.0, 60.0, 90.0], None, str(tmp_path),
         lambda f, s: statuses.append(s), lambda: False)
     assert paths == [None, None, None, None]
-    assert len(runner.commands) == 1
+    assert len(runner.commands) == 2
     assert any("影片" in s for s in statuses)
+
+
+def test_timeouts_also_count_towards_giving_up(tmp_path):
+    """攔的 bug：用比對 ffmpeg 錯誤字串來判斷「整支取不到」，逾時完全不
+    符合任何字串——15 頁 × 逾時＝好幾分鐘空等，期間按取消也沒有反應。"""
+    class TimingOutRunner:
+        def __init__(self):
+            self.commands = []
+
+        def __call__(self, command, **kwargs):
+            self.commands.append(list(command))
+            raise subprocess.TimeoutExpired(command, kwargs.get("timeout", 30))
+
+    runner = TimingOutRunner()
+    paths = IvodSectionGateway(FakeClient(), runner=runner, ffmpeg_exe="ffmpeg"
+                               ).download_sections(
+        URL, [0.0, 30.0, 60.0, 90.0], None, str(tmp_path), _noop, lambda: False)
+    assert paths == [None, None, None, None]
+    assert len(runner.commands) == 2
+
+
+def test_a_single_hiccup_does_not_cost_the_whole_deck(tmp_path):
+    """攔的 bug：把「Connection reset by peer」這種瞬斷當成整支影片取不到，
+    第一頁不巧失敗就讓後面 14 頁一次都不試，成品零截圖。"""
+    runner = FakeRunner(fail_at=(0, 2), stderr="Connection reset by peer")
+    paths = _gateway(runner=runner).download_sections(
+        URL, [0.0, 30.0, 60.0, 90.0], None, str(tmp_path), _noop, lambda: False)
+    assert [p is not None for p in paths] == [False, True, False, True]
+
+
+def test_the_clip_is_copied_not_re_encoded(tmp_path):
+    """攔的 bug：少了 -c copy 會整段重新編碼，每頁從 1 秒變數十秒。"""
+    runner = FakeRunner()
+    _gateway(runner=runner).download_sections(
+        URL, [0.0], None, str(tmp_path), _noop, lambda: False)
+    command = runner.commands[0]
+    assert "copy" in command
+    assert "-an" in command
+    assert command[command.index("-t") + 1] == "4.0"
 
 
 def test_a_stream_url_that_cannot_be_resolved_degrades_to_a_deck_with_no_images(tmp_path):

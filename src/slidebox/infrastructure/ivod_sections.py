@@ -14,18 +14,22 @@ import shutil
 import subprocess
 from collections.abc import Sequence
 
-from ..domain.errors import OperationCancelled
+from ..domain.errors import NoSubtitlesAvailable, OperationCancelled
 from ..domain.ports import CancelCheck, ProgressCallback
 from ..usecases.sources import ivod_id
 from .ffmpeg import get_ffmpeg_exe
 from .ivod_api import IvodClient
 
-# 單次 ffmpeg 呼叫的上限。連不上的主機實測要等 20 秒才逾時，設上限才不會
-# 讓一份摘要卡在網路層。
-_TIMEOUT_SECONDS = 90
+# 單次 ffmpeg 呼叫的上限。實測切一段 4 秒片段只要 1 秒，所以 30 秒已經很
+# 寬鬆；而且這個值必須小於關視窗時等 worker 的 30 秒（deck_page 的
+# _SHUTDOWN_WAIT_MS），否則「等不到就硬關」的崩潰會回來。
+_TIMEOUT_SECONDS = 30
 
-# 這些字樣代表「輸入根本開不起來」，不是這個時間點的問題
-_INPUT_ERRORS = ("Error opening input", "Server returned", "Connection", "No such file")
+# 連續失敗幾次就放棄剩下的時間點。整支影片取不到時（例如完整會議的影片
+# 主機連不上），每個時間點都要等滿逾時——15 頁就是好幾分鐘的空等。
+# 用「連續失敗」而不是比對 ffmpeg 的錯誤字串：字串會變，而且逾時根本不
+# 產生 ffmpeg 的錯誤訊息；偶發的單點失敗也不該讓整份摘要零截圖。
+_MAX_CONSECUTIVE_FAILURES = 2
 
 
 class IvodSectionGateway:
@@ -48,37 +52,44 @@ class IvodSectionGateway:
         """max_height 用不到：IVOD 的 API 只給一個串流網址，沒得挑畫質。"""
         os.makedirs(dest_dir, exist_ok=True)
         total = max(1, len(timestamps))
+        video_id = ivod_id(url)
+        if video_id is None:
+            # 走到這裡表示路由接錯了。不打 API——少了 id 會變成打清單端點，
+            # 一次無謂的請求換一個看不懂的錯。
+            progress(1.0, f"這不是 IVOD 的播放網址（{url[:60]}），將產出無截圖的摘要")
+            return [None] * len(timestamps)
         try:
-            stream = self._client.video_url(ivod_id(url) or "")
-        except Exception as e:  # noqa: BLE001 拿不到影片仍要出片
+            stream = self._client.video_url(video_id)
+        except (NoSubtitlesAvailable, OSError) as e:
             # 逐字稿已經拿到了，沒有截圖的摘要依然有用——這正是既有的
             # 「部分截圖失敗仍然出片」策略。完整會議的影片主機連不上時
-            # 就會走到這裡。
+            # 就會走到這裡。收窄例外型別是刻意的：裸 Exception 會把程式
+            # 錯誤也靜默降級成「沒有畫面」，而截圖全缺是最難察覺的失效。
             progress(1.0, f"這段 IVOD 沒有可用的影片（{str(e)[:80]}），將產出無截圖的摘要")
             return [None] * len(timestamps)
 
         results: list[str | None] = []
         first_error: str | None = None
+        consecutive = 0
         for i, start in enumerate(timestamps):
             if is_cancelled():
                 raise OperationCancelled()
-            if first_error is not None and _looks_like_input_failure(first_error):
-                # 輸入開不起來時，後面每個時間點都注定一樣的結果。15 頁
-                # × 20 秒逾時＝五分鐘的空等。
+            if consecutive >= _MAX_CONSECUTIVE_FAILURES:
+                # 連續失敗代表整支影片取不到，不是這個時間點的問題
                 results.append(None)
                 continue
             progress(i / total, f"擷取畫面 {i + 1}/{total}")
             path, error = self._one(stream, start, dest_dir, i)
             results.append(path)
+            consecutive = 0 if path is not None else consecutive + 1
             if error and first_error is None:
                 first_error = error
 
         ok = sum(r is not None for r in results)
-        if first_error and ok < total:
-            if _looks_like_input_failure(first_error):
-                progress(1.0, f"取不到影片畫面（{first_error[:80]}），將產出無截圖的摘要")
-            else:
-                progress(1.0, f"畫面擷取完成（{ok}/{total}）；失敗原因：{first_error[:120]}")
+        if ok == 0 and first_error:
+            progress(1.0, f"取不到影片畫面（{first_error[:80]}），將產出無截圖的摘要")
+        elif first_error and ok < total:
+            progress(1.0, f"畫面擷取完成（{ok}/{total}）；失敗原因：{first_error[:120]}")
         else:
             progress(1.0, f"畫面擷取完成（{ok}/{total}）")
         return results
@@ -110,7 +121,3 @@ class IvodSectionGateway:
         if result.returncode == 0 and os.path.exists(dest) and os.path.getsize(dest) > 0:
             return dest, ""
         return None, (getattr(result, "stderr", "") or "").strip()[:200] or "ffmpeg 失敗"
-
-
-def _looks_like_input_failure(error: str) -> bool:
-    return any(marker in error for marker in _INPUT_ERRORS)

@@ -52,6 +52,13 @@ class BySourceSectionGateway:
         cleanup 的簽章裡沒有 url（它在 finally 裡被呼叫，那時可能連網址都
         還沒用到），所以無從判斷該清哪一邊。兩個實作都是「刪掉這個目錄，
         不存在也不報錯」，呼叫兩次是安全的；猜錯邊才會把暫存片段留下來。
+
+        **本 router 要求每個分支的 cleanup 都是無副作用的刪目錄**——它會
+        對沒跑過的那一邊也呼叫一次。若哪天某個實作的 cleanup 帶了副作用
+        （例如殺掉自己的 subprocess），這個假設就不成立了。
         """
-        self._default.cleanup(dest_dir)
-        self._ivod.cleanup(dest_dir)
+        for gateway in (self._default, self._ivod):
+            try:
+                gateway.cleanup(dest_dir)
+            except Exception:  # noqa: BLE001 port 契約說不可 raise；萬一違約，
+                pass           # 也不能讓前一個的失敗害後一個不被清理

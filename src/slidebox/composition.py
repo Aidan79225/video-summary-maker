@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+from typing import TYPE_CHECKING
 
 from .domain.entities import Settings, Slide
 from .domain.ports import CancelCheck, ProgressCallback
@@ -19,9 +20,10 @@ from .infrastructure.whisper_transcriber import FasterWhisperTranscriber
 from .infrastructure.ytdlp_audio import YtDlpAudioGateway
 from .infrastructure.ytdlp_sections import YtDlpSectionGateway
 from .infrastructure.ytdlp_subtitles import YtDlpSubtitleGateway
-from .presentation.deck_page import DeckPage
-from .presentation.main_window import MainWindow
 from .usecases.build_deck import BuildDeckUseCase
+
+if TYPE_CHECKING:
+    from .presentation.main_window import MainWindow
 
 # 預設輸出資料夾
 DEFAULT_OUTPUT_DIR = r"C:\Users\Aidan\Desktop\影片摘要"
@@ -86,7 +88,14 @@ def build_usecase(settings: Settings) -> BuildDeckUseCase:
     )
 
 
-def build_main_window() -> MainWindow:
+def build_main_window() -> "MainWindow":
+    # presentation 的 import 刻意放在函式內：module 層級 import 會讓
+    # `from slidebox.composition import build_usecase` 一併拉進 PySide6，
+    # 無頭機器（沒有 libGL/xcb）連 import 都會失敗——那正是抽出
+    # build_usecase 要服務的場景。
+    from .presentation.deck_page import DeckPage
+    from .presentation.main_window import MainWindow
+
     settings_repo = JsonSettingsRepository(
         os.path.join(_project_root(), "slidebox_settings.json")
     )

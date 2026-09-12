@@ -10,7 +10,7 @@ import urllib.request
 from collections.abc import Sequence
 
 from ..domain.entities import Cue, Transcript
-from ..domain.errors import NoSubtitlesAvailable, SubtitleDownloadFailed
+from ..domain.errors import SubtitleDownloadFailed
 from ..usecases.sources import ivod_id
 
 _BASE = "https://ly.govapi.tw/v2/ivods"
@@ -23,6 +23,21 @@ _SOURCE_NOTE = "逐字稿由立法院 AI 自動產生，可能有辨識錯誤"
 def _http_get(url: str) -> str:
     with urllib.request.urlopen(url, timeout=30) as resp:
         return resp.read().decode("utf-8")
+
+
+def _number(value: object) -> float | None:
+    """能轉成秒數就回傳，否則 None。
+
+    API 的欄位不保證型別（實測 start 有時是 int 有時是 float）。裸 float()
+    碰到字串或 list 會讓整批逐字稿爆掉，使用者看到的是
+    「could not convert string to float」這種毫無意義的訊息。
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float, str)):
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _seconds(text: str) -> float:
@@ -52,18 +67,27 @@ class IvodClient:
         self._cached: dict = {}
 
     def record(self, video_id: str) -> dict:
-        if video_id == self._cached_id:
+        if video_id == self._cached_id and self._cached:
             return self._cached
         try:
             payload = json.loads(self._fetch(f"{self._base}/{video_id}"))
-        except Exception as e:  # noqa: BLE001 網路或格式問題都是同一種結局
+        except (OSError, ValueError) as e:
+            # OSError 涵蓋 urllib 的網路錯誤，ValueError 涵蓋 JSON 解析失敗。
+            # 不用裸 Exception：那會把 fetch 注入者自己的程式錯誤也吞成
+            # 「無法取得資料」，bug 會躲很久。
             raise SubtitleDownloadFailed(
                 f"無法取得 IVOD {video_id} 的資料：{str(e)[:160]}"
             ) from e
         data = payload.get("data") if isinstance(payload, dict) else None
         if not isinstance(data, dict):
             raise SubtitleDownloadFailed(f"IVOD {video_id} 的回應格式不符預期")
-        self._cached_id, self._cached = video_id, data
+        # 沒有逐字稿的 record 不快取：那是會變的（立法院產生之後就有了），
+        # 快取住會讓「稍後重試」在同一個 session 內永遠失敗——而錯誤訊息
+        # 與佇列的重試按鈕都在邀請使用者重試。
+        if _whisperx(data):
+            self._cached_id, self._cached = video_id, data
+        else:
+            self._cached_id, self._cached = None, {}
         return data
 
     def video_url(self, video_id: str) -> str:
@@ -84,14 +108,8 @@ class IvodSubtitleGateway:
             raise SubtitleDownloadFailed(f"這不是 IVOD 的播放網址：{url}")
         record = self._client.record(video_id)
 
-        segments = ((record.get("transcript") or {}).get("whisperx")) or []
-        cues = tuple(
-            Cue(start=float(s.get("start") or 0.0),
-                end=float(s.get("end") or 0.0),
-                text=" ".join(str(s.get("text") or "").split()))
-            for s in segments
-            if isinstance(s, dict) and str(s.get("text") or "").strip()
-        )
+        cues = tuple(c for c in (_cue(s) for s in _whisperx(record))
+                     if c is not None)
         if not cues:
             # 刻意用 SubtitleDownloadFailed：一般的 NoSubtitlesAvailable 會啟動
             # 語音備援，而備援用的是 yt-dlp，它不認得 IVOD 網址——使用者最後
@@ -116,6 +134,31 @@ class IvodSubtitleGateway:
         )
 
 
+def _whisperx(record: dict) -> list:
+    """取出 whisperx 段落；任何一層型別不對就當成沒有。
+
+    空物件被序列化成 `[]` 是常見的 API 行為，非空 list 也可能出現——
+    `.get()` 直接打在 list 上會 AttributeError。
+    """
+    transcript = record.get("transcript")
+    if not isinstance(transcript, dict):
+        return []
+    segments = transcript.get("whisperx")
+    return segments if isinstance(segments, list) else []
+
+
+def _cue(segment: object) -> Cue | None:
+    """一段轉一個 Cue；時間或文字有問題就跳過這一段，不讓整批爆掉。"""
+    if not isinstance(segment, dict):
+        return None
+    text = " ".join(str(segment.get("text") or "").split())
+    start = _number(segment.get("start"))
+    end = _number(segment.get("end"))
+    if not text or start is None or end is None:
+        return None
+    return Cue(start=start, end=end, text=text)
+
+
 def _title(record: dict, video_id: str) -> str:
     """`日期 委員－會議`。資料夾名稱用的就是它，要能一眼分辨是哪一段發言。"""
     meeting = (record.get("會議資料") or {}).get("標題") or ""
@@ -126,6 +169,3 @@ def _title(record: dict, video_id: str) -> str:
     if head and meeting:
         return f"{head}－{meeting}"
     return head or meeting or f"IVOD {video_id}"
-
-
-__all__ = ["IvodClient", "IvodSubtitleGateway", "NoSubtitlesAvailable"]

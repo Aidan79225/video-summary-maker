@@ -55,6 +55,38 @@ composition.py              build_usecase(settings) + 路由接線
 ## 已知限制
 
 - **逐字稿是 AI 產的**，有錯字；台語發言品質更差。成品會標註來源。
-- **沒有 `ai-transcript` 的影片**會落到既有的語音辨識備援，但 yt-dlp 不認得 IVOD 網址，那條路會失敗並回報錯誤——不無聲吞掉。
+- **沒有 `ai-transcript` 的影片**會直接說明原因並停下，不落到語音備援——備援用的是 yt-dlp，它不認得 IVOD 網址，降級只會用一個無關的「無法下載音訊」蓋掉真正的原因。
 - **畫質設定對 IVOD 無效**：API 只給一個串流網址。
 - **8 小時的完整會議**逐字稿 32k 字，超過預設 `char_budget` 會被等比壓縮。IVOD 的 Clip（一位委員的一段發言）才是自然的摘要單位。
+
+## 端到端實測（Clip 171180）
+
+165 秒產出 3 頁、**截圖 3/3 全數成功**，資料夾名 `2026-08-27 洪毓祥－第11屆第5會期第23次會議 [171180]`，來源註記進了 HTML，暫存片段清乾淨。摘要內容正確（國防自主、供應鏈認證、反對特別預算）。
+
+## 審查後的修正
+
+### 快取永不失效，讓「稍後重試」變成死路（Critical）
+
+`IvodClient` 無條件快取成功的 record。但「這段還沒有 AI 逐字稿」的錯誤訊息明明在邀請使用者稍後重試，佇列也有重試按鈕——逐字稿產生之後，同一個 session 內永遠拿不到，還會跟佇列的「連續兩項失敗就暫停」疊加成「看起來壞掉了」。改成**只快取有逐字稿的 record**：那才是不會再變的資料。
+
+### 靠比對 ffmpeg 錯誤字串判斷「整支取不到」（Critical）
+
+原本用 `Error opening input` 這類字串短路，但 **逾時根本不產生 ffmpeg 的錯誤訊息**，於是 15 頁 × 90 秒 = 22 分鐘空等，期間按取消也沒有反應。反過來，`Connection reset by peer` 這種單次瞬斷卻會被當成整支影片取不到，第一頁不巧失敗就讓後面 14 頁一次都不試。
+
+改成**連續 2 次失敗才放棄**（與佇列的既有規則一致），一次修掉兩邊，也不必再猜 ffmpeg 的字串。`_TIMEOUT_SECONDS` 同時從 90 降到 30——實測切片只要 1 秒，而且這個值必須小於關視窗時等 worker 的 30 秒，否則之前修掉的關窗崩潰會回來。
+
+### `build_usecase` 其實還是需要 PySide6（Important）
+
+抽出它的唯一理由就是無頭重用，但 `composition.py` 在 module 層級 import 了 presentation——`from slidebox.composition import build_usecase` 會拉進 17 個 PySide6 模組，無頭機器沒有 libGL/xcb 連 import 都會失敗。而測試 `assert usecase is not None` 永遠是綠的：一個宣稱在守門的測試，門其實是開的。
+
+把兩個 import 移進 `build_main_window()`，測試改成開一個把 PySide6 擋掉的子行程真的 import 一次。退回 module 層級 import 會讓它變紅。
+
+### 其餘
+
+- **佇列的去重不認得 IVOD**：`video_key` 只認 11 碼 YouTube id，所以同一段發言的不同網址寫法會排兩次，而且第二次覆寫第一次的成品資料夾——正是這個函式本來要防的事。改用現成的 `ivod_id`。
+- **裸 `float()` 解析 API 欄位**：`start` 是字串或 list 時整批逐字稿爆掉，UI 顯示「could not convert string to float」。改成單段跳過；`transcript` 是 list 時也不再 AttributeError。
+- **`except Exception` 把程式錯誤降級成「沒有畫面」**：截圖全缺是最難察覺的失效模式，bug 會躲很久。收窄成 `(NoSubtitlesAvailable, OSError)`；`IvodClient.record` 收窄成 `(OSError, ValueError)`。
+- 路由的 `cleanup` 對兩邊都呼叫，各包一層保護——port 契約說不可 raise，但萬一違約，不該讓前一個的失敗害後一個的暫存目錄留著。
+- 兩個轉發層補上 `inspect.signature` 與 port 比對的測試（沿用既有手法）。
+- 刪掉全專案唯一一個 `__all__`（它的作用只是遮住一個沒用到的 import）。
+- UI 的 placeholder 與 README 補上 IVOD——原本功能沒有入口。
