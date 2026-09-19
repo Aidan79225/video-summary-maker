@@ -15,7 +15,12 @@ from factcheck.domain.entities import (
     Speech,
     Verdict,
 )
-from factcheck.domain.errors import ModelOutputInvalid, OperationCancelled, SourceUnavailable
+from factcheck.domain.errors import (
+    ModelOutputInvalid,
+    ModelUnavailable,
+    OperationCancelled,
+    SourceUnavailable,
+)
 from factcheck.usecases.check import FactCheckUseCase
 
 TRANSCRIPT = ("00:16 醫療暴力層出不窮\n"
@@ -58,9 +63,11 @@ class FakeJudge:
         self.judgement = judgement or Judgement(Verdict.SUPPORTED, "處新臺幣三萬元以上五萬元以下罰鍰", "條文相同")
         self.error = error
         self.calls = 0
+        self.statements = []
 
     def judge(self, statement, evidence):
         self.calls += 1
+        self.statements.append(statement)
         if self.error is not None:
             raise self.error
         return self.judgement
@@ -142,6 +149,19 @@ def test_a_model_quote_that_is_not_in_the_evidence_voids_the_judgement():
 def test_an_unreadable_judgement_is_unverifiable():
     [checked] = _run([_claim(figures=())], judge=FakeJudge(error=ModelOutputInvalid("x")))
     assert checked.verdict == Verdict.UNVERIFIABLE
+
+
+def test_the_judge_sees_the_speech_date():
+    """議案狀態是查詢當下的；判讀要知道發言日期，才分得出「當時」與「現在」。"""
+    judge = FakeJudge()
+    _run([_claim(figures=())], judge=judge)
+    assert judge.statements == ["醫療法現行罰鍰為 3 萬到 5 萬元（發言日期：2026-08-25）"]
+
+
+def test_an_unavailable_model_fails_the_whole_speech():
+    """模型連不上是整篇做不下去，不能把每一則都記成無法查證。"""
+    with pytest.raises(ModelUnavailable):
+        _run([_claim(figures=())], judge=FakeJudge(error=ModelUnavailable("連不上 Ollama")))
 
 
 def test_cancelling_stops_before_the_next_claim():

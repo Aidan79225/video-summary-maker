@@ -75,7 +75,8 @@ def test_bills_proposed_after_the_speech_are_not_evidence():
 
 def test_status_claims_quote_the_bill_status():
     evidence = _source()[0].find(_claim(kind=ClaimKind.BILL_STATUS), SPEECH_DAY)
-    assert evidence[0].excerpt.startswith("議案狀態：")
+    # 狀態是查詢當下的，不是發言當天的：標明白，判讀時才不會當成發言當時的狀態
+    assert evidence[0].excerpt.startswith("查詢時的議案狀態：")
 
 
 def test_keywords_are_tried_in_turn_until_something_is_found():
@@ -93,3 +94,28 @@ def test_no_keywords_means_no_search():
     source, fetch = _source()
     assert source.find(_claim(keywords=""), SPEECH_DAY) == []
     assert fetch.urls == []
+
+
+def _recording_search():
+    queries: list[str] = []
+
+    def search(query):
+        queries.append(query["q"])
+        return {"bills": []}
+
+    return search, queries
+
+
+def test_the_proposer_is_never_used_as_a_keyword():
+    """攔的 bug（實測）：模型把提案者塞進 bill_keywords，搜「行政院」會命中幾百個不相干的議案。"""
+    search, queries = _recording_search()
+    _source(search)[0].find(_claim(keywords="無人機 行政院", proposer="行政院"), SPEECH_DAY)
+    assert queries == ['"無人機"']
+
+
+def test_party_names_are_never_used_as_keywords():
+    """實測抽出「醫療暴力 臺灣民眾黨」：政黨、黨團與它們的別名都不是議案名稱裡的詞。"""
+    search, queries = _recording_search()
+    claim = _claim(keywords="醫療暴力 臺灣民眾黨 國民黨黨團 民進黨 行政院", proposer="")
+    _source(search)[0].find(claim, SPEECH_DAY)
+    assert queries == ['"醫療暴力"']

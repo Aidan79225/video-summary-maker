@@ -13,6 +13,7 @@ from factcheck.infrastructure.ollama import (
     MAX_CLAIMS,
     OllamaClaimExtractor,
     OllamaTextJudge,
+    build_extract_messages,
     build_judge_messages,
     parse_claims,
     parse_judgement,
@@ -91,9 +92,18 @@ def test_the_extractor_sends_a_constrained_deterministic_request():
     assert body["model"] == "qwen3.5:9b"
     assert body["format"] == EXTRACT_SCHEMA
     assert body["stream"] is False
+    # 攔的 bug：qwen3.5 是思考型模型，不關思考會把整段時間拿去推理、回空的 content
+    assert body["think"] is False
     assert body["options"] == {"num_ctx": 32768, "temperature": 0}
     prompt = body["messages"][-1]["content"]
     assert "邱慧洳" in prompt and "3萬到5萬" in prompt
+
+
+def test_the_extract_prompt_excludes_officials_and_party_keywords():
+    """官員的回答不是委員的主張；政黨名稱放進議案關鍵詞會搜出幾百個不相干的議案。"""
+    content = build_extract_messages(SPEECH)[-1]["content"]
+    assert "報告委員" in content
+    assert "不要放政黨或提案者" in content
 
 
 def test_the_judge_numbers_its_evidence():

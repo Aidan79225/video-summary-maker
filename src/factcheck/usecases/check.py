@@ -72,12 +72,14 @@ class FactCheckUseCase:
         if outcome.verdict is not None:
             return CheckedClaim(claim, at, outcome.verdict, Method.NUMERIC,
                                 outcome.rationale, evidence)
-        return self._judge_text(claim, at, evidence)
+        return self._judge_text(claim, at, evidence, speech)
 
     def _judge_text(self, claim: ExtractedClaim, at: float,
-                    evidence: tuple[Evidence, ...]) -> CheckedClaim:
+                    evidence: tuple[Evidence, ...], speech: Speech) -> CheckedClaim:
+        # 附上發言日期：議案狀態是查詢當下的，判讀要分得出「發言當時」與「現在」
+        statement = f"{claim.statement}（發言日期：{speech.date.isoformat()}）"
         try:
-            judgement = self._judge.judge(claim.statement, evidence)
+            judgement = self._judge.judge(statement, evidence)
         except ModelOutputInvalid:
             return _unverifiable(claim, at, "模型的判讀無法解讀", evidence)
         if judgement.verdict == Verdict.UNVERIFIABLE:

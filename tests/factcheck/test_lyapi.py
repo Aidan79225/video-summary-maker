@@ -1,6 +1,8 @@
 """LYAPI 客戶端：查詢參數與錯誤轉譯。"""
 from __future__ import annotations
 
+import http.client
+
 import pytest
 
 from factcheck.domain.errors import SourceUnavailable
@@ -38,6 +40,14 @@ def test_connection_errors_become_source_unavailable():
         raise OSError("connection reset")
     with pytest.raises(SourceUnavailable):
         LyApi(fetch=broken).laws_by_name("醫療法")
+
+
+def test_a_truncated_response_is_source_unavailable():
+    """攔的 bug：連線中途斷掉是 http.client 的例外，不是 OSError，原本會讓整篇查核失敗。"""
+    def truncated(url):
+        raise http.client.IncompleteRead(b"")
+    with pytest.raises(SourceUnavailable):
+        LyApi(fetch=truncated).laws_by_name("醫療法")
 
 
 def test_a_non_object_response_is_source_unavailable():

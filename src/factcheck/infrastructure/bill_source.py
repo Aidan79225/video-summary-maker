@@ -36,8 +36,15 @@ def proposer_matches(proposer: str, field: str) -> bool:
     return proposer in field or _ALIASES.get(proposer, proposer) in field
 
 
-def _keywords(text: str) -> list[str]:
-    return [k for k in re.split(r"[\s、，,]+", text.strip()) if k]
+# 不會出現在議案名稱裡、卻常被模型塞進關鍵詞的提案單位
+_NOT_KEYWORDS = frozenset(_ALIASES) | frozenset(_ALIASES.values()) | {"行政院"}
+
+
+def _keywords(text: str, proposer: str) -> list[str]:
+    # 實測模型會給「無人機 行政院」「醫療暴力 臺灣民眾黨」：用提案者或政黨名稱去搜，
+    # 會命中幾百個不相干的議案。提案者另外由 proposer 比對，不該拿來搜尋。
+    return [k for k in re.split(r"[\s、，,]+", text.strip())
+            if k and k != proposer and k not in _NOT_KEYWORDS and "黨" not in k]
 
 
 def _proposed_texts(data: dict) -> list[str]:
@@ -59,7 +66,7 @@ class BillSource:
         self._api = api
 
     def find(self, claim: ExtractedClaim, on: date) -> list[Evidence]:
-        rows = self._search(claim.bill_keywords, term_on(on))
+        rows = self._search(_keywords(claim.bill_keywords, claim.proposer), term_on(on))
         candidates = [
             r for r in rows
             if r.get("提案來源") != _REVIEW_REPORT
@@ -74,8 +81,8 @@ class BillSource:
             evidence.append(self._evidence(claim, data, str(row.get("議案編號"))))
         return evidence
 
-    def _search(self, keywords: str, term: int) -> list[dict]:
-        for keyword in _keywords(keywords):
+    def _search(self, keywords: list[str], term: int) -> list[dict]:
+        for keyword in keywords:
             rows = self._api.bills_search(keyword, term)
             if rows:
                 return rows
@@ -83,7 +90,8 @@ class BillSource:
 
     def _evidence(self, claim: ExtractedClaim, data: dict, bill_id: str) -> Evidence:
         if claim.kind == ClaimKind.BILL_STATUS:
-            excerpt = (f"議案狀態：{data.get('議案狀態') or '不明'}；"
+            # 狀態是 LYAPI 查詢當下的，不是發言當天的：標明白，判讀才不會當成發言時的狀態
+            excerpt = (f"查詢時的議案狀態：{data.get('議案狀態') or '不明'}；"
                        f"最新進度日期：{data.get('最新進度日期') or '不明'}")
         else:
             texts = _proposed_texts(data)

@@ -6,6 +6,7 @@ LYAPI 是公民科技社群整理的立法院資料，不是立法院官方—�
 """
 from __future__ import annotations
 
+import http.client
 import json
 import urllib.parse
 import urllib.request
@@ -47,7 +48,8 @@ class LyApi:
         url = self.url(path, params)
         try:
             payload = self._fetch(url)
-        except (OSError, ValueError) as e:
+        # HTTPException（例如 IncompleteRead：連線中途斷掉）不是 OSError，要另外接
+        except (OSError, ValueError, http.client.HTTPException) as e:
             raise SourceUnavailable(f"LYAPI 取不到 {path}：{str(e)[:200]}") from e
         if not isinstance(payload, dict):
             raise SourceUnavailable(f"LYAPI 的 {path} 回應格式不符預期")
