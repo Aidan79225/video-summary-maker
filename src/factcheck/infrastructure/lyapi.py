@@ -75,7 +75,9 @@ class LyApi:
         return rows
 
     def bills_search(self, keyword: str, term: int) -> list[dict]:
-        payload = self.get("/bills", {"q": f'"{keyword}"', "屆": term, "limit": 30})
+        # 常見法律一屆就有上百件相關議案（例如「醫療法」94 件），30 筆的舊上限
+        # 會把要找的那件擠到下一頁去
+        payload = self.get("/bills", {"q": f'"{keyword}"', "屆": term, "limit": 100})
         return list(payload.get("bills") or [])
 
     def bill(self, bill_id: str) -> dict:

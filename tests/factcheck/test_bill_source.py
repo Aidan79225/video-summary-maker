@@ -12,10 +12,10 @@ from .lyapi_fakes import FakeFetch, load
 SPEECH_DAY = date(2026, 8, 27)
 
 
-def _claim(proposer="行政院", kind=ClaimKind.BILL_CONTENT, keywords="無人載具"):
+def _claim(proposer="行政院", kind=ClaimKind.BILL_CONTENT, keywords="無人載具", law=""):
     return ExtractedClaim(quote="行政院提出的案子 6年2100億", kind=kind,
                           statement="行政院版本 6 年編列 2100 億", figures=("6年2100億",),
-                          bill_keywords=keywords, proposer=proposer)
+                          bill_keywords=keywords, proposer=proposer, law=law)
 
 
 def _source(search=None):
@@ -119,3 +119,60 @@ def test_party_names_are_never_used_as_keywords():
     claim = _claim(keywords="醫療暴力 臺灣民眾黨 國民黨黨團 民進黨 行政院", proposer="")
     _source(search)[0].find(claim, SPEECH_DAY)
     assert queries == ['"醫療暴力"']
+
+
+def test_bill_type_boilerplate_is_stripped_into_a_shorter_keyword():
+    """實測：模型抽出「醫療法部分條文修正案」，但議案名稱裡精確比對查無此名——
+    議案名稱其實只寫法規本體「醫療法」，「部分條文修正案」是泛用的法案格式詞。
+    原詞先試、試不到再退到去掉格式詞的短詞。"""
+    search, queries = _recording_search()
+    claim = _claim(keywords="醫療法部分條文修正案", proposer="")
+    _source(search)[0].find(claim, SPEECH_DAY)
+    assert queries == ['"醫療法部分條文修正案"', '"醫療法"']
+
+
+def test_industry_development_boilerplate_is_also_stripped():
+    """實測：模型抽出「無人機產業發展」，議案名稱其實只有「無人機」或「無人載具」。"""
+    search, queries = _recording_search()
+    claim = _claim(keywords="無人機產業發展", proposer="")
+    _source(search)[0].find(claim, SPEECH_DAY)
+    assert queries == ['"無人機產業發展"', '"無人機"']
+
+
+def test_the_claims_law_field_is_tried_after_the_keywords():
+    """關鍵詞被過濾光時（例如模型只塞了提案者），至少還有 law 欄位可以退回去搜。"""
+    search, queries = _recording_search()
+    claim = _claim(keywords="行政院", proposer="行政院", law="醫療法")
+    _source(search)[0].find(claim, SPEECH_DAY)
+    assert queries == ['"醫療法"']
+
+
+def test_無人機_falls_back_through_the_shortened_keyword_to_the_real_bill():
+    """對真實案例的回歸測試：模型抽出「無人機產業發展」，LYAPI 的 q 是精確比對，
+    用會依查詢字串分流的假路由模擬「只有『無人機』查得到、原詞查不到」。"""
+    full = load("bills_search_無人載具.json")
+
+    def search(query):
+        return full if query["q"] == '"無人機"' else {"bills": []}
+
+    claim = _claim(keywords="無人機產業發展", proposer="行政院")
+    evidence = _source(search)[0].find(claim, SPEECH_DAY)
+    assert "二千一百億元" in evidence[0].excerpt
+
+
+def test_traditional_and_simplified_tai_are_treated_as_the_same_caucus_name():
+    """LYAPI 的提案單位欄位寫「本院台灣民眾黨黨團」（台），模型常寫「臺灣民眾黨」（臺）。"""
+    assert proposer_matches("臺灣民眾黨", "本院台灣民眾黨黨團")
+
+
+def test_national_party_still_matches_after_the_tai_normalization_change():
+    assert proposer_matches("國民黨", "本院國民黨黨團")
+
+
+def test_the_executive_yuan_still_does_not_match_a_caucus_field():
+    assert not proposer_matches("行政院", "本院國民黨黨團")
+
+
+def test_a_party_not_in_the_alias_table_matches_its_caucus_field():
+    """別名表只列了常見的幾個政黨；別的政黨只要欄位是「政黨名稱+團」也該比對得到。"""
+    assert proposer_matches("綠黨", "本院綠黨團")
