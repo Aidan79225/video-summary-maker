@@ -8,7 +8,14 @@ from django.test import TestCase
 from articles.gpu_client import GpuApiError, JobFailed
 from articles.models import Article, ArticleStatus
 from factchecks.models import Claim, FactCheckRun, ReviewStatus, RunStatus
-from factchecks.runner import MAX_ATTEMPTS, candidates, check_article, check_articles, save_claims
+from factchecks.runner import (
+    MAX_ATTEMPTS,
+    ReviewedMeanwhile,
+    candidates,
+    check_article,
+    check_articles,
+    save_claims,
+)
 
 EVIDENCE = {"source": "law", "title": "醫療法 第一百零六條（2026-05-08 修正版）",
             "official_url": "https://law.moj.gov.tw/Law/LawSearchResult.aspx?ty=ONEBAR&kw=x",
@@ -30,11 +37,13 @@ def _payload(*claims):
 
 
 class FakeClient:
-    def __init__(self, result=None, error=None, known_jobs=None):
+    def __init__(self, result=None, error=None, known_jobs=None, while_waiting=None):
         self.result = result if result is not None else _payload()
         self.error = error
         self.known_jobs = known_jobs or {}
         self.submitted = []
+        # 模擬等 GPU 的那幾分鐘裡，別人在後台做了什麼
+        self.while_waiting = while_waiting
 
     def job(self, job_id):
         return self.known_jobs.get(job_id)
@@ -46,6 +55,8 @@ class FakeClient:
         return "fc-1"
 
     def wait(self, job_id, timeout, poll_seconds=3.0, on_progress=None):
+        if self.while_waiting is not None:
+            self.while_waiting()
         if self.error is not None:
             raise self.error
         return self.result
@@ -164,3 +175,41 @@ class CheckTests(TestCase):
         report = check_article(article, FakeClient(), timeout=60, force=True)
         self.assertEqual(report.checked, 1)
         self.assertEqual(article.claims.get().review_status, ReviewStatus.AUTO)
+
+    def test_a_review_made_while_waiting_is_not_washed_away(self):
+        """攔的 bug：審核檢查在等 GPU 之前，等的那幾分鐘裡有人核准，存檔時照樣整批刪掉。"""
+        article = _article()
+        save_claims(article, _payload(_claim("contradicted")))
+
+        def approve():
+            Claim.objects.update(review_status=ReviewStatus.APPROVED)
+
+        report = check_article(article, FakeClient(while_waiting=approve), timeout=60)
+        self.assertEqual((report.skipped, report.checked), (1, 0))
+        claim = article.claims.get()
+        self.assertEqual(claim.review_status, ReviewStatus.APPROVED)
+        self.assertEqual(claim.verdict, "contradicted")
+        self.assertEqual(FactCheckRun.objects.get(article=article).status, RunStatus.DONE)
+
+    def test_save_refuses_to_replace_reviewed_claims_unless_forced(self):
+        article = _article()
+        save_claims(article, _payload(_claim("contradicted")))
+        Claim.objects.update(review_status=ReviewStatus.REJECTED)
+        with self.assertRaises(ReviewedMeanwhile):
+            save_claims(article, _payload(_claim()))
+        self.assertEqual(article.claims.get().review_status, ReviewStatus.REJECTED)
+        save_claims(article, _payload(_claim()), force=True)
+        self.assertEqual(article.claims.get().review_status, ReviewStatus.AUTO)
+
+    def test_a_model_outage_does_not_burn_the_backlog(self):
+        """攔的 bug：Ollama 掛掉時每篇都秒失敗，三輪就把整批積壓的嘗試次數燒完、永久放棄。"""
+        _article("1")
+        _article("2")
+        client = FakeClient(error=JobFailed("ModelUnavailable: 連不上 Ollama"))
+        report = check_articles(client, limit=10, timeout=60)
+        self.assertEqual(len(client.submitted), 1)
+        self.assertEqual(report.failed, 1)
+        run = FactCheckRun.objects.get()
+        self.assertEqual(run.status, RunStatus.FAILED)
+        self.assertEqual(run.attempts, 0)
+        self.assertIn("ModelUnavailable", run.error)

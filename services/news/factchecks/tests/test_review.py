@@ -3,9 +3,12 @@ from __future__ import annotations
 
 from datetime import date
 
-from django.test import TestCase
+from django.contrib.admin.sites import AdminSite
+from django.contrib.auth.models import User
+from django.test import RequestFactory, TestCase
 
 from articles.models import Article, ArticleStatus
+from factchecks.admin import ClaimAdmin
 from factchecks.models import Claim, ReviewStatus
 from factchecks.review import review
 from factchecks.scoring import public_claims
@@ -34,3 +37,11 @@ class ReviewTests(TestCase):
     def test_only_human_decisions_are_allowed(self):
         with self.assertRaises(ValueError):
             review(Claim.objects.all(), ReviewStatus.AUTO)
+
+    def test_the_admin_form_cannot_bypass_the_review_actions(self):
+        """攔的漏洞：在編輯頁直接改判定或審核狀態，就跳過了 review() 與 reviewed_at。"""
+        request = RequestFactory().get("/")
+        request.user = User(is_superuser=True, is_staff=True)
+        form = ClaimAdmin(Claim, AdminSite()).get_form(request, self.claim)
+        for name in ("verdict", "review_status", "reviewed_at", "method", "kind", "quote"):
+            self.assertNotIn(name, form.base_fields)

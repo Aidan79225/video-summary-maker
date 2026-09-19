@@ -35,6 +35,8 @@ logger = logging.getLogger(__name__)
 # 比匯入少：查核失敗通常是模型或 LYAPI 的問題，多試幾天也不會變好
 MAX_ATTEMPTS = 3
 STALE_FACTOR = 2
+# GPU 端把錯誤寫成「例外類別: 訊息」。模型連不上是服務層級的，不是這篇的問題
+_MODEL_UNAVAILABLE = "ModelUnavailable"
 
 
 class ClaimField(StrEnum):
@@ -70,6 +72,10 @@ class FactCheckReport:
     def __str__(self) -> str:
         return (f"查核 {self.checked} 篇、主張 {self.claims} 則（待審核 {self.pending_review}）、"
                 f"失敗 {self.failed}、略過 {self.skipped}")
+
+
+class ReviewedMeanwhile(Exception):
+    """等 GPU 的那幾分鐘裡有人審核了這篇：新的結果不能蓋掉人工審核。"""
 
 
 @dataclass(frozen=True)
@@ -120,12 +126,12 @@ def check_article(article: Article, client: GpuApiClient, timeout: float,
     run, _ = FactCheckRun.objects.get_or_create(article=article)
     run.status, run.attempts = RunStatus.PENDING, 0
     run.save(update_fields=["status", "attempts", "updated_at"])
-    _check_one(article, client, timeout, report)
+    _check_one(article, client, timeout, report, force=force)
     return report
 
 
 def _check_one(article: Article, client: GpuApiClient, timeout: float,
-               report: FactCheckReport) -> bool:
+               report: FactCheckReport, force: bool = False) -> bool:
     """查核一篇；回傳這一輪還要不要繼續（服務掛了就不要）。"""
     run = _claim(article, timeout)
     if run is None:
@@ -136,11 +142,27 @@ def _check_one(article: Article, client: GpuApiClient, timeout: float,
                               on_progress=lambda job: logger.info(
                                   "查核 %s：%s", article.ivod_id,
                                   job.get(JobField.PROGRESS) or job.get(JobField.STATUS)))
-        saved = save_claims(article, payload)
-    except (GpuApiError, JobFailed) as e:
+        saved = save_claims(article, payload, force=force)
+    except ReviewedMeanwhile:
+        # 人工審核優先：這次的結果丟掉，保留審核過的那一批，查核視為完成
+        run.status, run.error, run.gpu_job_id = RunStatus.DONE, "", ""
+        run.save(update_fields=["status", "error", "gpu_job_id", "updated_at"])
+        report.skipped += 1
+        return True
+    except JobFailed as e:
+        if not str(e).startswith(_MODEL_UNAVAILABLE):
+            _fail(run, e, report)
+            return True
+        # 模型掛了對後面每一篇都一樣。退回這次的嘗試次數：不然每一輪每篇都秒失敗，
+        # 三輪就把整批積壓燒到上限、永久放棄
+        run.attempts -= 1
+        run.save(update_fields=["attempts"])
+        _fail(run, e, report)
+        return False
+    except GpuApiError as e:
         _fail(run, e, report)
         # 服務層級的問題對後面每一篇都一樣，繼續送只是把整批燒成失敗
-        return not isinstance(e, GpuApiError)
+        return False
     except Exception as e:  # noqa: BLE001 一篇的怪資料不該讓整批停擺
         logger.exception("查核 %s 時發生預期外的錯誤", article.ivod_id)
         _fail(run, e, report)
@@ -207,8 +229,16 @@ def _float(value: object) -> float:
 
 
 @transaction.atomic
-def save_claims(article: Article, payload: dict) -> SavedClaims:
-    """整批換掉，不做增量合併。呼叫端要先確定這篇沒有人工審核。"""
+def save_claims(article: Article, payload: dict, force: bool = False) -> SavedClaims:
+    """整批換掉，不做增量合併。
+
+    已經有人工審核的，除非 force 否則丟 ReviewedMeanwhile、什麼都不動。呼叫端
+    在送 GPU 前檢查過，但等結果要好幾分鐘，這段期間可能有人審核——所以鎖住這篇
+    的查核紀錄後再檢查一次。
+    """
+    run, _ = FactCheckRun.objects.select_for_update().get_or_create(article=article)
+    if not force and has_human_review(article):
+        raise ReviewedMeanwhile(article.ivod_id)
     article.claims.all().delete()
     total = pending = 0
     for raw in payload.get("claims") or []:
@@ -247,7 +277,6 @@ def save_claims(article: Article, payload: dict) -> SavedClaims:
                 excerpt=str(item.get(EvidenceField.EXCERPT) or "")[:4000],
             )
 
-    run, _ = FactCheckRun.objects.get_or_create(article=article)
     run.status = RunStatus.DONE
     run.error = ""
     run.gpu_job_id = ""

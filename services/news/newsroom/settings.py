@@ -135,6 +135,10 @@ INGEST_HOUR = int(os.environ.get("INGEST_HOUR", "4"))
 
 # 每次執行最多查核幾篇。一篇約 1～3 分鐘（抽取一次、每則主張可能再判讀一次）。
 FACTCHECK_DAILY_LIMIT = int(os.environ.get("FACTCHECK_DAILY_LIMIT", "20"))
+# 每日排程要不要自動查核。預設關：查核結果會自動公開、計入分數，上線前要先用
+# scripts/eval_factcheck.py 在標註樣本上量過準確率再打開。手動的
+# factcheck_articles 指令不受影響。
+FACTCHECK_ENABLED = _env_bool("FACTCHECK_ENABLED", False)
 
 # 由 Django 直接服務 /media。正式環境用 nginx 會更好，但 Pi 自用時
 # 少一個元件就少一個會壞的東西。

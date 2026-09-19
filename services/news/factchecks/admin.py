@@ -16,6 +16,11 @@ class ClaimAdmin(admin.ModelAdmin):
     list_display = ("article_date", "speaker", "verdict", "review_status", "statement")
     list_filter = ("review_status", "verdict", "kind")
     search_fields = ("statement", "quote", "article__speaker")
+    # 判定與審核只能走下面的核准／駁回：在編輯頁直接改，會跳過 review()，
+    # reviewed_at 不會記錄，也能把自動判定改成任何結果
+    readonly_fields = ("verdict", "review_status", "reviewed_at", "method", "kind", "quote")
+    # 清單的日期、委員欄位都讀 article；不先 join 會每列多一次查詢
+    list_select_related = ("article",)
     inlines = [EvidenceInline]
     actions = ["approve", "reject"]
 
