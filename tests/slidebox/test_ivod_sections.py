@@ -79,6 +79,20 @@ def test_ffmpeg_seeks_before_opening_the_stream(tmp_path):
     assert command[command.index("-i") + 1] == M3U8
 
 
+def test_ffmpeg_does_not_announce_itself_to_the_cdn(tmp_path):
+    """攔的 bug：立法院的影片 CDN 對 ffmpeg 預設的 User-Agent（Lavf/…）一律
+    回 403，同一個網址換成瀏覽器的 UA 就是 200。結果每一頁都沒有截圖，
+    而且看起來很像 CDN 本身不穩。-user_agent 是輸入選項，必須在 -i 前面。"""
+    runner = FakeRunner()
+    _gateway(runner=runner).download_sections(
+        URL, [0.0], None, str(tmp_path), _noop, lambda: False)
+    command = runner.commands[0]
+    assert "-user_agent" in command
+    assert command.index("-user_agent") < command.index("-i")
+    agent = command[command.index("-user_agent") + 1]
+    assert agent and not agent.startswith("Lavf")
+
+
 def test_one_failed_timestamp_only_costs_that_page(tmp_path):
     runner = FakeRunner(fail_at=(0,), stderr="segment missing")
     paths = _gateway(runner=runner).download_sections(

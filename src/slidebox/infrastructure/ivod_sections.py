@@ -33,6 +33,10 @@ _MAX_CONSECUTIVE_FAILURES = 2
 
 DEFAULT_CLIP_SECONDS = 4.0
 
+# 立法院的影片 CDN 對 ffmpeg 預設的 User-Agent（Lavf/…）一律回 403，換成
+# 瀏覽器的就是 200。症狀是每一頁都沒有截圖，看起來很像 CDN 不穩。
+_USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
+
 
 class IvodSectionGateway:
     def __init__(self, client: IvodClient, clip_seconds: float = DEFAULT_CLIP_SECONDS,
@@ -104,6 +108,7 @@ class IvodSectionGateway:
         dest = os.path.join(dest_dir, f"clip{index:03d}.mp4")
         command = [
             self._exe, "-hide_banner", "-loglevel", "error", "-y",
+            "-user_agent", _USER_AGENT,  # 輸入選項，要在 -i 前面
             "-ss", str(start),          # 放在 -i 前面才是快速 seek
             "-i", stream,
             "-t", str(self._clip_seconds),
