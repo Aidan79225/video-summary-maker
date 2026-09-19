@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import pytest
 
-from slidebox_api.jobs import JobStatus, JobStore
+from slidebox_api.jobs import JobKind, JobStatus, JobStore
 
 
 def _store() -> JobStore:
@@ -159,3 +159,18 @@ def test_a_running_job_is_never_forgotten_even_when_the_cap_is_reached():
     for i in range(5):
         store.submit(f"u{i}")
     assert store.get(job.id) is job
+
+
+def test_jobs_are_decks_unless_told_otherwise():
+    store = JobStore()
+    assert store.submit("https://ivod.ly.gov.tw/Play/Clip/1M/1").kind == JobKind.DECK
+
+
+def test_a_factcheck_job_keeps_its_parameters():
+    store = JobStore()
+    params = {"speaker": "邱慧洳", "date": "2026-08-25"}
+    job = store.submit("https://ivod.ly.gov.tw/Play/Clip/1M/1", kind=JobKind.FACTCHECK,
+                       params=params)
+    params["speaker"] = "改掉了"
+    assert job.kind == JobKind.FACTCHECK
+    assert job.params["speaker"] == "邱慧洳"

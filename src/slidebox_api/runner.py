@@ -6,16 +6,21 @@ Ollama、不需要網路。
 from __future__ import annotations
 
 import threading
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import replace
+from datetime import date
 
+from factcheck.domain.entities import Speech
+from factcheck.domain.errors import OperationCancelled as FactCheckCancelled
+from factcheck.usecases.check import FactCheckUseCase
 from slidebox.domain.entities import Settings
 from slidebox.domain.errors import OperationCancelled
 from slidebox.usecases.build_deck import BuildDeckUseCase
 from slidebox.usecases.queue import video_key
 from slidebox.usecases.sources import ivod_id
 
-from .jobs import Job, JobStore
+from .factcheck_payload import factcheck_payload
+from .jobs import Job, JobKind, JobStore
 from .payload import deck_payload
 
 ProgressCallback = Callable[[float | None, str], None]
@@ -135,3 +140,41 @@ class SlideboxExecutor:
             setattr(self._settings, name,
                     value if value is not None else getattr(self._base, name))
         return self._settings
+
+
+class KindDispatcher:
+    """依工作種類分派執行函式。佇列只有一條：摘要與查核都要用 Ollama。"""
+
+    def __init__(self, executors: Mapping[JobKind, Executor]):
+        self._executors = dict(executors)
+
+    def __call__(self, job: Job, progress: ProgressCallback,
+                 is_cancelled: CancelCheck) -> dict:
+        execute = self._executors.get(job.kind)
+        if execute is None:
+            raise ValueError(f"不支援的工作種類：{job.kind}")
+        return execute(job, progress, is_cancelled)
+
+
+class FactCheckExecutor:
+    """用 factcheck 查核一段發言。use case 整個行程只建一次（它快取法條）。"""
+
+    def __init__(self, usecase: FactCheckUseCase, model: str):
+        self._usecase = usecase
+        self._model = model
+
+    def __call__(self, job: Job, progress: ProgressCallback,
+                 is_cancelled: CancelCheck) -> dict:
+        params = job.params
+        speech = Speech(
+            speaker=str(params["speaker"]),
+            date=date.fromisoformat(str(params["date"])),
+            meeting=str(params.get("meeting") or ""),
+            transcript=str(params["transcript_text"]),
+        )
+        try:
+            checked = self._usecase.execute(speech, progress, is_cancelled)
+        except FactCheckCancelled as e:
+            # 工作執行緒只認得 slidebox 的取消；不轉譯的話會被記成失敗
+            raise OperationCancelled() from e
+        return factcheck_payload(checked, self._model)

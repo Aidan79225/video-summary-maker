@@ -12,6 +12,9 @@ from slidebox_api.jobs import JobStatus, JobStore
 from slidebox_api.runner import JobWorker
 
 IVOD = "https://ivod.ly.gov.tw/Play/Clip/1M/171180"
+FACTCHECK = {"source_url": IVOD, "speaker": "邱慧洳", "date": "2026-08-25",
+             "meeting": "第11屆第5會期第23次會議",
+             "transcript_text": "00:32 他的行政罰鍰從現行的3萬到5萬"}
 
 
 class FakeExecutor:
@@ -180,3 +183,40 @@ def test_a_non_ascii_api_key_is_rejected_not_a_crash():
         response = client.post("/jobs", json={"url": IVOD},
                                headers={"X-API-Key": "sécret".encode("latin-1")})
         assert response.status_code == 401
+
+
+def test_a_factcheck_is_queued_as_its_own_kind(kit):
+    client, store, *_ = kit
+    response = client.post("/factchecks", json=FACTCHECK)
+    assert response.status_code == 202
+    body = response.json()
+    assert body["kind"] == "factcheck"
+    job = store.get(body["id"])
+    assert job.params["speaker"] == "邱慧洳"
+    assert job.params["date"] == "2026-08-25"
+
+
+def test_summary_jobs_report_their_kind(kit):
+    client, *_ = kit
+    assert client.post("/jobs", json={"url": IVOD}).json()["kind"] == "deck"
+
+
+@pytest.mark.parametrize("change", [
+    {"source_url": "file:///etc/passwd"},
+    {"transcript_text": ""},
+    {"date": "昨天"},
+    {"speaker": ""},
+])
+def test_invalid_factchecks_are_rejected(kit, change):
+    client, *_ = kit
+    assert client.post("/factchecks", json={**FACTCHECK, **change}).status_code == 422
+
+
+def test_factchecks_require_the_key_when_one_is_set():
+    store = JobStore()
+    worker = JobWorker(store, FakeExecutor())
+    with TestClient(_app(store, worker, api_key="secret")) as client:
+        worker.stop()
+        assert client.post("/factchecks", json=FACTCHECK).status_code == 401
+        assert client.post("/factchecks", json=FACTCHECK,
+                           headers={"X-API-Key": "secret"}).status_code == 202
