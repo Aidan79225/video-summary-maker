@@ -69,3 +69,34 @@ def test_contents_are_fetched_once_per_version():
     source.find(_claim(), SPEECH_DAY)
     source.find(_claim(article="第106條"), SPEECH_DAY)
     assert sum("/law_contents" in u for u in fetch.urls) == 1
+
+
+def test_penalty_articles_are_prioritized_over_non_penalty_referencing_articles():
+    """罰則條文在後面但有具體數字，應該優先於前面的敘述條文。"""
+    fetch = FakeFetch({
+        "/laws": load("laws_search_醫療法.json"),
+        "/laws/02533/versions": load("law_versions_02533.json"),
+        "/law_contents": {
+            "total_page": 1,
+            "lawcontents": [
+                {"條號": "第二十四條", "內容": "醫療人員應當…"},
+                {"條號": "第五十條", "內容": "違反第二十四條…得予警告"},  # non-penalty reference
+                {"條號": "第七十五條", "內容": "違反第二十四條…得予警告"},  # non-penalty reference
+                {"條號": "第一百零六條", "內容": "違反第二十四條第二項…處三萬元以上五萬元以下罰鍰"},  # penalty
+            ]
+        }
+    })
+    evidence = LawSource(LyApi(fetch=fetch)).find(_claim(), SPEECH_DAY)
+    titles = [e.title for e in evidence]
+    # 第 24 條優先
+    assert titles[0].startswith("醫療法 第二十四條")
+    # 第 106 條（罰則）應該在第 50 條或 75 條之前
+    idx_106 = next(i for i, t in enumerate(titles) if "第一百零六條" in t)
+    idx_50 = next((i for i, t in enumerate(titles) if "第五十條" in t), -1)
+    if idx_50 >= 0:
+        assert idx_106 < idx_50
+
+
+def test_an_invalid_article_number_yields_nothing():
+    """第0條或超出範圍的條號不會造成 ValueError。"""
+    assert _source()[0].find(_claim(article="第0條"), SPEECH_DAY) == []

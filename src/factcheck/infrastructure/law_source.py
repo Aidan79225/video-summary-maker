@@ -16,6 +16,8 @@ MAX_RELATED = 2
 EXCERPT_LIMIT = 1200
 # 常駐服務會連續跑好幾個月；每部法律一兩百條，快取要有上限
 _CACHE_SIZE = 16
+# 罰則條文優先：罰鍰、罰金、有期徒刑、拘役通常包含具體數字，更容易比對
+_PENALTY_TERMS = ("罰鍰", "罰金", "有期徒刑", "拘役")
 
 
 def official_law_url(name: str) -> str:
@@ -41,6 +43,12 @@ def _matches(law: dict, name: str) -> bool:
     return name in names
 
 
+def _is_penalty_article(row: dict) -> bool:
+    """檢查是否為罰則條文。"""
+    content = str(row.get("內容") or "")
+    return any(term in content for term in _PENALTY_TERMS)
+
+
 class LawSource:
     def __init__(self, api: LyApi):
         self._api = api
@@ -54,15 +62,28 @@ class LawSource:
                     if _matches(row, claim.law)), None)
         if law is None:
             return []
-        version = version_on(self._api.law_versions(str(law["法律編號"])), on)
+        law_id = law.get("法律編號")
+        if not law_id:
+            return []
+        version = version_on(self._api.law_versions(str(law_id)), on)
         if version is None:
             return []
-        rows = self._rows(str(version["版本編號"]))
-        label = article_label(number)
+        version_id = version.get("版本編號")
+        if not version_id:
+            return []
+        rows = self._rows(str(version_id))
+        try:
+            label = article_label(number)
+        except ValueError:
+            return []
         target = [r for r in rows if r.get("條號") == label]
-        related = [r for r in rows
-                   if r.get("條號") and r.get("條號") != label
-                   and label in str(r.get("內容") or "")][:MAX_RELATED]
+        # 罰則條文優先：罰鍰、罰金等通常有具體數字，更容易比對
+        referencing = [r for r in rows
+                       if r.get("條號") and r.get("條號") != label
+                       and label in str(r.get("內容") or "")]
+        # 穩定排序：罰則優先，其餘保持文件順序
+        referencing.sort(key=lambda r: (not _is_penalty_article(r), rows.index(r)))
+        related = referencing[:MAX_RELATED]
         return [self._evidence(law, version, row) for row in target + related]
 
     def _rows(self, version_id: str) -> list[dict]:
@@ -78,11 +99,12 @@ class LawSource:
     def _evidence(self, law: dict, version: dict, row: dict) -> Evidence:
         name = str(law.get("名稱") or "")
         article = str(row.get("條號") or "")
+        version_id = str(version.get("版本編號") or "")
         return Evidence(
             source=SourceKind.LAW,
             title=f"{name} {article}（{version.get('日期')} {version.get('動作')}版）",
             official_url=official_law_url(name),
-            api_url=self._api.url("/law_contents", {"版本編號": version["版本編號"],
+            api_url=self._api.url("/law_contents", {"版本編號": version_id,
                                                     "條號": article}),
             excerpt=str(row.get("內容") or "")[:EXCERPT_LIMIT],
         )
