@@ -1,0 +1,44 @@
+---
+import type { Claim } from '../lib/types';
+import { VERDICTS, VERDICT_LABEL } from '../lib/factcheck';
+import ClaimItem from './ClaimItem.astro';
+
+interface Props {
+  claims: Claim[];
+  /** 後端已經跑完查核。false 時不能說「沒有可查證的陳述」——根本還沒查。 */
+  checked: boolean;
+}
+const { claims, checked } = Astro.props;
+const counts = VERDICTS.map((v) => ({ v, n: claims.filter((c) => c.verdict === v).length }))
+  .filter((x) => x.n > 0);
+---
+
+<section id="factcheck" class="mt-14 scroll-mt-24 border-t border-line-soft pt-10" aria-labelledby="factcheck-h">
+  <div class="flex flex-wrap items-baseline gap-x-4 gap-y-2">
+    <h2 id="factcheck-h" class="headline text-2xl font-semibold">查證</h2>
+    {counts.length > 0 && (
+      <p class="tabular flex flex-wrap gap-x-3 text-[0.8rem] text-muted">
+        {counts.map(({ v, n }) => <span>{VERDICT_LABEL[v]} {n}</span>)}
+      </p>
+    )}
+  </div>
+  <p class="mt-3 max-w-2xl text-[0.82rem] leading-relaxed text-muted">
+    自動查核：從委員的發言挑出可以用官方法條或議案資料驗證的陳述，取回原文比對。數字由程式比對；文字由模型判讀，而且必須逐字引用證據。「不符」經人工確認後才會顯示。
+    <a href="/method" class="text-accent underline underline-offset-4">查證方法</a>
+  </p>
+  {
+    !checked ? (
+      <p class="mt-6 rounded-lg border border-dashed border-line px-4 py-6 text-center text-sm text-muted">
+        這段發言還沒有完成查核。
+      </p>
+    ) : claims.length === 0 ? (
+      <p class="mt-6 rounded-lg border border-dashed border-line px-4 py-6 text-center text-sm text-muted">
+        這段發言沒有找到可以用官方資料查證的陳述。
+      </p>
+    ) : (
+      <ol class="mt-6 space-y-4">
+        {claims.map((c) => <ClaimItem claim={c} />)}
+      </ol>
+    )
+  }
+</section>

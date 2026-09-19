@@ -1,0 +1,49 @@
+---
+import type { FactCheckScore } from '../lib/types';
+import { formatRate } from '../lib/factcheck';
+
+interface Props {
+  score: FactCheckScore;
+}
+const { score } = Astro.props;
+const segments = [
+  { n: score.supported, cls: 'bg-ok', label: '相符' },
+  { n: score.partial, cls: 'bg-partial', label: '部分相符' },
+  { n: score.contradicted, cls: 'bg-danger', label: '不符' },
+].filter((s) => s.n > 0);
+const detail =
+  score.rate !== null
+    ? `${score.checked} 則可查證陳述中 ${score.supported} 則相符` +
+      (score.partial ? `、${score.partial} 則部分相符` : '') +
+      (score.contradicted ? `、${score.contradicted} 則不符` : '')
+    : `可查證陳述 ${score.checked}／${score.min_sample} 則，滿 ${score.min_sample} 則才計算`;
+---
+
+<div class="w-full rounded-[var(--radius-card)] border border-line bg-surface p-5 sm:w-80">
+  <p class="text-[0.7rem] tracking-[0.2em] text-muted uppercase">查證相符率</p>
+  {
+    score.rate !== null ? (
+      <p class="headline tabular mt-1 text-5xl font-semibold">{formatRate(score.rate)}</p>
+    ) : (
+      <p class="headline mt-2 text-2xl font-semibold text-muted">樣本不足</p>
+    )
+  }
+  <p class="tabular mt-2 text-[0.8rem] leading-relaxed text-muted">{detail}</p>
+  {
+    score.checked > 0 && (
+      <div
+        class="mt-4 flex h-2 overflow-hidden rounded-full bg-surface-2"
+        role="img"
+        aria-label={segments.map((s) => `${s.label} ${s.n} 則`).join('、')}
+      >
+        {segments.map((s) => (
+          <span class={s.cls} style={`width: ${(s.n / score.checked) * 100}%`} />
+        ))}
+      </div>
+    )
+  }
+  <p class="mt-3 text-[0.75rem] leading-relaxed text-muted">
+    {score.unverifiable > 0 && <>另有 {score.unverifiable} 則無法查證，不計入。</>}
+    <a href="/method#score" class="text-accent underline underline-offset-4">怎麼算的</a>
+  </p>
+</div>
