@@ -106,6 +106,13 @@ def test_the_extract_prompt_excludes_officials_and_party_keywords():
     assert "不要放政黨或提案者" in content
 
 
+def test_the_extract_prompt_asks_for_the_version_owner_not_the_speaker():
+    """實測誤判：莊瑞雄比較行政院版和國民黨版兩個數字，模型把 proposer 填成他自己
+    的名字——proposer 要填「那個數字所屬版本的提案者」，不是發言委員本人。"""
+    content = build_extract_messages(SPEECH)[-1]["content"]
+    assert "那個數字所屬版本的提案者，不是發言的委員" in content
+
+
 def test_the_judge_numbers_its_evidence():
     evidence = [Evidence(SourceKind.LAW, "醫療法 第一百零六條", "https://a", "https://b",
                          "處新臺幣三萬元以上五萬元以下罰鍰")]

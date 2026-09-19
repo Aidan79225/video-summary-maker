@@ -63,9 +63,28 @@ def test_review_reports_are_skipped():
     review = next(r for r in rows if r["提案來源"] == "審查報告")
     executive = next(r for r in rows if r["議案編號"] == "201110221870000")
     source, fetch = _source({"bills": [review, executive]})
-    evidence = source.find(_claim(proposer=""), SPEECH_DAY)
+    evidence = source.find(_claim(), SPEECH_DAY)
     assert len(evidence) == 1
     assert not any(review["議案編號"] in u for u in fetch.urls)
+
+
+def test_bill_content_without_a_proposer_returns_no_evidence():
+    """實測假陽性：王正旭沒講是誰的版本，卻抓到陳素月、陳培瑜等不相干版本裡剛好
+    符合的數字，被自動判「相符」發佈。議案版本一定要能對上提案者，對不上就等於
+    查無此案，不能拿別人版本的數字硬湊。"""
+    source, fetch = _source()
+    evidence = source.find(_claim(proposer=""), SPEECH_DAY)
+    assert evidence == []
+    assert fetch.urls == []
+
+
+def test_bill_status_without_a_proposer_still_returns_evidence():
+    """議案進度問的是「這個議案」的狀態，不是哪個版本，proposer 可以是空的。"""
+    rows = load("bills_search_無人載具.json")["bills"]
+    executive = next(r for r in rows if r["議案編號"] == "201110221870000")
+    source, _fetch = _source({"bills": [executive]})
+    evidence = source.find(_claim(kind=ClaimKind.BILL_STATUS, proposer=""), SPEECH_DAY)
+    assert evidence
 
 
 def test_bills_proposed_after_the_speech_are_not_evidence():
@@ -116,7 +135,7 @@ def test_the_proposer_is_never_used_as_a_keyword():
 def test_party_names_are_never_used_as_keywords():
     """實測抽出「醫療暴力 臺灣民眾黨」：政黨、黨團與它們的別名都不是議案名稱裡的詞。"""
     search, queries = _recording_search()
-    claim = _claim(keywords="醫療暴力 臺灣民眾黨 國民黨黨團 民進黨 行政院", proposer="")
+    claim = _claim(keywords="醫療暴力 臺灣民眾黨 國民黨黨團 民進黨 行政院", proposer="莊瑞雄")
     _source(search)[0].find(claim, SPEECH_DAY)
     assert queries == ['"醫療暴力"']
 
@@ -126,7 +145,7 @@ def test_bill_type_boilerplate_is_stripped_into_a_shorter_keyword():
     議案名稱其實只寫法規本體「醫療法」，「部分條文修正案」是泛用的法案格式詞。
     原詞先試、試不到再退到去掉格式詞的短詞。"""
     search, queries = _recording_search()
-    claim = _claim(keywords="醫療法部分條文修正案", proposer="")
+    claim = _claim(keywords="醫療法部分條文修正案", proposer="莊瑞雄")
     _source(search)[0].find(claim, SPEECH_DAY)
     assert queries == ['"醫療法部分條文修正案"', '"醫療法"']
 
@@ -134,7 +153,7 @@ def test_bill_type_boilerplate_is_stripped_into_a_shorter_keyword():
 def test_industry_development_boilerplate_is_also_stripped():
     """實測：模型抽出「無人機產業發展」，議案名稱其實只有「無人機」或「無人載具」。"""
     search, queries = _recording_search()
-    claim = _claim(keywords="無人機產業發展", proposer="")
+    claim = _claim(keywords="無人機產業發展", proposer="莊瑞雄")
     _source(search)[0].find(claim, SPEECH_DAY)
     assert queries == ['"無人機產業發展"', '"無人機"']
 
@@ -176,3 +195,34 @@ def test_the_executive_yuan_still_does_not_match_a_caucus_field():
 def test_a_party_not_in_the_alias_table_matches_its_caucus_field():
     """別名表只列了常見的幾個政黨；別的政黨只要欄位是「政黨名稱+團」也該比對得到。"""
     assert proposer_matches("綠黨", "本院綠黨團")
+
+
+def test_the_next_keyword_is_tried_when_the_first_has_no_matching_candidate():
+    """實測：q="無人機產業發展" 查到 5 筆提案者對不上的不相干議案——查有結果不代表
+    有候選，一樣要往下一個（短化後的）關鍵詞試，才找得到行政院版。"""
+    full = load("bills_search_無人載具.json")
+    unrelated = {"bills": [
+        {"議案編號": f"9999999999999990{i}", "提案單位/提案委員": f"本院委員某某{i}等16人",
+         "提案來源": "委員提案"}
+        for i in range(5)
+    ]}
+
+    def search(query):
+        if query["q"] == '"無人機產業發展"':
+            return unrelated
+        if query["q"] == '"無人機"':
+            return full
+        return {"bills": []}
+
+    claim = _claim(keywords="無人機產業發展", proposer="行政院")
+    evidence = _source(search)[0].find(claim, SPEECH_DAY)
+    assert "二千一百億元" in evidence[0].excerpt
+
+
+def test_shortened_keywords_are_also_excluded_when_they_become_the_proposer():
+    """短化後可能剛好變成提案者本人（例如「行政院修正案」剝到「行政院」）：
+    跟原詞一樣，不能拿去搜。"""
+    search, queries = _recording_search()
+    claim = _claim(keywords="行政院修正案", proposer="行政院")
+    _source(search)[0].find(claim, SPEECH_DAY)
+    assert queries == ['"行政院修正案"']

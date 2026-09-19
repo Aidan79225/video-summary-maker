@@ -14,8 +14,8 @@ _ALIASES = {
     "民進黨": "民主進步黨黨團",
     "民眾黨": "台灣民眾黨黨團",
     # 實測模型會寫「臺灣民眾黨」（臺），LYAPI 的欄位寫「台灣民眾黨黨團」（台）：
-    # 兩種寫法都要能對到同一個黨團
-    "臺灣民眾黨": "台灣民眾黨黨團",
+    # proposer_matches 比對前已經把「臺」統一換成「台」，這裡只需要「台」開頭的
+    # 別名，「臺灣民眾黨」那個 key 永遠比對不到（查到的一定已經是「台」）
     "台灣民眾黨": "台灣民眾黨黨團",
     "時代力量": "時代力量黨團",
 }
@@ -69,11 +69,16 @@ def _strip_bill_suffixes(token: str) -> str:
     return token
 
 
-def _keywords(claim: ExtractedClaim) -> list[str]:
+def _not_a_proposer_or_party(candidate: str, proposer: str) -> bool:
     # 實測模型會給「無人機 行政院」「醫療暴力 臺灣民眾黨」：用提案者或政黨名稱去搜，
-    # 會命中幾百個不相干的議案。提案者另外由 proposer 比對，不該拿來搜尋。
+    # 會命中幾百個不相干的議案。提案者另外由 proposer 比對，不該拿來搜尋。這條規則
+    # 對短化後的詞也適用：「行政院修正案」剝掉「修正案」會變成「行政院」，一樣不能搜
+    return candidate and candidate != proposer and candidate not in _NOT_KEYWORDS and "黨" not in candidate
+
+
+def _keywords(claim: ExtractedClaim) -> list[str]:
     tokens = [k for k in re.split(r"[\s、，,]+", claim.bill_keywords.strip())
-              if k and k != claim.proposer and k not in _NOT_KEYWORDS and "黨" not in k]
+              if _not_a_proposer_or_party(k, claim.proposer)]
     keywords: list[str] = []
     for token in tokens:
         if token not in keywords:
@@ -81,7 +86,8 @@ def _keywords(claim: ExtractedClaim) -> list[str]:
     # 原詞查不到時，退而求其次用去掉法案格式詞的短詞再查一次
     for token in tokens:
         short = _strip_bill_suffixes(token)
-        if len(short) >= 2 and short not in keywords:
+        if (len(short) >= 2 and short not in keywords
+                and _not_a_proposer_or_party(short, claim.proposer)):
             keywords.append(short)
     # 關鍵詞都查不到、或整段被過濾光時，law 欄位（例如「醫療法」）是最後的退路
     if claim.law and claim.law not in keywords:
@@ -108,12 +114,13 @@ class BillSource:
         self._api = api
 
     def find(self, claim: ExtractedClaim, on: date) -> list[Evidence]:
-        rows = self._search(_keywords(claim), term_on(on))
-        candidates = [
-            r for r in rows
-            if r.get("提案來源") != _REVIEW_REPORT
-            and proposer_matches(claim.proposer, str(r.get("提案單位/提案委員") or ""))
-        ][:MAX_CANDIDATES]
+        # 議案版本一定要能對上提案者，對不上就等於沒查到——不能拿別人版本剛好符合
+        # 的數字硬湊成「相符」（實測假陽性：王正旭沒講是誰的版本，卻抓到陳素月、
+        # 陳培瑜等不相干版本裡的數字，被自動判定相符發佈）。議案進度（BILL_STATUS）
+        # 問的是議案本身，不是哪個版本，不受此限
+        if claim.kind == ClaimKind.BILL_CONTENT and not claim.proposer:
+            return []
+        candidates = self._candidates(claim, term_on(on))
         evidence: list[Evidence] = []
         for row in candidates:
             data = self._api.bill(str(row.get("議案編號")))
@@ -123,11 +130,19 @@ class BillSource:
             evidence.append(self._evidence(claim, data, str(row.get("議案編號"))))
         return evidence
 
-    def _search(self, keywords: list[str], term: int) -> list[dict]:
-        for keyword in keywords:
+    def _candidates(self, claim: ExtractedClaim, term: int) -> list[dict]:
+        # 換下一個關鍵詞的條件是「篩完沒有候選」，不是「查無結果」：查到東西但
+        # 提案者、來源都對不上，一樣要往下一個關鍵詞試（實測：「無人機產業發展」
+        # 查到 5 筆不相干議案，短化後的「無人機」才查得到行政院版）
+        for keyword in _keywords(claim):
             rows = self._api.bills_search(keyword, term)
-            if rows:
-                return rows
+            matched = [
+                r for r in rows
+                if r.get("提案來源") != _REVIEW_REPORT
+                and proposer_matches(claim.proposer, str(r.get("提案單位/提案委員") or ""))
+            ]
+            if matched:
+                return matched[:MAX_CANDIDATES]
         return []
 
     def _evidence(self, claim: ExtractedClaim, data: dict, bill_id: str) -> Evidence:
