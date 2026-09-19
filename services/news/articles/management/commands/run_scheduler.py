@@ -41,6 +41,12 @@ class Command(BaseCommand):
                 call_command("ingest_ivod", days=days)
             except Exception:  # noqa: BLE001
                 logger.exception("每日匯入失敗，排程繼續")
+            # 查核接在匯入之後：它需要摘要已經完成的文章。分開包，匯入那邊
+            # 掛了也還能把先前的積壓查完。
+            try:
+                call_command("factcheck_articles")
+            except Exception:  # noqa: BLE001
+                logger.exception("每日查核失敗，排程繼續")
 
         # 每天也跑回補而不只查昨天：立法院的 AI 逐字稿有時晚幾小時才出現，
         # 而 discover 只收「已經有逐字稿」的片段。晚到排程時間之後的那些，

@@ -133,6 +133,9 @@ INGEST_DAILY_LIMIT = int(os.environ.get("INGEST_DAILY_LIMIT", "20"))
 # 所以隔天凌晨抓前一天的內容。
 INGEST_HOUR = int(os.environ.get("INGEST_HOUR", "4"))
 
+# 每次執行最多查核幾篇。一篇約 1～3 分鐘（抽取一次、每則主張可能再判讀一次）。
+FACTCHECK_DAILY_LIMIT = int(os.environ.get("FACTCHECK_DAILY_LIMIT", "20"))
+
 # 由 Django 直接服務 /media。正式環境用 nginx 會更好，但 Pi 自用時
 # 少一個元件就少一個會壞的東西。
 SERVE_MEDIA = _env_bool("DJANGO_SERVE_MEDIA", True)

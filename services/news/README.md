@@ -99,6 +99,22 @@ uv run python manage.py run_scheduler --backfill-days 0 # 不要回補
 10 4 * * * cd /home/pi/yt-downloader/services/news && /home/pi/.local/bin/uv run python manage.py ingest_ivod >> /var/log/ly-news-ingest.log 2>&1
 ```
 
+## 事實查核
+
+摘要完成的文章會再送去 GPU 主機做事實查核：從委員的發言挑出可以用法條或議案驗證的陳述，取回官方資料比對。設計見 `docs/superpowers/specs/2026-09-19-fact-check-design.md`。
+
+```bash
+uv run python manage.py factcheck_articles                 # 查核還沒查過的文章（排程會在匯入後自動跑）
+uv run python manage.py factcheck_articles --article 171140
+uv run python manage.py factcheck_articles --article 171140 --force   # 連人工審核過的也重跑
+```
+
+**判定為「不符」的主張不會自動公開**，要到 `/admin/factchecks/claim/?review_status__exact=pending_review` 審核：核准後公開並計入查證相符率，駁回則不公開、不計分（例如語音辨識錯字造成的誤判）。重跑不會洗掉審核紀錄，除非加 `--force`。
+
+| 變數 | 預設 | 說明 |
+|---|---|---|
+| `FACTCHECK_DAILY_LIMIT` | `20` | 每次執行最多查核幾篇 |
+
 ## API
 
 | 端點 | 說明 |
@@ -168,6 +184,15 @@ articles/
 └─ management/commands/
    ├─ ingest_ivod.py    composition root：從 settings 組出 adapter 再注入
    └─ run_scheduler.py
+
+factchecks/
+├─ models.py        FactCheckRun / Claim / Evidence
+├─ scoring.py       查證相符率（公開公式）
+├─ runner.py        use case：送工作 → 落地 → 不符進審核
+├─ review.py        審核動作
+├─ admin.py         審核介面
+├─ api.py           查證資料的 ninja 端點
+└─ management/commands/factcheck_articles.py
 ```
 
 兩個 adapter 都可以注入替身，所以 `ingest.py` 的測試不碰網路。
