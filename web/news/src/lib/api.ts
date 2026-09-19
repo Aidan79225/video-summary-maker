@@ -6,8 +6,11 @@ import type {
   Brief,
   Health,
   Result,
+  SpeakerClaim,
+  SpeakerClaims,
   SpeakerList,
 } from './types';
+import { normalizeClaims, normalizeScore, scoreOf } from './factcheck';
 import fixture from '../fixtures/sample.json';
 
 /* ------------------------------------------------------------------
@@ -179,11 +182,13 @@ function fixtureArticles(): ArticleDetail[] {
 }
 
 function toCard(a: ArticleDetail) {
-  const { source_note, transcript_text, slides, brief, ...card } = a;
+  const { source_note, transcript_text, slides, brief, claims, factcheck_checked, ...card } = a;
   void source_note;
   void transcript_text;
   void slides;
   void brief;
+  void claims;
+  void factcheck_checked;
   return card;
 }
 
@@ -281,7 +286,16 @@ export async function getArticle(slug: string): Promise<Result<ArticleDetail>> {
         error: { kind: 'notfound', status: 404, message: '假資料裡沒有這一篇' },
       };
     }
-    return { ok: true, data: { ...found, brief: normalizeBrief(found.brief) } };
+    return {
+      ok: true,
+      data: {
+        ...found,
+        brief: normalizeBrief(found.brief),
+        // 示範資料裡有 claims 欄位就視為查核過
+        factcheck_checked: Array.isArray(found.claims),
+        claims: normalizeClaims(found.claims),
+      },
+    };
   }
 
   const res = await getJson<ArticleDetail>(`/api/articles/${encodeURIComponent(slug)}`);
@@ -298,28 +312,65 @@ export async function getArticle(slug: string): Promise<Result<ArticleDetail>> {
       slides: Array.isArray(d.slides) ? d.slides : [],
       transcript_text: typeof d.transcript_text === 'string' ? d.transcript_text : '',
       brief: normalizeBrief(d.brief),
+      factcheck_checked: d.factcheck_checked === true,
+      claims: normalizeClaims(d.claims),
     },
   };
 }
 
 export async function getSpeakers(): Promise<Result<SpeakerList>> {
   if (isFixtureMode()) {
-    const map = new Map<string, { name: string; count: number; latest_date: string }>();
+    const map = new Map<string, { name: string; count: number; latest_date: string; verdicts: string[] }>();
     for (const a of fixtureArticles()) {
+      const verdicts = normalizeClaims(a.claims).map((c) => c.verdict);
       const cur = map.get(a.speaker);
       if (cur) {
         cur.count += 1;
+        cur.verdicts.push(...verdicts);
         if (a.date > cur.latest_date) cur.latest_date = a.date;
       } else {
-        map.set(a.speaker, { name: a.speaker, count: 1, latest_date: a.date });
+        map.set(a.speaker, { name: a.speaker, count: 1, latest_date: a.date, verdicts });
       }
     }
-    return { ok: true, data: { items: [...map.values()].sort((a, b) => b.count - a.count) } };
+    const items = [...map.values()]
+      .sort((a, b) => b.count - a.count)
+      .map(({ verdicts, ...s }) => ({ ...s, factcheck: scoreOf(verdicts) }));
+    return { ok: true, data: { items } };
   }
 
   const res = await getJson<SpeakerList>('/api/speakers');
   if (!res.ok) return res;
-  return { ok: true, data: { items: Array.isArray(res.data?.items) ? res.data.items : [] } };
+  const items = Array.isArray(res.data?.items) ? res.data.items : [];
+  return {
+    ok: true,
+    data: { items: items.map((s) => ({ ...s, factcheck: normalizeScore(s.factcheck) })) },
+  };
+}
+
+export async function getSpeakerClaims(name: string): Promise<Result<SpeakerClaims>> {
+  if (isFixtureMode()) {
+    const items: SpeakerClaim[] = [];
+    for (const a of fixtureArticles().filter((x) => x.speaker === name)) {
+      for (const c of normalizeClaims(a.claims)) {
+        items.push({ ...c, article_slug: a.slug, article_title: a.title, date: a.date });
+      }
+    }
+    return {
+      ok: true,
+      data: { speaker: name, score: scoreOf(items.map((c) => c.verdict)), items },
+    };
+  }
+
+  const res = await getJson<SpeakerClaims>(`/api/speakers/${encodeURIComponent(name)}/claims`);
+  if (!res.ok) return res;
+  return {
+    ok: true,
+    data: {
+      speaker: name,
+      score: normalizeScore(res.data?.score),
+      items: normalizeClaims<SpeakerClaim>(res.data?.items),
+    },
+  };
 }
 
 /**
