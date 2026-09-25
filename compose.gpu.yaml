@@ -1,0 +1,48 @@
+# GPU 主機這一側：Ollama（用顯示卡）＋ 摘要 API。Pi 那一側在 compose.yaml。
+#
+#   cp .env.gpu.example .env.gpu
+#   docker compose -f compose.gpu.yaml --env-file .env.gpu up -d --build
+#
+# 需要 Docker Desktop（WSL2）與 NVIDIA 驅動；`docker run --rm --gpus all ubuntu nvidia-smi`
+# 看得到顯示卡就可以。跑這一套的時候把 Windows 原生的 Ollama 關掉，否則兩份
+# 模型會一起佔 VRAM。
+
+services:
+  ollama:
+    image: ollama/ollama:latest
+    restart: unless-stopped
+    gpus: all
+    volumes:
+      # 直接用 Windows 上 Ollama 已經下載好的模型（格式相同），不必再抓一次 6.6 GB
+      - ${OLLAMA_MODELS_DIR:?請設定 OLLAMA_MODELS_DIR（例如 C:/Users/Aidan/.ollama）}:/root/.ollama
+    environment:
+      # 模型用完不要馬上卸載：匯入是一篇接一篇，每篇重新載入 6.6 GB 太浪費
+      OLLAMA_KEEP_ALIVE: 30m
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+  api:
+    build: .
+    image: ly-summary-api
+    restart: unless-stopped
+    ports:
+      - "${API_PORT:-8800}:8800"
+    environment:
+      SLIDEBOX_API_KEY: ${SLIDEBOX_API_KEY:?請設定 SLIDEBOX_API_KEY（Pi 那邊的 GPU_API_KEY 要填同一把）}
+      SLIDEBOX_OLLAMA_HOST: http://ollama:11434
+      SLIDEBOX_MODEL: ${SLIDEBOX_MODEL:-qwen3.5:9b}
+    volumes:
+      - summary-output:/data/output
+      # faster-whisper 第一次用會下載 1.6 GB 的模型，放 volume 才不會每次重建都重抓
+      - whisper-cache:/root/.cache/huggingface
+    depends_on:
+      ollama:
+        condition: service_healthy
+
+volumes:
+  summary-output:
+  whisper-cache:
