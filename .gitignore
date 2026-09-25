@@ -33,3 +33,4 @@ docs/spec.md
 
 # docker compose 的設定（有金鑰）
 /.env
+/.env.gpu
