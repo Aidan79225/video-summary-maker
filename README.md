@@ -302,7 +302,8 @@ docker compose exec api python manage.py ingest_ivod --date 2026-08-27 --limit 3
 docker compose logs -f scheduler
 ```
 
-- 資料庫與截圖在 `news-data` volume 裡，重建映像不會掉；Portainer 刪 stack 時勾了「remove volumes」或 `down -v` 才會刪
+- 資料庫與截圖放在 `DATA_DIR`（Pi 的磁碟陣列，`appdata/ly-news`），第一次要先 `sudo mkdir -p` 並 `chown -R 1000:1000`；容器以 uid 1000 執行，刪 stack 也不會動到它
+- 建置走 `network: host`：Pi5 上容器走 bridge 連國外套件庫很慢（和 nextcloud 那個 stack 一樣的問題）
 - 映像的基底都是多架構的，同一份檔案在 amd64 與 Raspberry Pi（arm64）都能建
 - Tunnel 用 Cloudflare 後台建立的 token 模式，轉送規則在後台設：`media/*` → `http://api:8000`，其餘 → `http://web:4321`。`/api` 與 `/admin` 不對外。只在區網、不對外的話把 `cloudflared` 那段從 compose 刪掉
 
