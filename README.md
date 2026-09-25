@@ -261,6 +261,22 @@ New-NetFirewallRule -DisplayName "SlideBox API" -Direction Inbound -LocalPort 88
 
 綁在非 loopback 位址又沒設 `SLIDEBOX_API_KEY` 時，啟動會印一行警告——任何連得到這個埠的人都能佔用你的 GPU。
 
+### 或者用 Docker
+
+`compose.gpu.yaml` 把 Ollama（用顯示卡）和摘要 API 包成兩個容器，不必在 Windows 上裝 uv、設防火牆規則或工作排程。需要 Docker Desktop（WSL2）與 NVIDIA 驅動；`docker run --rm --gpus all ubuntu nvidia-smi` 看得到顯示卡就可以。
+
+```powershell
+cp .env.gpu.example .env.gpu        # 填 SLIDEBOX_API_KEY；OLLAMA_MODELS_DIR 指向 Windows 上 Ollama 的資料夾
+docker compose -f compose.gpu.yaml --env-file .env.gpu up -d --build
+curl http://localhost:8800/health   # ollama_reachable 要是 true
+```
+
+- Ollama 容器直接掛 Windows 上已經下載好的模型（`OLLAMA_MODELS_DIR`），不必再抓一次；跑這一套時把原生的 Ollama 關掉，否則兩份模型會一起佔 VRAM
+- 容器裡的 ffmpeg 用 Debian 的套件，不用 imageio-ffmpeg 附的靜態檔（後者在容器裡讀立法院的 HLS 串流會 segfault）
+- 語音辨識走 CPU，模型快取在 `whisper-cache` volume；成品在 `summary-output` volume
+- 對區網開放是預設（容器一定綁 0.0.0.0），所以 `SLIDEBOX_API_KEY` 是必填
+- 桌面 app（`slides.py`）不在容器裡，照常原生執行
+
 ## 2. 後端（Pi）
 
 `services/news/` — Django + django-ninja。每天凌晨抓前一天的質詢片段、送去 GPU 主機產生**詳細模式**的摘要、存成文章，並開出 news API。見 `services/news/README.md`。
