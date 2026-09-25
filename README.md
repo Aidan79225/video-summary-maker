@@ -269,4 +269,22 @@ New-NetFirewallRule -DisplayName "SlideBox API" -Direction Inbound -LocalPort 88
 
 `web/news/` — Astro。讀 news API，呈現新聞頁。見 `web/news/README.md`。
 
+## 用 Docker 部署 Pi 這一側
+
+後端、每日排程、前端（以及可選的 Cloudflare Tunnel）包成一份 `compose.yaml`。GPU 主機上的摘要 API 不在裡面——它要直接用 Windows 上的 Ollama 與顯示卡，維持原生執行。
+
+```bash
+cp .env.docker.example .env        # 填 DJANGO_SECRET_KEY、GPU_API_BASE、GPU_API_KEY、PUBLIC_MEDIA_BASE
+docker compose up -d --build                      # 只在區網
+docker compose --profile tunnel up -d --build     # 加上 Cloudflare Tunnel（要先填 TUNNEL_TOKEN）
+
+docker compose exec api python manage.py ingest_ivod --date 2026-08-27 --limit 3   # 手動匯入
+docker compose exec api python manage.py createsuperuser                           # 後台帳號
+docker compose logs -f scheduler
+```
+
+- 資料庫與截圖在 `news-data` volume 裡，`down`／重建映像都不會掉；`down -v` 才會刪
+- 映像的基底都是多架構的，同一份檔案在 amd64 與 Raspberry Pi（arm64）都能建
+- Tunnel 用 Cloudflare 後台建立的 token 模式，轉送規則在後台設：`media/*` → `http://api:8000`，其餘 → `http://web:4321`。`/api` 與 `/admin` 不對外
+
 設計文件：`docs/superpowers/specs/2026-09-12-news-service-design.md`

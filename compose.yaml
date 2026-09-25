@@ -1,0 +1,83 @@
+# 立院質詢日報——Pi（或任何一台 Linux 主機）上的整套服務。
+#
+#   cp .env.docker.example .env      # 填好再啟動
+#   docker compose up -d --build                      # 只在區網
+#   docker compose --profile tunnel up -d --build     # 加上 Cloudflare Tunnel 對外
+#
+# GPU 主機上的摘要 API（serve_api.py）不在這裡：它要直接用 Windows 上的
+# Ollama 與顯示卡，維持原生執行，這裡只透過 GPU_API_BASE 連過去。
+
+x-news-backend: &news-backend
+  build: ./services/news
+  image: ly-news-backend
+  restart: unless-stopped
+  environment:
+    DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY:?請在 .env 設定 DJANGO_SECRET_KEY}
+    # api 是前端容器連過來時用的主機名，一定要在清單裡，否則 Django 回 400
+    DJANGO_ALLOWED_HOSTS: api,localhost,127.0.0.1,${PUBLIC_HOSTS:-pi.local}
+    GPU_API_BASE: ${GPU_API_BASE:?請在 .env 設定 GPU_API_BASE}
+    GPU_API_KEY: ${GPU_API_KEY:-}
+    GPU_JOB_TIMEOUT_SECONDS: ${GPU_JOB_TIMEOUT_SECONDS:-1800}
+    INGEST_DAILY_LIMIT: ${INGEST_DAILY_LIMIT:-20}
+    INGEST_HOUR: ${INGEST_HOUR:-4}
+    TZ: Asia/Taipei
+  volumes:
+    # 資料庫與截圖：唯一重建不了的東西。api 與 scheduler 共用同一份。
+    - news-data:/data
+
+services:
+  api:
+    <<: *news-backend
+    ports:
+      # 區網要直接拿截圖（PUBLIC_MEDIA_BASE 指向這裡）與進後台時用。
+      # 全部走 Cloudflare 的話可以把這兩行拿掉。
+      - "${API_PORT:-8000}:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  scheduler:
+    <<: *news-backend
+    # 每天 INGEST_HOUR:10 匯入；啟動時回補最近三天
+    command: ["python", "manage.py", "run_scheduler"]
+    depends_on:
+      api:
+        # 等 api 把 migrate 跑完，兩邊才不會搶著建表
+        condition: service_healthy
+
+  web:
+    build: ./web/news
+    image: ly-news-web
+    restart: unless-stopped
+    environment:
+      # SSR 在容器網路裡直接找 api
+      PUBLIC_API_BASE: http://api:8000
+      # 圖片網址會原樣送到瀏覽器：要填「讀者的裝置」連得到的位址
+      PUBLIC_MEDIA_BASE: ${PUBLIC_MEDIA_BASE:?請在 .env 設定 PUBLIC_MEDIA_BASE}
+      API_TIMEOUT_MS: ${API_TIMEOUT_MS:-8000}
+    ports:
+      - "${WEB_PORT:-4321}:4321"
+    depends_on:
+      - api
+    mem_limit: 512m
+
+  cloudflared:
+    # 只有 --profile tunnel 時才啟動。用 Cloudflare 後台建立的 tunnel（token 模式），
+    # 轉送規則在後台設定：
+    #   news.example.com  path: media/*  →  http://api:8000
+    #   news.example.com                 →  http://web:4321
+    profiles: ["tunnel"]
+    image: cloudflare/cloudflared:latest
+    restart: unless-stopped
+    command: tunnel --no-autoupdate run
+    environment:
+      TUNNEL_TOKEN: ${TUNNEL_TOKEN:-}
+    depends_on:
+      - web
+      - api
+
+volumes:
+  news-data:
