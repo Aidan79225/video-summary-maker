@@ -11,9 +11,14 @@
 # Ollama 與顯示卡，維持原生執行，這裡只透過 GPU_API_BASE 連過去。
 
 x-news-backend: &news-backend
-  build: ./services/news
+  build:
+    context: ./services/news
+    # Pi5 上容器走 bridge 連國外套件庫只有幾十 KB/s，建置時改走 host 網路（只影響 build）
+    network: host
   image: ly-news-backend
   restart: unless-stopped
+  # 和 Pi 上其他 stack 一樣用 uid 1000 跑：磁碟陣列上的資料夾交給 1000 就好，不會留下 root 的檔案
+  user: "1000:1000"
   environment:
     DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY:?請在 .env 設定 DJANGO_SECRET_KEY}
     # api 是前端容器連過來時用的主機名，一定要在清單裡，否則 Django 回 400
@@ -25,12 +30,13 @@ x-news-backend: &news-backend
     INGEST_HOUR: ${INGEST_HOUR:-4}
     TZ: Asia/Taipei
   volumes:
-    # 資料庫與截圖：唯一重建不了的東西。api 與 scheduler 共用同一份。
-    - news-data:/data
+    # 資料庫與截圖：唯一重建不了的東西，放磁碟陣列（appdata/ly-news）。api 與 scheduler 共用同一份。
+    - ${DATA_DIR:?請設定 DATA_DIR（磁碟陣列上的資料夾，例如 /srv/dev-disk-by-uuid-…/appdata/ly-news）}:/data
 
 services:
   api:
     <<: *news-backend
+    container_name: ly-news-api
     ports:
       # 區網要直接拿截圖（PUBLIC_MEDIA_BASE 指向這裡）與進後台時用。
       # 全部走 Cloudflare 的話可以把這兩行拿掉。
@@ -44,6 +50,7 @@ services:
 
   scheduler:
     <<: *news-backend
+    container_name: ly-news-scheduler
     # 每天 INGEST_HOUR:10 匯入；啟動時回補最近三天
     command: ["python", "manage.py", "run_scheduler"]
     depends_on:
@@ -52,8 +59,11 @@ services:
         condition: service_healthy
 
   web:
-    build: ./web/news
+    build:
+      context: ./web/news
+      network: host
     image: ly-news-web
+    container_name: ly-news-web
     restart: unless-stopped
     environment:
       # SSR 在容器網路裡直接找 api
@@ -73,13 +83,12 @@ services:
     #   news.aidan.tw                 →  http://web:4321
     # /api 與 /admin 不在規則裡，所以外面碰不到 Django 的其他部分。
     image: cloudflare/cloudflared:latest
+    container_name: cloudflared-news
     restart: unless-stopped
     command: tunnel --no-autoupdate run
     environment:
-      TUNNEL_TOKEN: ${TUNNEL_TOKEN:?請設定 TUNNEL_TOKEN（Cloudflare 後台建立 tunnel 時給的）；不對外的話刪掉 cloudflared 這個服務}
+      # 和 ebook／其他 stack 共用同一條 tunnel（pi5-services），token 相同；每個 stack 各跑一個 connector
+      TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN:?請設定 CLOUDFLARE_TUNNEL_TOKEN；不對外的話刪掉 cloudflared 這個服務}
     depends_on:
       - web
       - api
-
-volumes:
-  news-data:
