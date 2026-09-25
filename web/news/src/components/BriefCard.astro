@@ -1,0 +1,68 @@
+---
+/**
+ * 摘要卡：讀者十秒內要知道的事。
+ *
+ * 分段摘要是「照影片順序講了什麼」，這張卡是「他到底要什麼、拿到什麼回應、
+ * 憑什麼數字」。固定欄位比散文省腦力——讀者知道眼睛該往哪看。
+ */
+import type { Brief } from '../lib/types';
+
+interface Props {
+  brief: Brief;
+}
+
+const { brief } = Astro.props;
+const numbers = brief.key_numbers.slice(0, 4);
+const asks = brief.asks.slice(0, 4);
+---
+
+<section
+  class="mt-6 grid gap-5 rounded-[var(--radius-card)] border border-line bg-surface p-5 sm:gap-6 sm:p-7"
+  aria-label="摘要卡"
+>
+  <p class="headline text-[1.2rem] leading-relaxed sm:text-[1.35rem]" style="text-wrap: pretty">
+    {brief.one_liner}
+  </p>
+
+  {
+    numbers.length > 0 && (
+      <div>
+        <p class="text-[0.7rem] tracking-[0.2em] text-muted uppercase">關鍵數字</p>
+        <dl class="mt-2 grid grid-cols-2 gap-3 sm:grid-cols-4">
+          {numbers.map((n) => (
+            <div class="border-t border-line-soft pt-2.5">
+              <dd class="text-[1.55rem] leading-tight font-semibold text-ink">
+                {n.value}
+                {n.unit && <span class="ml-0.5 text-[0.85rem] font-medium text-muted">{n.unit}</span>}
+              </dd>
+              <dt class="mt-1 text-[0.75rem] leading-snug text-muted" title={n.quote || undefined}>
+                {n.label}
+              </dt>
+            </div>
+          ))}
+        </dl>
+      </div>
+    )
+  }
+
+  {
+    asks.length > 0 && (
+      <div>
+        <p class="text-[0.7rem] tracking-[0.2em] text-muted uppercase">要求與回應</p>
+        <ul class="mt-2 grid gap-2.5">
+          {asks.map((a) => (
+            <li class="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 text-[0.9rem]">
+              <span class="mt-[3px] self-start rounded-md border border-line px-1.5 text-[0.68rem] tracking-[0.1em] whitespace-nowrap text-muted">
+                {a.deadline || '未定期限'}
+              </span>
+              <span class="text-ink-2">
+                {a.request}
+                <span class="block text-[0.82rem] text-muted">{a.response || '未明確回應'}</span>
+              </span>
+            </li>
+          ))}
+        </ul>
+      </div>
+    )
+  }
+</section>

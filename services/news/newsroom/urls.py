@@ -3,6 +3,7 @@ from __future__ import annotations
 from django.conf import settings
 from django.contrib import admin
 from django.urls import path, re_path
+from django.utils.cache import patch_cache_control
 from django.views.static import serve
 
 from articles.api import api
@@ -25,6 +26,13 @@ if settings.SERVE_MEDIA:
     def _serve_media(request, path):
         # 在請求當下才讀 MEDIA_ROOT，而不是把值烤進 URLConf：後者在測試
         # （override_settings）與任何延後設定的情境下都會指到錯的地方。
-        return serve(request, path, document_root=settings.MEDIA_ROOT)
+        response = serve(request, path, document_root=settings.MEDIA_ROOT)
+        # 對外的流量真正碰到 Django 的就是圖片（tunnel 把 media/* 轉到這裡）。
+        # 同一個網址的截圖永遠不會變（重跑會換資料夾），所以可以放心讓
+        # 瀏覽器與 Cloudflare 邊緣快取。只標 200：304 與 404 不該被快取一天。
+        if response.status_code == 200 and settings.MEDIA_CACHE_SECONDS > 0:
+            patch_cache_control(response, public=True,
+                                max_age=settings.MEDIA_CACHE_SECONDS, immutable=True)
+        return response
 
     urlpatterns += [re_path(r"^media/(?P<path>.*)$", _serve_media)]

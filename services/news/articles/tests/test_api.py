@@ -17,8 +17,17 @@ atexit.register(shutil.rmtree, MEDIA, ignore_errors=True)
 IMAGE = b"\x00\x01fake-webp\xff"
 
 
+BRIEF = {
+    "one_liner": "國防部三年編 82.4 億買無人機，交到部隊的不到一半",
+    "key_numbers": [
+        {"value": "82.4", "unit": "億元", "label": "三年累計編列", "quote": "累計編列八十二點四億元"},
+    ],
+    "asks": [{"request": "提出交機時程清冊", "deadline": "一個月內", "response": "部長允諾"}],
+}
+
+
 def _article(ivod_id="900001", speaker="範例一", day="2026-08-27", status=None,
-             slides=2, with_image=True):
+             slides=2, with_image=True, brief=None):
     article = Article.objects.create(
         ivod_id=ivod_id,
         slug=f"{day}-{ivod_id}",
@@ -37,6 +46,7 @@ def _article(ivod_id="900001", speaker="範例一", day="2026-08-27", status=Non
         "title": article.title,
         "source_note": "逐字稿由立法院 AI 自動產生，可能有辨識錯誤",
         "transcript_text": "00:00 主席 各位同仁",
+        "brief": brief,
         "slides": [{
             "index": i,
             "title": f"第 {i} 段：國防自主",
@@ -122,6 +132,21 @@ class ApiTests(TestCase):
         self.assertIn("AI", body["source_note"])
         self.assertIn("主席", body["transcript_text"])
 
+    def test_the_detail_page_carries_the_brief_and_the_card_leads_with_it(self):
+        _article(brief=BRIEF)
+        body = self.client.get("/api/articles/2026-08-27-900001").json()
+        self.assertEqual(body["brief"]["one_liner"], BRIEF["one_liner"])
+        self.assertEqual(body["brief"]["key_numbers"][0]["unit"], "億元")
+        self.assertEqual(body["brief"]["asks"][0]["response"], "部長允諾")
+        self.assertEqual(body["teaser"], BRIEF["one_liner"])
+        card = self.client.get("/api/articles").json()["items"][0]
+        self.assertEqual(card["teaser"], BRIEF["one_liner"])
+
+    def test_an_article_without_a_brief_says_so_with_null(self):
+        _article()
+        body = self.client.get("/api/articles/2026-08-27-900001").json()
+        self.assertIsNone(body["brief"])
+
     def test_an_unknown_article_is_404(self):
         self.assertEqual(self.client.get("/api/articles/沒這篇").status_code, 404)
 
@@ -176,6 +201,28 @@ class MediaServingTests(TestCase):
             with self.subTest(index=slide["index"]):
                 self.assertEqual(self.client.get(slide["image_url"]).status_code, 200)
 
+    def test_a_screenshot_is_served_with_a_long_public_cache_header(self):
+        """對外流量真正碰到 Django 的是圖片。每次重跑都換資料夾、網址跟著
+        換，所以同一個網址的內容永遠不變，可以讓 Cloudflare 邊緣快取。"""
+        _article()
+        url = self.client.get("/api/articles").json()["items"][0]["cover_image_url"]
+        cache = self.client.get(url)["Cache-Control"]
+        self.assertIn("public", cache)
+        self.assertIn("max-age=86400", cache)
+        self.assertIn("immutable", cache)
+
+    def test_a_missing_screenshot_is_not_cached(self):
+        """404 被快取一天的話，補上圖片之後讀者還是一整天看到破圖。"""
+        response = self.client.get("/media/articles/nope/01.webp")
+        self.assertEqual(response.status_code, 404)
+        self.assertNotIn("max-age=86400", response.get("Cache-Control", ""))
+
+    @override_settings(MEDIA_CACHE_SECONDS=0)
+    def test_the_cache_header_can_be_switched_off(self):
+        _article()
+        url = self.client.get("/api/articles").json()["items"][0]["cover_image_url"]
+        self.assertFalse(self.client.get(url).has_header("Cache-Control"))
+
     def test_paths_outside_the_media_root_are_refused(self):
         for path in ("/media/../../manage.py", "/media/..%2f..%2fmanage.py"):
             with self.subTest(path=path):
@@ -201,3 +248,17 @@ class HostileQueryTests(TestCase):
         _article()
         body = self.client.get("/api/articles?page_size=100000").json()
         self.assertLessEqual(body["page_size"], 50)
+
+
+@override_settings(WHITENOISE_USE_FINDERS=True, WHITENOISE_AUTOREFRESH=True)
+class StaticServingTests(TestCase):
+    """admin 的 CSS 由 WhiteNoise 服務，gunicorn 底下不再靠 runserver 的 --insecure。
+
+    測試用 finders 直接從 django.contrib.admin 的 static 目錄找，不必先
+    collectstatic；正式映像在建置時 collectstatic，走的是同一個 middleware。
+    """
+
+    def test_admin_css_is_served_without_the_dev_server(self):
+        response = self.client.get("/static/admin/css/base.css")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("text/css", response["Content-Type"])

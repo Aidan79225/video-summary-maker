@@ -21,9 +21,32 @@ export type Slide = {
   image_url: string | null;
 };
 
+export type KeyNumber = {
+  /** 只有阿拉伯數字，例如 "82.4"；單位另放，卡片才能把數字放大、單位縮小 */
+  value: string;
+  unit: string;
+  label: string;
+  /** 逐字稿裡講出這個數字的那句話，生成端已驗證過它真的在逐字稿裡 */
+  quote: string;
+};
+
+export type Ask = {
+  request: string;
+  deadline: string;
+  response: string;
+};
+
+/** 摘要卡：一句話、關鍵數字、要求與回應。後端產不出來時整個是 null。 */
+export type Brief = {
+  one_liner: string;
+  key_numbers: KeyNumber[];
+  asks: Ask[];
+};
+
 export type ArticleDetail = ArticleCard & {
   source_note: string;
   transcript_text: string;
+  brief: Brief | null;
   slides: Slide[];
 };
 

@@ -1,5 +1,6 @@
 ---
 import Base from '../../layouts/Base.astro';
+import BriefCard from '../../components/BriefCard.astro';
 import Notice from '../../components/Notice.astro';
 import SlideBlock from '../../components/SlideBlock.astro';
 import Transcript from '../../components/Transcript.astro';
@@ -52,10 +53,15 @@ const retryHref = Astro.url.pathname;
 
           <h1 class="headline mt-4 text-[1.7rem] font-semibold sm:text-4xl">{title}</h1>
 
-          {article.teaser && (
-            <p class="prose-cn mt-5 border-l-2 border-accent/40 pl-4 text-[1.05rem] sm:text-[1.12rem]">
-              {article.teaser}
-            </p>
+          {/* 有摘要卡就用卡片，沒有才退回第一段的導言：兩個都放會講同一件事兩遍 */}
+          {article.brief ? (
+            <BriefCard brief={article.brief} />
+          ) : (
+            article.teaser && (
+              <p class="prose-cn mt-5 border-l-2 border-accent/40 pl-4 text-[1.05rem] sm:text-[1.12rem]">
+                {article.teaser}
+              </p>
+            )
           )}
 
           <dl class="mt-6 flex flex-wrap items-center gap-x-5 gap-y-2 border-y border-line-soft py-3 text-[0.8rem] text-muted">
@@ -105,9 +111,23 @@ const retryHref = Astro.url.pathname;
           )}
         </header>
 
-        <!-- 逐段內容 -->
+        <!-- 逐段內容：完整敘述預設收合，這一列可以一次展開 -->
+        {slides.some((s) => s.detail) && (
+          <div class="mt-10 flex flex-wrap items-center gap-3 text-[0.8rem] text-muted sm:mt-14">
+            <button
+              type="button"
+              id="toggle-details"
+              data-open-label="展開全部敘述"
+              data-close-label="收合全部敘述"
+              class="lift rounded-full border border-line bg-surface px-4 py-1.5 text-ink-2 hover:border-accent hover:text-accent"
+            >
+              展開全部敘述
+            </button>
+            <span>預設只看小標與條列，完整敘述按需要展開。</span>
+          </div>
+        )}
         {slides.length > 0 ? (
-          <div class="mt-10 space-y-10 sm:mt-14 sm:space-y-12">
+          <div class="mt-6 space-y-10 sm:mt-8 sm:space-y-12">
             {slides.map((s, i) => (
               <SlideBlock slide={s} ivodUrl={ivodUrl} order={i + 1} total={slides.length} />
             ))}
@@ -143,4 +163,29 @@ const retryHref = Astro.url.pathname;
       </article>
     )
   }
+
+  <script is:inline>
+    (function () {
+      var btn = document.getElementById('toggle-details');
+      if (!btn) return;
+      var all = function () {
+        return Array.prototype.slice.call(document.querySelectorAll('details[data-detail]'));
+      };
+      var sync = function () {
+        var open = all().length > 0 && all().every(function (d) { return d.open; });
+        btn.textContent = open ? btn.dataset.closeLabel : btn.dataset.openLabel;
+        btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+      };
+      btn.addEventListener('click', function () {
+        var open = !all().every(function (d) { return d.open; });
+        all().forEach(function (d) { d.open = open; });
+        sync();
+      });
+      // 個別展開到全部都開時，按鈕也要跟著變成「收合」
+      document.addEventListener('toggle', function (e) {
+        if (e.target && e.target.matches && e.target.matches('details[data-detail]')) sync();
+      }, true);
+      sync();
+    })();
+  </script>
 </Base>

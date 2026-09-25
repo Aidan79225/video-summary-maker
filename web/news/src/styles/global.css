@@ -201,6 +201,14 @@ details[open] .chev {
   transition: transform 0.25s ease;
 }
 
+/* 分段的完整敘述預設收合：小標與條列夠讓人決定要不要讀下去 */
+details.more > summary {
+  width: fit-content;
+}
+details.more > summary:focus-visible {
+  outline-offset: 4px;
+}
+
 [hidden] {
   display: none !important;
 }

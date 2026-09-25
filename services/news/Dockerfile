@@ -19,6 +19,12 @@ ENV PATH="/app/.venv/bin:$PATH" \
     DJANGO_DB_PATH=/data/db.sqlite3 \
     DJANGO_MEDIA_ROOT=/data/media
 
+# admin 的靜態檔在建置時收進映像，執行時由 WhiteNoise 服務。
+# collectstatic 不碰資料庫，所以這裡不需要 /data。
+RUN python manage.py collectstatic --noinput
+
 EXPOSE 8000
-# --insecure 讓 DEBUG=False 下的 /admin/ 還有 CSS（與 README 的 systemd 作法相同）
-CMD ["sh", "-c", "python manage.py migrate --noinput && exec python manage.py runserver 0.0.0.0:8000 --noreload --insecure"]
+# gunicorn 而不是 runserver：runserver 沒有 worker 管理，卡住的請求不會被回收。
+# Pi 只有四顆核心而且 SQLite 單一寫入者，2 個 worker × 2 條 thread 夠用；
+# 逾時 30 秒是給 /media 讀檔的餘裕。scheduler 容器另外用 manage.py 啟動。
+CMD ["sh", "-c", "python manage.py migrate --noinput && exec gunicorn newsroom.wsgi:application --bind 0.0.0.0:8000 --workers 2 --threads 2 --timeout 30 --access-logfile - --access-logformat '%(h)s %(m)s %(U)s %(s)s %(B)s %(M)sms'"]

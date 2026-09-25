@@ -3,17 +3,19 @@ from __future__ import annotations
 
 import pytest
 
-from slidebox.domain.entities import Cue, Settings, Slide, Transcript
+from slidebox.domain.entities import Brief, Cue, KeyNumber, Settings, Slide, Transcript
 from slidebox.domain.errors import (
     NoSubtitlesAvailable,
     SubtitleDownloadFailed,
     OperationCancelled,
     SummarizerOutputInvalid,
+    SummarizerUnavailable,
 )
 from slidebox.usecases.build_deck import BuildDeckUseCase
 
 from .fakes import (
     FakeAudioGateway,
+    FakeBriefWriter,
     FakeFrameExtractor,
     FakeRenderer,
     FakeSectionGateway,
@@ -488,3 +490,111 @@ def test_a_source_that_states_its_own_quality_note_wins():
     )
     result = _build(subs=FakeSubtitleGateway(transcript)).execute("URL", _settings())
     assert result.deck.source_note == "逐字稿由立法院 AI 自動產生，可能有辨識錯誤"
+
+
+# --- 摘要卡 ---
+
+
+def _detailed_transcript() -> Transcript:
+    return Transcript(
+        video_id="vid1", title="測試影片", duration=600.0, language="zh-TW",
+        is_automatic=False,
+        cues=(Cue(0.0, 3.0, "國防部累計編列八十二點四億元"), Cue(30.0, 33.0, "第二句")),
+    )
+
+
+def _build_with_brief(writer: FakeBriefWriter, summ=None):
+    return BuildDeckUseCase(
+        FakeSubtitleGateway(_detailed_transcript()),
+        summ or FakeSummarizer([make_slides(3, detail=True)]),
+        FakeSectionGateway(), FakeFrameExtractor(), FakeRenderer(),
+        brief_writer=writer,
+    )
+
+
+def test_detailed_mode_writes_a_brief_from_the_validated_slides():
+    writer = FakeBriefWriter()
+    result = _build_with_brief(writer).execute("URL", _settings(detailed=True))
+    assert result.deck.brief is not None
+    assert result.deck.brief.one_liner.startswith("國防部")
+    assert writer.digests == [("第 1 段", "第 2 段", "第 3 段")]
+
+
+def test_normal_mode_does_not_write_a_brief():
+    """一般模式沒有 detail，卡片會憑空編；而且多一次生成等於多等一段時間。"""
+    writer = FakeBriefWriter()
+    result = _build_with_brief(writer).execute("URL", _settings(detailed=False))
+    assert result.deck.brief is None
+    assert writer.calls == 0
+
+
+def test_without_a_writer_the_deck_simply_has_no_brief():
+    result = _build(summ=FakeSummarizer([make_slides(3, detail=True)])).execute(
+        "URL", _settings(detailed=True))
+    assert result.deck.brief is None
+
+
+def test_fabricated_numbers_are_dropped_against_the_full_transcript():
+    """落地檢查用的是整份逐字稿，不是餵給模型的分段摘要。"""
+    writer = FakeBriefWriter([Brief("國防部三年編 82.4 億買無人機，交到部隊的不到一半", key_numbers=(
+        KeyNumber("82.4", "億元", "三年累計編列", "累計編列八十二點四億元"),
+        KeyNumber("47", "%", "交機比例", "累計編列八十二點四億元"),
+    ))])
+    result = _build_with_brief(writer).execute("URL", _settings(detailed=True))
+    assert [n.label for n in result.deck.brief.key_numbers] == ["三年累計編列"]
+
+
+def test_an_empty_brief_is_retried_once_with_the_problem_as_hint():
+    writer = FakeBriefWriter([Brief(""), Brief("國防部三年編 82.4 億買無人機，交到部隊的不到一半")])
+    result = _build_with_brief(writer).execute("URL", _settings(detailed=True))
+    assert writer.calls == 2
+    assert writer.hints[0] == ""
+    assert "one_liner" in writer.hints[1]
+    assert result.deck.brief is not None
+
+
+def test_a_brief_that_stays_bad_is_dropped_but_the_deck_still_ships():
+    """卡片是加值：分段摘要已經花了幾分鐘 GPU，不為卡片判整支失敗。"""
+    writer = FakeBriefWriter([Brief(""), Brief("")])
+    result = _build_with_brief(writer).execute("URL", _settings(detailed=True))
+    assert result.deck.brief is None
+    assert len(result.deck.slides) == 3
+
+
+def test_invalid_json_from_the_writer_gets_the_same_single_retry():
+    writer = FakeBriefWriter(error=SummarizerOutputInvalid("不是 JSON"))
+    result = _build_with_brief(writer).execute("URL", _settings(detailed=True))
+    assert writer.calls == 2
+    assert "不是 JSON" in writer.hints[1]
+    assert result.deck.brief is not None
+
+
+def test_an_unreachable_model_skips_the_brief_and_says_so():
+    statuses: list[str] = []
+    writer = FakeBriefWriter(error=SummarizerUnavailable("連不上"))
+    result = _build_with_brief(writer).execute(
+        "URL", _settings(detailed=True), progress=lambda f, s: statuses.append(s))
+    assert result.deck.brief is None
+    assert writer.calls == 1
+    assert any("摘要卡略過" in s for s in statuses)
+
+
+def test_cancelling_during_the_brief_stops_the_pipeline():
+    class CancelInBrief(FakeBriefWriter):
+        def write(self, slides, progress, is_cancelled=None, hint=""):
+            assert is_cancelled is not None
+            flag["on"] = True
+            if is_cancelled():
+                raise OperationCancelled()
+            return super().write(slides, progress, is_cancelled, hint)
+
+    flag = {"on": False}
+    secs = FakeSectionGateway()
+    usecase = BuildDeckUseCase(
+        FakeSubtitleGateway(_detailed_transcript()),
+        FakeSummarizer([make_slides(3, detail=True)]),
+        secs, FakeFrameExtractor(), FakeRenderer(), brief_writer=CancelInBrief(),
+    )
+    with pytest.raises(OperationCancelled):
+        usecase.execute("URL", _settings(detailed=True), is_cancelled=lambda: flag["on"])
+    assert secs.timestamps == []

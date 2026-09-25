@@ -26,6 +26,25 @@ class SlideOut(Schema):
     image_url: str | None
 
 
+class KeyNumberOut(Schema):
+    value: str
+    unit: str
+    label: str
+    quote: str
+
+
+class AskOut(Schema):
+    request: str
+    deadline: str
+    response: str
+
+
+class BriefOut(Schema):
+    one_liner: str
+    key_numbers: list[KeyNumberOut]
+    asks: list[AskOut]
+
+
 class ArticleCardOut(Schema):
     slug: str
     ivod_id: str
@@ -43,6 +62,8 @@ class ArticleCardOut(Schema):
 class ArticleDetailOut(ArticleCardOut):
     source_note: str
     transcript_text: str
+    # 沒有摘要卡就是 null：前端退回只用導言的版面
+    brief: BriefOut | None
     slides: list[SlideOut]
 
 
@@ -146,6 +167,7 @@ def article_detail(request, slug: str) -> dict:
     data.update({
         "source_note": article.source_note,
         "transcript_text": article.transcript_text,
+        "brief": article.brief,
         "slides": [{
             "index": s.index,
             "title": s.title,

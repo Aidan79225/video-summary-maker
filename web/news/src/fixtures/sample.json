@@ -1,5 +1,5 @@
 {
-  "_note": "完全虛構的示範資料。姓名（範例一～範例四）、影片 id（9000xx）與發言內容都不對應任何真實人物或片段，網址也指向 example.invalid。USE_FIXTURE=1 時用它，讓 API 掛掉仍然可以展示畫面。",
+  "_note": "完全虛構的示範資料。姓名（範例一～範例四）、影片 id（9000xx）與發言內容都不對應任何真實人物或片段，網址也指向 example.invalid。USE_FIXTURE=1 時用它，讓 API 掛掉仍然可以展示畫面。 有摘要卡（brief）與沒有的各兩篇，示範兩種版面。",
   "articles": [
     {
       "slug": "2026-08-27-900001",
@@ -10,10 +10,56 @@
       "date": "2026-08-27",
       "duration_seconds": 197,
       "ivod_url": "https://ivod.example.invalid/Play/Clip/1M/900001",
-      "teaser": "國防部三年內編列八十二億元採購各式無人機，實際交機卻不到編列數量的五成。立委範例一在外交及國防委員會質詢時指出，商規機種延宕、軍規機種卡在驗證，讓「不對稱戰力」淪為紙上規劃，要求國防部一個月內提出分機種的交機時程與國產比例清冊。",
+      "teaser": "國防部三年編 82.4 億買無人機，交到部隊手上的不到一半；要求一個月內交出分機種的交機時程清冊。",
       "cover_image_url": "/media/articles/900001/01.webp",
       "slide_count": 4,
       "source_note": "逐字稿由立法院 AI 自動產生，可能有辨識錯誤",
+      "brief": {
+        "one_liner": "國防部三年編 82.4 億買無人機，交到部隊手上的不到一半；要求一個月內交出分機種的交機時程清冊。",
+        "key_numbers": [
+          {
+            "value": "82.4",
+            "unit": "億元",
+            "label": "114–116 年度累計編列",
+            "quote": "國防部在各式無人機項目累計編列八十二點四億元"
+          },
+          {
+            "value": "1860",
+            "unit": "架",
+            "label": "契約應交",
+            "quote": "依契約應完成交機一千八百六十架"
+          },
+          {
+            "value": "872",
+            "unit": "架",
+            "label": "實際點收",
+            "quote": "實際完成點收的只有八百七十二架"
+          },
+          {
+            "value": "214",
+            "unit": "架",
+            "label": "仍在待驗",
+            "quote": "另有兩百一十四架處於待驗狀態"
+          }
+        ],
+        "asks": [
+          {
+            "request": "提出分機種交機時程清冊，含剩餘架數、預計月份、卡關原因與零組件替代方案",
+            "deadline": "一個月內",
+            "response": "部長允諾期限內送交委員會"
+          },
+          {
+            "request": "規格在履約期間每次修改的日期與內容書面送交委員會",
+            "deadline": "",
+            "response": "「有依需求滾動檢討」"
+          },
+          {
+            "request": "統一國產化率的計算基準，逐案揭露",
+            "deadline": "",
+            "response": ""
+          }
+        ]
+      },
       "slides": [
         {
           "index": 1,
@@ -75,10 +121,44 @@
       "date": "2026-08-26",
       "duration_seconds": 243,
       "ivod_url": "https://ivod.example.invalid/Play/Clip/1M/900002",
-      "teaser": "健保點值連續四季低於零點九元，醫院端等於做十塊錢的工作只領到九塊。立委範例二在社會福利及衛生環境委員會要求衛福部說明總額成長率的計算方式，並點出急診暫留超過二十四小時的人次在半年內增加三成，直指人力缺口才是壅塞主因。",
+      "teaser": "健保點值連四季低於 0.9 元、急診暫留逾 24 小時人次半年增三成；要求公開總額試算並改用留任率當護理 KPI。",
       "cover_image_url": "/media/articles/900002/01.webp",
       "slide_count": 4,
       "source_note": "逐字稿由立法院 AI 自動產生，可能有辨識錯誤",
+      "brief": {
+        "one_liner": "健保點值連四季低於 0.9 元、急診暫留逾 24 小時人次半年增三成；要求公開總額試算並改用留任率當護理 KPI。",
+        "key_numbers": [
+          {
+            "value": "0.87",
+            "unit": "元",
+            "label": "近四季平均點值",
+            "quote": "最近四季浮動點值平均只有零點八七元"
+          },
+          {
+            "value": "31",
+            "unit": "%",
+            "label": "急診暫留逾 24 小時人次增幅",
+            "quote": "急診暫留超過二十四小時的人次比去年同期增加三成一"
+          }
+        ],
+        "asks": [
+          {
+            "request": "公開總額成長率試算的參數、權重與公式",
+            "deadline": "",
+            "response": "次長：評估以附件方式提供"
+          },
+          {
+            "request": "改用留任率作為護理人力政策的主要指標",
+            "deadline": "三個月內",
+            "response": "納入下一期計畫檢討"
+          },
+          {
+            "request": "夜班津貼與實際輪值時數連動",
+            "deadline": "",
+            "response": ""
+          }
+        ]
+      },
       "slides": [
         {
           "index": 1,
@@ -144,6 +224,7 @@
       "cover_image_url": "/media/articles/900003/01.webp",
       "slide_count": 5,
       "source_note": "逐字稿由立法院 AI 自動產生，可能有辨識錯誤",
+      "brief": null,
       "slides": [
         {
           "index": 1,
@@ -221,6 +302,7 @@
       "cover_image_url": "/media/articles/900004/01.webp",
       "slide_count": 4,
       "source_note": "逐字稿由立法院 AI 自動產生，可能有辨識錯誤",
+      "brief": null,
       "slides": [
         {
           "index": 1,

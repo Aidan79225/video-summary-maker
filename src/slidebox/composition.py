@@ -4,13 +4,17 @@ from __future__ import annotations
 import os
 from typing import TYPE_CHECKING
 
-from .domain.entities import Settings, Slide
+from .domain.entities import Brief, Settings, Slide
 from .domain.ports import CancelCheck, ProgressCallback
 from .infrastructure.ffmpeg_frames import FfmpegFrameExtractor
 from .infrastructure.html_renderer import HtmlDeckRenderer
 from .infrastructure.ivod_api import IvodClient, IvodSubtitleGateway
 from .infrastructure.ivod_sections import IvodSectionGateway
-from .infrastructure.ollama_summarizer import OllamaModelCatalog, OllamaSummarizer
+from .infrastructure.ollama_summarizer import (
+    OllamaBriefWriter,
+    OllamaModelCatalog,
+    OllamaSummarizer,
+)
 from .infrastructure.routing import (
     BySourceSectionGateway,
     BySourceSubtitleGateway,
@@ -64,6 +68,25 @@ class CurrentSettingsSummarizer:
                               hint, progress, detailed, is_cancelled)
 
 
+class CurrentSettingsBriefWriter:
+    """同 CurrentSettingsSummarizer：每次都用當下的 model／host。"""
+
+    def __init__(self, settings: Settings, factory=OllamaBriefWriter):
+        self._settings = settings
+        self._factory = factory
+
+    def write(
+        self,
+        slides,
+        progress: ProgressCallback,
+        is_cancelled: CancelCheck | None = None,
+        hint: str = "",
+    ) -> Brief:
+        s = self._settings
+        return self._factory(s.ollama_host, s.model, s.num_ctx).write(
+            slides, progress, is_cancelled, hint)
+
+
 def build_usecase(settings: Settings) -> BuildDeckUseCase:
     """組好一條完整的 pipeline。
 
@@ -85,6 +108,8 @@ def build_usecase(settings: Settings) -> BuildDeckUseCase:
         # 快取在這個實例裡；改 whisper_model 需重開 app（語言模型與 host 則每次生成時即時讀取）。
         audio=YtDlpAudioGateway(),
         transcriber=FasterWhisperTranscriber(settings.whisper_model),
+        # 詳細模式下多寫一張摘要卡（一句話、關鍵數字、要求與回應）
+        brief_writer=CurrentSettingsBriefWriter(settings),
     )
 
 

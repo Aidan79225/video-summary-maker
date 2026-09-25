@@ -37,6 +37,9 @@ INSTALLED_APPS = [
 
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
+    # admin 的 CSS／JS 由 WhiteNoise 從 STATIC_ROOT 服務，gunicorn 底下不必再靠
+    # runserver 的 --insecure。要放在 SecurityMiddleware 之後、其他之前。
+    "whitenoise.middleware.WhiteNoiseMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
@@ -82,6 +85,15 @@ USE_TZ = True
 
 STATIC_URL = "static/"
 STATIC_ROOT = BASE_DIR / "staticfiles"
+# 開發時直接從各 app 的 static 目錄找，不必先 collectstatic；正式環境
+# （容器建置時已經 collectstatic）走 STATIC_ROOT，一次掃描、之後從記憶體出。
+WHITENOISE_USE_FINDERS = DEBUG
+STORAGES = {
+    "default": {"BACKEND": "django.core.files.storage.FileSystemStorage"},
+    # 壓縮但不用 manifest：manifest 版本在少了 collectstatic 時整個 admin 會 500，
+    # 而這裡的靜態檔只有 admin 自己的，快取失效交給 max-age 就夠。
+    "staticfiles": {"BACKEND": "whitenoise.storage.CompressedStaticFilesStorage"},
+}
 MEDIA_URL = "/media/"
 MEDIA_ROOT = Path(os.environ.get("DJANGO_MEDIA_ROOT", str(BASE_DIR / "media")))
 
@@ -123,3 +135,7 @@ INGEST_HOUR = int(os.environ.get("INGEST_HOUR", "4"))
 # 由 Django 直接服務 /media。正式環境用 nginx 會更好，但 Pi 自用時
 # 少一個元件就少一個會壞的東西。
 SERVE_MEDIA = _env_bool("DJANGO_SERVE_MEDIA", True)
+# 截圖的快取秒數。每次重跑都寫進新的子資料夾，網址一定跟著換，所以同一個
+# 網址的內容永遠不會變——放到 Cloudflare 邊緣快取一天，Pi 就幾乎不再被
+# 圖片打到。
+MEDIA_CACHE_SECONDS = int(os.environ.get("DJANGO_MEDIA_CACHE_SECONDS", str(24 * 3600)))

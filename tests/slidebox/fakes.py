@@ -1,7 +1,7 @@
 """測試用的記憶體假實作（不碰真實磁碟／網路）。"""
 from __future__ import annotations
 
-from slidebox.domain.entities import AudioClip, Cue, Slide, Transcript
+from slidebox.domain.entities import AudioClip, Brief, Cue, KeyNumber, Slide, Transcript
 from slidebox.domain.errors import (
     NoSubtitlesAvailable,
     OperationCancelled,
@@ -75,6 +75,28 @@ class RaisingThenSucceedingSummarizer:
         if self.calls == 1:
             raise SummarizerOutputInvalid(self._error)
         return self._slides
+
+
+class FakeBriefWriter:
+    """依序回傳預設的多批結果；error 設了就第一次 raise。"""
+
+    def __init__(self, batches: list[Brief] | None = None, error: Exception | None = None):
+        self._batches = list(batches) if batches is not None else [
+            Brief("國防部三年編 82.4 億買無人機，交到部隊的不到一半")
+        ]
+        self._error = error
+        self.calls = 0
+        self.hints: list[str] = []
+        self.digests: list[tuple[str, ...]] = []
+
+    def write(self, slides, progress, is_cancelled=None, hint=""):
+        self.calls += 1
+        self.hints.append(hint)
+        self.digests.append(tuple(s.title for s in slides))
+        progress(None, "整理中")
+        if self._error is not None and self.calls == 1:
+            raise self._error
+        return self._batches.pop(0) if self._batches else Brief("")
 
 
 class FakeSectionGateway:

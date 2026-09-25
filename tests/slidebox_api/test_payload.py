@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import base64
 
-from slidebox.domain.entities import Deck, Slide
+from slidebox.domain.entities import Ask, Brief, Deck, KeyNumber, Slide
 from slidebox_api.payload import deck_payload
 
 IMAGE = b"\x00\x01fake-webp\xff"
@@ -63,3 +63,22 @@ def test_an_image_that_disappeared_degrades_instead_of_raising(tmp_path):
 def test_the_payload_is_json_serialisable(tmp_path):
     import json
     json.dumps(deck_payload(_deck(tmp_path), video_id="171180"))
+
+
+def test_the_brief_travels_with_the_deck(tmp_path):
+    deck = _deck(tmp_path)
+    deck = Deck(**{**deck.__dict__, "brief": Brief(
+        "國防部三年編 82.4 億買無人機，交到部隊的不到一半",
+        key_numbers=(KeyNumber("82.4", "億元", "三年累計編列", "累計編列八十二點四億元"),),
+        asks=(Ask("提出交機時程清冊", "一個月內", "部長允諾"),),
+    )})
+    brief = deck_payload(deck, video_id="171180")["brief"]
+    assert brief["one_liner"].startswith("國防部")
+    assert brief["key_numbers"] == [
+        {"value": "82.4", "unit": "億元", "label": "三年累計編列", "quote": "累計編列八十二點四億元"}]
+    assert brief["asks"] == [{"request": "提出交機時程清冊", "deadline": "一個月內", "response": "部長允諾"}]
+
+
+def test_no_brief_is_null_not_an_empty_object(tmp_path):
+    """Pi 那邊要分得出「沒產出」與「產出但空」。"""
+    assert deck_payload(_deck(tmp_path), video_id="171180")["brief"] is None

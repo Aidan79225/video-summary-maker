@@ -21,7 +21,7 @@ API 在 <http://localhost:8000/api/health>，互動式文件在 <http://localhos
 
 管理後台（可選）：`uv run python manage.py createsuperuser`，然後開 `/admin/`。
 
-`DEBUG=False` 時 `runserver` 不會服務靜態檔，admin 會是一頁沒有樣式的 HTML。加 `--insecure` 就好——它是把 `attempts` 歸零的唯一介面。
+`DEBUG=False` 時 `runserver` 不會服務靜態檔，admin 會是一頁沒有樣式的 HTML。開發時設 `DJANGO_DEBUG=1`（WhiteNoise 會直接從各 app 的 static 目錄找），或加 `--insecure`——admin 是把 `attempts` 歸零的唯一介面。
 
 ## 正式部署前一定要做的一件事
 
@@ -43,6 +43,7 @@ python -c "import secrets; print(secrets.token_urlsafe(64))"
 | `DJANGO_DB_PATH` | `services/news/db.sqlite3` | |
 | `DJANGO_MEDIA_ROOT` | `services/news/media` | 截圖放這裡 |
 | `DJANGO_SERVE_MEDIA` | `True` | 由 Django 直接服務 `/media`；前面有 nginx 時設 `False` |
+| `DJANGO_MEDIA_CACHE_SECONDS` | `86400` | `/media` 回應的 `Cache-Control: max-age`。設 `0` 就不加快取標頭 |
 | `GPU_API_BASE` | `http://localhost:8800` | GPU 主機上的摘要 API |
 | `GPU_API_KEY` | 空 | 對應 GPU 端的 `SLIDEBOX_API_KEY` |
 | `GPU_JOB_TIMEOUT_SECONDS` | `1800` | 等單一支影片的上限 |
@@ -104,8 +105,10 @@ uv run python manage.py run_scheduler --backfill-days 0 # 不要回補
 |---|---|
 | `GET /api/health` | 文章數與最新日期 |
 | `GET /api/articles?date=&speaker=&q=&page=&page_size=` | 已完成的文章清單 |
-| `GET /api/articles/{slug}` | 單篇，含每段的條列與完整敘述、完整逐字稿 |
+| `GET /api/articles/{slug}` | 單篇，含摘要卡（`brief`：一句話、關鍵數字、要求與回應；GPU 端產不出來時為 `null`）、每段的條列與完整敘述、完整逐字稿 |
 | `GET /api/speakers` | 委員與篇數 |
+
+清單裡每張卡片的 `teaser` 優先用摘要卡的一句話，沒有卡片才退回第一段的完整敘述。
 
 圖片欄位回的是**相對路徑**（`/media/articles/<ivod_id>/<批次>/01.webp`），由前端接上自己的 API base——回絕對網址要猜對外主機名，在反向代理後面很容易猜錯。
 
@@ -125,7 +128,7 @@ WorkingDirectory=/home/pi/yt-downloader/services/news
 Environment=DJANGO_SECRET_KEY=換成一串隨機字元
 Environment=DJANGO_ALLOWED_HOSTS=localhost,127.0.0.1,pi.local
 Environment=GPU_API_BASE=http://192.168.1.50:8800
-ExecStart=/home/pi/.local/bin/uv run python manage.py runserver 0.0.0.0:8000 --noreload --insecure
+ExecStart=/home/pi/.local/bin/uv run gunicorn newsroom.wsgi:application --bind 0.0.0.0:8000 --workers 2 --threads 2 --timeout 30
 Restart=always
 
 [Install]
@@ -149,14 +152,9 @@ Restart=always
 WantedBy=multi-user.target
 ```
 
-`--insecure` 是為了讓 `DEBUG=False` 下的 `/admin/` 還有 CSS——admin 是把 `attempts` 歸零的唯一介面。
+啟動前跑一次 `uv run python manage.py collectstatic --noinput`：admin 的 CSS／JS 由 WhiteNoise 從 `staticfiles/` 服務，不必再用 `runserver --insecure`。Docker 映像在建置時已經做了這一步。
 
-`runserver` 是開發伺服器。自用流量沒問題，但要更穩的話換成 gunicorn：
-
-```bash
-uv add gunicorn
-uv run gunicorn newsroom.wsgi:application --bind 0.0.0.0:8000 --workers 2
-```
+對外流量真正碰到 Django 的是截圖（Cloudflare 把 `media/*` 轉到這裡）。`/media` 的回應帶 `Cache-Control: public, max-age=86400, immutable`（`DJANGO_MEDIA_CACHE_SECONDS` 可調，設 0 關掉）：每次重跑都寫進新的子資料夾、網址跟著換，所以同一個網址的內容永遠不變，Cloudflare 邊緣快取一天之後 Pi 幾乎不再被圖片打到。
 
 ## 架構
 

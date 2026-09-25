@@ -2,11 +2,13 @@
 name = "ly-news"
 version = "0.1.0"
 description = "立法院質詢每日摘要：Django + django-ninja 後端"
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 dependencies = [
-    "django>=5.2",
+    "django>=6.1",
     "django-ninja>=1.4",
     "apscheduler>=3.11",
+    "gunicorn>=26.2.0",
+    "whitenoise>=6.12.0",
 ]
 
 [dependency-groups]

@@ -5,7 +5,7 @@ import base64
 import html
 import os
 
-from ..domain.entities import Deck, Slide
+from ..domain.entities import Brief, Deck, Slide
 
 _CSS = """
 :root { color-scheme: light dark; }
@@ -32,6 +32,15 @@ header .source { font-size: 13px; color: #8a6d3b; margin: 8px 0 0; }
 .slide li { margin-bottom: 6px; }
 .noimg { font-size: 12px; color: #a8adba; margin-bottom: 12px; }
 .slide .detail { margin: 14px 0 0; padding-top: 12px; border-top: 1px solid #ecedf1; }
+.brief { margin: 0 0 28px; padding: 18px 22px; border: 1px solid #e3e5ea; border-radius: 12px; }
+.brief .one { margin: 0; font-size: 1.15em; font-weight: 600; line-height: 1.6; }
+.brief .numbers { display: flex; flex-wrap: wrap; gap: 16px 28px; margin-top: 14px; }
+.brief .kn b { font-size: 1.5em; }
+.brief .kn small { margin-left: 2px; color: #6b7280; }
+.brief .kn span { display: block; font-size: .85em; color: #6b7280; }
+.brief .asks { margin: 14px 0 0; padding-left: 18px; }
+.brief .asks em { font-style: normal; font-size: .85em; color: #6b7280; }
+.brief .asks .reply { display: block; font-size: .9em; color: #6b7280; }
 details.transcript {
   max-width: 900px; margin: 8px auto 40px; padding: 16px 24px;
   background: #fff; border-radius: 12px; box-shadow: 0 1px 3px rgba(0,0,0,.08);
@@ -45,6 +54,7 @@ details.transcript pre {
   body { background: #14161a; color: #e3e6ec; }
   .slide { background: #1e2128; box-shadow: none; }
   .slide .detail { border-top-color: #2c303a; }
+  .brief { border-color: #2c303a; }
   details.transcript { background: #1e2128; box-shadow: none; }
   details.transcript pre { color: #b6bcc9; }
   header a { color: #7aa2d8; }
@@ -90,6 +100,29 @@ def _render_slide(slide: Slide) -> str:
     )
 
 
+def _render_brief(brief: Brief | None) -> str:
+    """摘要卡放在所有投影片之前：它就是為了「先看這個」而存在的。"""
+    if brief is None:
+        return ""
+    numbers = "".join(
+        f'<div class="kn"><b>{html.escape(n.value)}</b>'
+        f'<small>{html.escape(n.unit)}</small><span>{html.escape(n.label)}</span></div>'
+        for n in brief.key_numbers
+    )
+    asks = ""
+    for a in brief.asks:
+        when = f"<em>{html.escape(a.deadline)}</em> " if a.deadline else ""
+        reply = f'<span class="reply">{html.escape(a.response)}</span>' if a.response else ""
+        asks += f"<li>{when}{html.escape(a.request)}{reply}</li>"
+    return (
+        '<section class="brief">'
+        f"<p class=\"one\">{html.escape(brief.one_liner)}</p>"
+        + (f'<div class="numbers">{numbers}</div>' if numbers else "")
+        + (f"<ul class=\"asks\">{asks}</ul>" if asks else "")
+        + "</section>"
+    )
+
+
 class HtmlDeckRenderer:
     def render(self, deck: Deck, dest_path: str) -> None:
         title = html.escape(deck.video_title)
@@ -97,7 +130,7 @@ class HtmlDeckRenderer:
         # 內容來源（例如「由語音辨識產生」）跟著成品走——HTML 會被分享與重看
         source = (f'<p class="source">{html.escape(deck.source_note)}</p>'
                   if deck.source_note else "")
-        body = "".join(_render_slide(s) for s in deck.slides)
+        body = _render_brief(deck.brief) + "".join(_render_slide(s) for s in deck.slides)
         # 逐字稿預設收合：它比投影片長一個數量級，攤開就把成品推到螢幕外。
         # 用 <pre> 保留換行——每行開頭的時間是使用者找位置的唯一線索。
         transcript = (
