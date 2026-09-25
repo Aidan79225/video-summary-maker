@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import base64
 
-from slidebox.domain.entities import Deck, Slide
+from slidebox.domain.entities import Ask, Brief, Deck, KeyNumber, Slide
 from slidebox.infrastructure.html_renderer import HtmlDeckRenderer
 
 IMAGE_BYTES = b"\x00\x01fake-webp\xff"
@@ -184,3 +184,21 @@ def test_transcript_keeps_its_line_breaks(tmp_path):
 def test_no_appendix_when_there_is_no_transcript(tmp_path):
     deck = Deck("https://x", "影片", (Slide(1, "標題", ("重點",), 0.0),))
     assert "<details" not in _render(tmp_path, deck)
+
+
+def test_the_brief_is_rendered_before_the_slides_and_escaped(tmp_path):
+    deck = Deck("https://x", "影片", (Slide(1, "標題", ("重點",), 0.0),), brief=Brief(
+        "一句話 <b>不是標籤</b>",
+        key_numbers=(KeyNumber("82.4", "億元", "三年累計編列", "引用"),),
+        asks=(Ask("提出清冊", "一個月內", "部長允諾"),),
+    ))
+    html = _render(tmp_path, deck)
+    assert "&lt;b&gt;不是標籤&lt;/b&gt;" in html
+    assert "<b>不是標籤</b>" not in html
+    assert html.index("82.4") < html.index('class="slide"')
+    assert "一個月內" in html and "部長允諾" in html
+
+
+def test_a_deck_without_a_brief_renders_no_brief_block(tmp_path):
+    deck = Deck("https://x", "影片", (Slide(1, "標題", ("重點",), 0.0),))
+    assert 'class="brief"' not in _render(tmp_path, deck)

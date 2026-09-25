@@ -8,15 +8,17 @@ from __future__ import annotations
 import os
 from dataclasses import replace
 
-from ..domain.entities import Deck, DeckResult, Settings, Slide, Transcript
+from ..domain.entities import Brief, Deck, DeckResult, Settings, Slide, Transcript
 from ..domain.errors import (
     NoSubtitlesAvailable,
     OperationCancelled,
     SubtitleDownloadFailed,
     SummarizerOutputInvalid,
+    SummarizerUnavailable,
 )
 from ..domain.ports import (
     AudioGateway,
+    BriefWriter,
     CancelCheck,
     DeckRenderer,
     FrameExtractor,
@@ -26,6 +28,7 @@ from ..domain.ports import (
     Summarizer,
     VideoSectionGateway,
 )
+from .brief import ground_brief, validate_brief
 from .chapters import (
     clamp_timestamps,
     compress_cues,
@@ -72,9 +75,11 @@ class BuildDeckUseCase:
         renderer: DeckRenderer,
         audio: AudioGateway | None = None,
         transcriber: SpeechTranscriber | None = None,
+        brief_writer: BriefWriter | None = None,
     ):
         self._audio = audio
         self._transcriber = transcriber
+        self._brief_writer = brief_writer
         self._subtitles = subtitles
         self._summarizer = summarizer
         self._sections = sections
@@ -129,6 +134,11 @@ class BuildDeckUseCase:
             full_transcript(transcript.cues, transcript.is_automatic)
             if settings.detailed else ""
         )
+        # 質詢卡只在詳細模式做：它讀的是各段的 detail，一般模式沒有那一段。
+        brief = (
+            self._brief(slides, transcript_text, cb, check, cancelled)
+            if settings.detailed and self._brief_writer is not None else None
+        )
 
         out_dir = os.path.join(
             settings.output_dir, deck_folder_name(transcript.title, transcript.video_id)
@@ -152,7 +162,7 @@ class BuildDeckUseCase:
         check()
         cb(_P_FRAMES, "產生 HTML…")
         deck = Deck(source_url=url, video_title=transcript.title, slides=slides,
-                    source_note=note, transcript_text=transcript_text)
+                    source_note=note, transcript_text=transcript_text, brief=brief)
         html_path = os.path.join(out_dir, "slides.html")
         self._renderer.render(deck, html_path)
 
@@ -258,6 +268,40 @@ class BuildDeckUseCase:
         raise SummarizerOutputInvalid(
             "模型輸出重試後仍不符合要求（" + "；".join(problems) + "）。可以試試換一個模型。"
         )
+
+    def _brief(
+        self,
+        slides: tuple[Slide, ...],
+        transcript_text: str,
+        cb: ProgressCallback,
+        check,
+        cancelled: CancelCheck,
+    ) -> Brief | None:
+        """寫質詢卡並做落地檢查；不合格重試一次，仍不行就沒有卡片。
+
+        卡片是加值不是主體：分段摘要已經花了幾分鐘的 GPU，為了卡片把整支
+        影片判成失敗不划算。放棄時寫進狀態列，後端與前端都會退回沒有卡片
+        的樣子。
+        """
+        hint = ""
+        for attempt in (1, 2):
+            check()
+            cb(None, "整理摘要卡…" if attempt == 1 else "摘要卡不合要求，重試一次…")
+            try:
+                raw = self._brief_writer.write(slides, cb, cancelled, hint)
+            except SummarizerOutputInvalid as e:
+                hint = f"上一次的輸出有這個問題，請修正後重新產出：{e}"
+                continue
+            except SummarizerUnavailable as e:
+                cb(None, f"摘要卡略過（{e}）")
+                return None
+            brief = ground_brief(raw, transcript_text)
+            problems = validate_brief(brief)
+            if not problems:
+                return brief
+            hint = "上一次的輸出有這些問題，請修正後重新產出：" + "；".join(problems)
+        cb(None, "摘要卡重試後仍不合要求，略過")
+        return None
 
     def _attach_images(
         self,

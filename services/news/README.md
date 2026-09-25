@@ -104,8 +104,10 @@ uv run python manage.py run_scheduler --backfill-days 0 # 不要回補
 |---|---|
 | `GET /api/health` | 文章數與最新日期 |
 | `GET /api/articles?date=&speaker=&q=&page=&page_size=` | 已完成的文章清單 |
-| `GET /api/articles/{slug}` | 單篇，含每段的條列與完整敘述、完整逐字稿 |
+| `GET /api/articles/{slug}` | 單篇，含摘要卡（`brief`：一句話、關鍵數字、要求與回應；GPU 端產不出來時為 `null`）、每段的條列與完整敘述、完整逐字稿 |
 | `GET /api/speakers` | 委員與篇數 |
+
+清單裡每張卡片的 `teaser` 優先用摘要卡的一句話，沒有卡片才退回第一段的完整敘述。
 
 圖片欄位回的是**相對路徑**（`/media/articles/<ivod_id>/<批次>/01.webp`），由前端接上自己的 API base——回絕對網址要猜對外主機名，在反向代理後面很容易猜錯。
 

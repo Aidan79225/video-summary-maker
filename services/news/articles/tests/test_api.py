@@ -17,8 +17,17 @@ atexit.register(shutil.rmtree, MEDIA, ignore_errors=True)
 IMAGE = b"\x00\x01fake-webp\xff"
 
 
+BRIEF = {
+    "one_liner": "國防部三年編 82.4 億買無人機，交到部隊的不到一半",
+    "key_numbers": [
+        {"value": "82.4", "unit": "億元", "label": "三年累計編列", "quote": "累計編列八十二點四億元"},
+    ],
+    "asks": [{"request": "提出交機時程清冊", "deadline": "一個月內", "response": "部長允諾"}],
+}
+
+
 def _article(ivod_id="900001", speaker="範例一", day="2026-08-27", status=None,
-             slides=2, with_image=True):
+             slides=2, with_image=True, brief=None):
     article = Article.objects.create(
         ivod_id=ivod_id,
         slug=f"{day}-{ivod_id}",
@@ -37,6 +46,7 @@ def _article(ivod_id="900001", speaker="範例一", day="2026-08-27", status=Non
         "title": article.title,
         "source_note": "逐字稿由立法院 AI 自動產生，可能有辨識錯誤",
         "transcript_text": "00:00 主席 各位同仁",
+        "brief": brief,
         "slides": [{
             "index": i,
             "title": f"第 {i} 段：國防自主",
@@ -121,6 +131,21 @@ class ApiTests(TestCase):
         self.assertTrue(slide["image_url"].startswith("/media/"))
         self.assertIn("AI", body["source_note"])
         self.assertIn("主席", body["transcript_text"])
+
+    def test_the_detail_page_carries_the_brief_and_the_card_leads_with_it(self):
+        _article(brief=BRIEF)
+        body = self.client.get("/api/articles/2026-08-27-900001").json()
+        self.assertEqual(body["brief"]["one_liner"], BRIEF["one_liner"])
+        self.assertEqual(body["brief"]["key_numbers"][0]["unit"], "億元")
+        self.assertEqual(body["brief"]["asks"][0]["response"], "部長允諾")
+        self.assertEqual(body["teaser"], BRIEF["one_liner"])
+        card = self.client.get("/api/articles").json()["items"][0]
+        self.assertEqual(card["teaser"], BRIEF["one_liner"])
+
+    def test_an_article_without_a_brief_says_so_with_null(self):
+        _article()
+        body = self.client.get("/api/articles/2026-08-27-900001").json()
+        self.assertIsNone(body["brief"])
 
     def test_an_unknown_article_is_404(self):
         self.assertEqual(self.client.get("/api/articles/沒這篇").status_code, 404)

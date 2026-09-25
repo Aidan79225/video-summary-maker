@@ -55,6 +55,41 @@ class Slide:
 
 
 @dataclass(frozen=True)
+class KeyNumber:
+    """質詢卡上的一個關鍵數字。
+
+    value 只放阿拉伯數字（「82.4」），單位另放，卡片才能把數字放大、單位
+    縮小。quote 是逐字稿裡講出這個數字的那句話——它是驗證的依據：句子不在
+    逐字稿裡、或數字不在句子裡，這個數字就不上卡片。
+    """
+    value: str
+    unit: str
+    label: str
+    quote: str
+
+
+@dataclass(frozen=True)
+class Ask:
+    """講者提出的一項要求，以及對方當場的回應。"""
+    request: str
+    deadline: str = ""
+    response: str = ""
+
+
+@dataclass(frozen=True)
+class Brief:
+    """質詢卡：讀者十秒內要知道的事。
+
+    分段摘要是「照影片順序講了什麼」，質詢卡是「他到底要什麼、拿到什麼
+    回應、憑什麼數字」。兩者用途不同：前者是散文，後者是固定欄位，讀者
+    知道眼睛該往哪看。
+    """
+    one_liner: str
+    key_numbers: tuple[KeyNumber, ...] = ()
+    asks: tuple[Ask, ...] = ()
+
+
+@dataclass(frozen=True)
 class Deck:
     source_url: str
     video_title: str
@@ -64,6 +99,8 @@ class Deck:
     source_note: str = ""
     # 詳細模式下附在成品末尾的完整逐字稿；一般模式為空字串。
     transcript_text: str = ""
+    # 詳細模式下另外產生的質詢卡；產不出來時為 None，成品照常出片。
+    brief: Brief | None = None
 
     @property
     def missing_images(self) -> int:

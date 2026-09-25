@@ -10,7 +10,7 @@ import base64
 import os
 from enum import StrEnum
 
-from slidebox.domain.entities import Deck, Slide
+from slidebox.domain.entities import Brief, Deck, Slide
 
 _MEDIA_TYPE = "image/webp"
 
@@ -23,6 +23,7 @@ class DeckField(StrEnum):
     SOURCE_NOTE = "source_note"
     TRANSCRIPT = "transcript_text"
     SLIDES = "slides"
+    BRIEF = "brief"
 
 
 class SlideField(StrEnum):
@@ -59,6 +60,29 @@ def _slide_payload(slide: Slide) -> dict:
     }
 
 
+class BriefField(StrEnum):
+    ONE_LINER = "one_liner"
+    KEY_NUMBERS = "key_numbers"
+    ASKS = "asks"
+
+
+def brief_payload(brief: Brief | None) -> dict | None:
+    """沒有卡片就是 None，不是空物件：Pi 那邊要能分辨「沒產出」與「產出但空」。"""
+    if brief is None:
+        return None
+    return {
+        BriefField.ONE_LINER: brief.one_liner,
+        BriefField.KEY_NUMBERS: [
+            {"value": n.value, "unit": n.unit, "label": n.label, "quote": n.quote}
+            for n in brief.key_numbers
+        ],
+        BriefField.ASKS: [
+            {"request": a.request, "deadline": a.deadline, "response": a.response}
+            for a in brief.asks
+        ],
+    }
+
+
 def deck_payload(deck: Deck, video_id: str) -> dict:
     return {
         DeckField.VIDEO_ID: video_id,
@@ -67,4 +91,5 @@ def deck_payload(deck: Deck, video_id: str) -> dict:
         DeckField.SOURCE_NOTE: deck.source_note,
         DeckField.TRANSCRIPT: deck.transcript_text,
         DeckField.SLIDES: [_slide_payload(s) for s in deck.slides],
+        DeckField.BRIEF: brief_payload(deck.brief),
     }

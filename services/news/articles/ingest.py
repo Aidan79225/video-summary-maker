@@ -45,6 +45,7 @@ class DeckField(StrEnum):
     SOURCE_NOTE = "source_note"
     TRANSCRIPT = "transcript_text"
     SLIDES = "slides"
+    BRIEF = "brief"
 
 
 class SlideField(StrEnum):
@@ -53,6 +54,39 @@ class SlideField(StrEnum):
     DETAIL = "detail"
     TIMESTAMP = "timestamp"
     IMAGE = "image_base64"
+
+
+def clean_brief(raw: object) -> dict | None:
+    """把 GPU 回傳的摘要卡整理成前端能安全用的形狀；不成形就當作沒有。
+
+    形狀在這裡釘死一次，前端就不必再對每個欄位做防禦。一句話是空的視同
+    沒有卡片——沒有一句話的卡片只是幾個孤立的數字。
+    """
+    if not isinstance(raw, dict):
+        return None
+    one_liner = raw.get("one_liner")
+    if not isinstance(one_liner, str) or not one_liner.strip():
+        return None
+
+    def text(item: dict, key: str) -> str:
+        value = item.get(key)
+        return value.strip() if isinstance(value, str) else ""
+
+    numbers = [
+        {"value": text(n, "value"), "unit": text(n, "unit"),
+         "label": text(n, "label"), "quote": text(n, "quote")}
+        for n in (raw.get("key_numbers") or []) if isinstance(n, dict)
+    ]
+    asks = [
+        {"request": text(a, "request"), "deadline": text(a, "deadline"),
+         "response": text(a, "response")}
+        for a in (raw.get("asks") or []) if isinstance(a, dict)
+    ]
+    return {
+        "one_liner": one_liner.strip(),
+        "key_numbers": [n for n in numbers if n["value"] and n["label"]],
+        "asks": [a for a in asks if a["request"]],
+    }
 
 
 @dataclass
@@ -342,6 +376,7 @@ def save_result(article: Article, payload: dict) -> Article:
     article.title = payload.get(DeckField.TITLE) or article.title
     article.source_note = payload.get(DeckField.SOURCE_NOTE) or ""
     article.transcript_text = payload.get(DeckField.TRANSCRIPT) or ""
+    article.brief = clean_brief(payload.get(DeckField.BRIEF))
     article.status = ArticleStatus.READY
     article.error = ""
     # 成品已經落地，那個工作 id 沒有用了；留著只會讓下一輪接回一份

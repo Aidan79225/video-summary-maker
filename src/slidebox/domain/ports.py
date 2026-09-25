@@ -4,7 +4,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Callable, Protocol
 
-from .entities import AudioClip, Cue, Deck, Slide, Transcript
+from .entities import AudioClip, Brief, Cue, Deck, Slide, Transcript
 
 # 進度回報：fraction 為 0..1，None 表示不確定；status 為文字說明。
 ProgressCallback = Callable[[float | None, str], None]
@@ -47,6 +47,26 @@ class Summarizer(Protocol):
         is_cancelled 要在生成途中反覆檢查並 raise OperationCancelled：這是整條
         pipeline 最久的一步（詳細模式可達數分鐘），只在開始前檢查一次等於
         不能取消。
+        """
+        ...
+
+
+class BriefWriter(Protocol):
+    def write(
+        self,
+        slides: Sequence[Slide],
+        progress: ProgressCallback,
+        is_cancelled: CancelCheck | None = None,
+        hint: str = "",
+    ) -> Brief:
+        """從已經驗證過的分段摘要寫出質詢卡。hint 同 Summarizer：重試時的錯誤回饋。
+
+        輸入是分段摘要而不是整份字幕：分段已經把內容濃縮到幾千字，再餵一次
+        整份字幕是把最貴的那一步做兩遍。輸出不做落地檢查——那是純邏輯
+        （usecases.brief.ground_brief）的責任，這裡只負責拿到模型的回應。
+
+        回應不是合法的結構時 raise SummarizerOutputInvalid；連不上模型時
+        raise SummarizerUnavailable。取消的規則與 Summarizer 相同。
         """
         ...
 

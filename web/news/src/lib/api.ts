@@ -3,6 +3,7 @@ import type {
   ArticleDetail,
   ArticleList,
   ArticleQuery,
+  Brief,
   Health,
   Result,
   SpeakerList,
@@ -178,11 +179,35 @@ function fixtureArticles(): ArticleDetail[] {
 }
 
 function toCard(a: ArticleDetail) {
-  const { source_note, transcript_text, slides, ...card } = a;
+  const { source_note, transcript_text, slides, brief, ...card } = a;
   void source_note;
   void transcript_text;
   void slides;
+  void brief;
   return card;
+}
+
+const str = (v: unknown): string => (typeof v === 'string' ? v : '');
+
+/**
+ * 摘要卡缺欄位不讓整頁爆掉；沒有一句話就當作沒有卡片，
+ * 版面退回只用導言的樣子。
+ */
+export function normalizeBrief(raw: unknown): Brief | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const o = raw as Record<string, unknown>;
+  const one_liner = str(o.one_liner).trim();
+  if (!one_liner) return null;
+  const list = (v: unknown) => (Array.isArray(v) ? v : []).filter((x) => x && typeof x === 'object');
+  return {
+    one_liner,
+    key_numbers: list(o.key_numbers)
+      .map((n) => ({ value: str(n.value), unit: str(n.unit), label: str(n.label), quote: str(n.quote) }))
+      .filter((n) => n.value && n.label),
+    asks: list(o.asks)
+      .map((a) => ({ request: str(a.request), deadline: str(a.deadline), response: str(a.response) }))
+      .filter((a) => a.request),
+  };
 }
 
 function fixtureList(query: ArticleQuery): ArticleList {
@@ -256,7 +281,7 @@ export async function getArticle(slug: string): Promise<Result<ArticleDetail>> {
         error: { kind: 'notfound', status: 404, message: '假資料裡沒有這一篇' },
       };
     }
-    return { ok: true, data: found };
+    return { ok: true, data: { ...found, brief: normalizeBrief(found.brief) } };
   }
 
   const res = await getJson<ArticleDetail>(`/api/articles/${encodeURIComponent(slug)}`);
@@ -272,6 +297,7 @@ export async function getArticle(slug: string): Promise<Result<ArticleDetail>> {
       ...d,
       slides: Array.isArray(d.slides) ? d.slides : [],
       transcript_text: typeof d.transcript_text === 'string' ? d.transcript_text : '',
+      brief: normalizeBrief(d.brief),
     },
   };
 }

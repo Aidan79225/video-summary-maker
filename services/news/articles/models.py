@@ -32,6 +32,10 @@ class Article(models.Model):
 
     source_note = models.CharField(max_length=300, blank=True)
     transcript_text = models.TextField(blank=True)
+    # 摘要卡：{one_liner, key_numbers[], asks[]}。GPU 端產不出來時是 None，
+    # 前端退回只用第一段當導言的樣子。存 JSON 而不拆表：它是一個整體、
+    # 一起換掉、不會被單獨查詢。
+    brief = models.JSONField(null=True, blank=True, default=None)
 
     status = models.CharField(max_length=16, choices=ArticleStatus.choices,
                               default=ArticleStatus.PENDING, db_index=True)
@@ -55,8 +59,19 @@ class Article(models.Model):
         return f"{self.date} {self.speaker}"
 
     @property
+    def one_liner(self) -> str:
+        brief = self.brief if isinstance(self.brief, dict) else {}
+        value = brief.get("one_liner")
+        return value.strip() if isinstance(value, str) else ""
+
+    @property
     def teaser(self) -> str:
-        """導言取完整敘述而不是條列：條列太零碎，當導言讀起來不像新聞。"""
+        """導言優先用摘要卡的一句話：它講的是整段質詢要什麼。
+
+        沒有卡片時退回第一段的完整敘述——條列太零碎，當導言讀起來不像新聞。
+        """
+        if self.one_liner:
+            return self.one_liner
         first = self.slides.first()
         if first is None:
             return ""

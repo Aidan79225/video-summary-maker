@@ -72,7 +72,19 @@ const bullets = Array.isArray(slide.bullets) ? slide.bullets.filter(Boolean) : [
         )
       }
 
-      {slide.detail && <p class="prose-cn mt-5 text-[1.02rem]">{slide.detail}</p>}
+      {
+        slide.detail && (
+          <details class="more mt-4" data-detail>
+            <summary class="inline-flex items-center gap-2 text-[0.82rem] text-muted transition-colors hover:text-accent">
+              <svg viewBox="0 0 24 24" class="chev h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                <path d="M6 9l6 6 6-6" stroke-linecap="round" stroke-linejoin="round" />
+              </svg>
+              完整敘述
+            </summary>
+            <p class="prose-cn mt-3 text-[1.02rem]">{slide.detail}</p>
+          </details>
+        )
+      }
     </div>
   </div>
 </section>

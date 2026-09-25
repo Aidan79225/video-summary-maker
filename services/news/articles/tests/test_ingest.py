@@ -14,6 +14,7 @@ from django.test import SimpleTestCase, TestCase, override_settings
 
 from articles.gpu_client import GpuApiClient, GpuApiError, JobFailed
 from articles.ingest import (
+    clean_brief,
     discover,
     discover_days,
     imageless,
@@ -39,12 +40,22 @@ def _clip(ivod_id="900001", speaker="範例一"):
     )
 
 
-def _payload(slides=2, with_image=True):
+BRIEF = {
+    "one_liner": "國防部三年編 82.4 億買無人機，交到部隊的不到一半",
+    "key_numbers": [
+        {"value": "82.4", "unit": "億元", "label": "三年累計編列", "quote": "累計編列八十二點四億元"},
+    ],
+    "asks": [{"request": "提出交機時程清冊", "deadline": "一個月內", "response": "部長允諾"}],
+}
+
+
+def _payload(slides=2, with_image=True, brief=BRIEF):
     return {
         "video_id": "900001",
         "title": "2026-08-27 範例一－第11屆第5會期第23次會議",
         "source_note": "逐字稿由立法院 AI 自動產生，可能有辨識錯誤",
         "transcript_text": "00:00 主席 各位同仁",
+        "brief": brief,
         "slides": [{
             "index": i,
             "title": f"第 {i} 段",
@@ -137,6 +148,21 @@ class ProcessTests(TestCase):
         self.assertTrue(first.image)
         self.assertEqual(first.image.read(), IMAGE)
         self.assertTrue(article.published_at)
+
+    def test_the_brief_is_stored_with_the_article(self):
+        process_pending(FakeClient(), limit=10, timeout=60)
+        article = Article.objects.get(ivod_id="900001")
+        self.assertEqual(article.brief["one_liner"], BRIEF["one_liner"])
+        self.assertEqual(article.brief["key_numbers"][0]["value"], "82.4")
+        self.assertEqual(article.brief["asks"][0]["deadline"], "一個月內")
+        self.assertEqual(article.teaser, BRIEF["one_liner"])
+
+    def test_an_article_without_a_brief_falls_back_to_the_first_detail(self):
+        """GPU 端產不出卡片時是 null，導言退回第一段的完整敘述。"""
+        process_pending(FakeClient(result=_payload(brief=None)), limit=10, timeout=60)
+        article = Article.objects.get(ivod_id="900001")
+        self.assertIsNone(article.brief)
+        self.assertIn("完整敘述", article.teaser)
 
     def test_the_detailed_mode_is_always_requested(self):
         """使用者要的是「有詳細內容的摘要」——條列在新聞頁上太單薄。"""
@@ -416,3 +442,31 @@ class StuckJobTests(TestCase):
         process_pending(client, limit=10, timeout=60)
         self.assertEqual(client.cancelled, [])
         self.assertEqual(client.submitted, [])
+
+
+class CleanBriefTests(SimpleTestCase):
+    """GPU 回傳的卡片形狀在落地時釘死一次，前端就不必再逐欄防禦。"""
+
+    def test_a_well_formed_brief_passes_through_trimmed(self):
+        out = clean_brief({
+            "one_liner": " 一句話 ",
+            "key_numbers": [{"value": " 82.4 ", "unit": "億元", "label": "編列", "quote": "q"}],
+            "asks": [{"request": "清冊", "deadline": "", "response": ""}],
+        })
+        self.assertEqual(out["one_liner"], "一句話")
+        self.assertEqual(out["key_numbers"][0]["value"], "82.4")
+        self.assertEqual(out["asks"], [{"request": "清冊", "deadline": "", "response": ""}])
+
+    def test_junk_is_dropped_rather_than_stored(self):
+        out = clean_brief({
+            "one_liner": "一句話",
+            "key_numbers": [{"value": "", "label": "沒數字"}, "x", {"value": "5", "label": ""}],
+            "asks": [{"request": ""}, None, {"request": "留下", "deadline": 3}],
+        })
+        self.assertEqual(out["key_numbers"], [])
+        self.assertEqual(out["asks"], [{"request": "留下", "deadline": "", "response": ""}])
+
+    def test_no_one_liner_means_no_brief(self):
+        self.assertIsNone(clean_brief(None))
+        self.assertIsNone(clean_brief("不是物件"))
+        self.assertIsNone(clean_brief({"one_liner": "  ", "key_numbers": [{"value": "1", "label": "x"}]}))
