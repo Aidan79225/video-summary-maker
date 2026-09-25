@@ -1,8 +1,11 @@
 # 立院質詢日報——Pi（或任何一台 Linux 主機）上的整套服務。
 #
-#   cp .env.docker.example .env      # 填好再啟動
-#   docker compose up -d --build                      # 只在區網
-#   docker compose --profile tunnel up -d --build     # 加上 Cloudflare Tunnel 對外
+#   Portainer：Stacks → Add stack → Repository，指到這個 repo 的 compose.yaml，
+#              環境變數照 .env.docker.example 填在 Portainer 的表單裡。
+#   命令列：  cp .env.docker.example .env && docker compose up -d --build
+#
+# cloudflared 一定會啟動（Portainer 沒有 compose profile 的開關）。只在區網、
+# 不對外的話，把最下面的 cloudflared 那一段刪掉即可。
 #
 # GPU 主機上的摘要 API（serve_api.py）不在這裡：它要直接用 Windows 上的
 # Ollama 與顯示卡，維持原生執行，這裡只透過 GPU_API_BASE 連過去。
@@ -65,16 +68,15 @@ services:
     mem_limit: 512m
 
   cloudflared:
-    # 只有 --profile tunnel 時才啟動。用 Cloudflare 後台建立的 tunnel（token 模式），
-    # 轉送規則在後台設定：
-    #   news.example.com  path: media/*  →  http://api:8000
-    #   news.example.com                 →  http://web:4321
-    profiles: ["tunnel"]
+    # 用 Cloudflare 後台建立的 tunnel（token 模式），轉送規則在後台設定：
+    #   news.aidan.tw  path: media/*  →  http://api:8000
+    #   news.aidan.tw                 →  http://web:4321
+    # /api 與 /admin 不在規則裡，所以外面碰不到 Django 的其他部分。
     image: cloudflare/cloudflared:latest
     restart: unless-stopped
     command: tunnel --no-autoupdate run
     environment:
-      TUNNEL_TOKEN: ${TUNNEL_TOKEN:-}
+      TUNNEL_TOKEN: ${TUNNEL_TOKEN:?請設定 TUNNEL_TOKEN（Cloudflare 後台建立 tunnel 時給的）；不對外的話刪掉 cloudflared 這個服務}
     depends_on:
       - web
       - api
