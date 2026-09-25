@@ -201,6 +201,28 @@ class MediaServingTests(TestCase):
             with self.subTest(index=slide["index"]):
                 self.assertEqual(self.client.get(slide["image_url"]).status_code, 200)
 
+    def test_a_screenshot_is_served_with_a_long_public_cache_header(self):
+        """對外流量真正碰到 Django 的是圖片。每次重跑都換資料夾、網址跟著
+        換，所以同一個網址的內容永遠不變，可以讓 Cloudflare 邊緣快取。"""
+        _article()
+        url = self.client.get("/api/articles").json()["items"][0]["cover_image_url"]
+        cache = self.client.get(url)["Cache-Control"]
+        self.assertIn("public", cache)
+        self.assertIn("max-age=86400", cache)
+        self.assertIn("immutable", cache)
+
+    def test_a_missing_screenshot_is_not_cached(self):
+        """404 被快取一天的話，補上圖片之後讀者還是一整天看到破圖。"""
+        response = self.client.get("/media/articles/nope/01.webp")
+        self.assertEqual(response.status_code, 404)
+        self.assertNotIn("max-age=86400", response.get("Cache-Control", ""))
+
+    @override_settings(MEDIA_CACHE_SECONDS=0)
+    def test_the_cache_header_can_be_switched_off(self):
+        _article()
+        url = self.client.get("/api/articles").json()["items"][0]["cover_image_url"]
+        self.assertFalse(self.client.get(url).has_header("Cache-Control"))
+
     def test_paths_outside_the_media_root_are_refused(self):
         for path in ("/media/../../manage.py", "/media/..%2f..%2fmanage.py"):
             with self.subTest(path=path):
@@ -226,3 +248,17 @@ class HostileQueryTests(TestCase):
         _article()
         body = self.client.get("/api/articles?page_size=100000").json()
         self.assertLessEqual(body["page_size"], 50)
+
+
+@override_settings(WHITENOISE_USE_FINDERS=True, WHITENOISE_AUTOREFRESH=True)
+class StaticServingTests(TestCase):
+    """admin 的 CSS 由 WhiteNoise 服務，gunicorn 底下不再靠 runserver 的 --insecure。
+
+    測試用 finders 直接從 django.contrib.admin 的 static 目錄找，不必先
+    collectstatic；正式映像在建置時 collectstatic，走的是同一個 middleware。
+    """
+
+    def test_admin_css_is_served_without_the_dev_server(self):
+        response = self.client.get("/static/admin/css/base.css")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("text/css", response["Content-Type"])

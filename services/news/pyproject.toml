@@ -7,6 +7,8 @@ dependencies = [
     "django>=5.2",
     "django-ninja>=1.4",
     "apscheduler>=3.11",
+    "gunicorn>=26.2.0",
+    "whitenoise>=6.12.0",
 ]
 
 [dependency-groups]
