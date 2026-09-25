@@ -64,15 +64,24 @@ uv run python manage.py ingest_ivod --retry-imageless  # 重跑「一張截圖�
 
 ### 關於截圖
 
-立法院的影片 CDN（`ivod-lyvod.cdn.hinet.net`）會**間歇性回 5xx**——實測同一批片段前一小時還好好的，下一小時三個全部連不上。逐字稿走的是另一個端點，所以那種時候摘要照樣產得出來，只有畫面會全缺，文章仍然會發佈（內文才是主體）。
+截圖是 GPU 主機上的 ffmpeg 直接從立法院的影片 CDN（`ivod-lyvod.cdn.hinet.net`）切片段。逐字稿走的是另一個端點，所以 CDN 拿不到畫面時摘要照樣產得出來，只有畫面會全缺，文章仍然會發佈（內文才是主體）。
 
-CDN 恢復之後可以手動補：
+**CDN 會擋 ffmpeg 預設的 User-Agent（`Lavf/…`），一律回 403**，換成瀏覽器的 UA 就是 200（2026-09-19 實測）。截圖程式已經改送瀏覽器 UA（`src/slidebox/infrastructure/ivod_sections.py`）。之前以為是 CDN「間歇性回 5xx」，很可能就是這個。如果又出現**每一篇都整批沒圖**，先比對這兩個指令的狀態碼，看是不是 CDN 改了規則：
+
+```bash
+curl -s -o /dev/null -w "%{http_code}\n" -A "Lavf/61.7.100" "<m3u8 網址>"
+curl -s -o /dev/null -w "%{http_code}\n" -A "Mozilla/5.0"   "<m3u8 網址>"
+```
+
+m3u8 網址是 `https://ly.govapi.tw/v2/ivods/<IVOD_ID>` 回應裡的 `video_url`。
+
+問題排除之後可以手動補：
 
 ```bash
 uv run python manage.py ingest_ivod --retry-imageless --limit 5
 ```
 
-刻意不放進每日排程：重跑會連摘要一起重做，每篇要花幾分鐘的 GPU 時間，而 CDN 什麼時候恢復沒人知道。
+刻意不放進每日排程：重跑會連摘要一起重做，每篇要花幾分鐘的 GPU 時間，而截圖失敗的原因不見得等一等就會自己好。
 
 整個流程以 `ivod_id` 為準做 upsert，所以**重跑是安全的**：已完成的不會重做，失敗的下一輪會再試（立法院的逐字稿有時晚幾小時才出現）。
 
