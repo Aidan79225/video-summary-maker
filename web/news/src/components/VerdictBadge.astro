@@ -1,0 +1,26 @@
+---
+import type { Verdict } from '../lib/types';
+import { VERDICT_LABEL } from '../lib/factcheck';
+
+interface Props {
+  verdict: Verdict;
+  reviewed?: boolean;
+  size?: 'sm' | 'md';
+}
+const { verdict, reviewed = false, size = 'md' } = Astro.props;
+
+// 類別字串要完整寫出來，Tailwind 才掃描得到
+const tone: Record<Verdict, string> = {
+  supported: 'bg-ok-soft text-ok',
+  partial: 'bg-partial-soft text-partial',
+  contradicted: 'bg-danger-soft text-danger',
+  unverifiable: 'bg-surface-2 text-muted',
+};
+const pad = size === 'sm' ? 'px-2 py-0.5 text-[0.7rem]' : 'px-2.5 py-1 text-[0.78rem]';
+---
+
+<span class={`inline-flex items-center gap-1.5 rounded-full font-medium ${tone[verdict]} ${pad}`}>
+  <span class="h-1.5 w-1.5 rounded-full bg-current" aria-hidden="true"></span>
+  {VERDICT_LABEL[verdict]}
+  {reviewed && verdict === 'contradicted' && <span class="font-normal opacity-80">・已人工確認</span>}
+</span>

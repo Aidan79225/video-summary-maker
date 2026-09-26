@@ -12,6 +12,7 @@ import time
 import urllib.error
 import urllib.request
 from collections.abc import Callable
+from datetime import date
 from enum import StrEnum
 
 _SUBMIT_TIMEOUT = 30.0
@@ -108,7 +109,18 @@ class GpuApiClient:
             body["min_slides"] = min_slides
         if max_slides:
             body["max_slides"] = max_slides
-        job = self._call("/jobs", "POST", body=body, timeout=_SUBMIT_TIMEOUT)
+        return self._job_id(self._call("/jobs", "POST", body=body, timeout=_SUBMIT_TIMEOUT))
+
+    def submit_factcheck(self, source_url: str, speaker: str, day: date, meeting: str,
+                         transcript_text: str) -> str:
+        """送一段發言去查核。結果一樣用 wait() 取。"""
+        body = {"source_url": source_url, "speaker": speaker, "date": day.isoformat(),
+                "meeting": meeting, "transcript_text": transcript_text}
+        return self._job_id(self._call("/factchecks", "POST", body=body,
+                                       timeout=_SUBMIT_TIMEOUT))
+
+    @staticmethod
+    def _job_id(job: dict) -> str:
         job_id = job.get(JobField.ID)
         if not job_id:
             raise GpuApiError("摘要 API 沒有回傳工作 id")

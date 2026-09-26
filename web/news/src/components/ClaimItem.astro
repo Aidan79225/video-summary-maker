@@ -1,0 +1,82 @@
+---
+import type { Claim, SpeakerClaim } from '../lib/types';
+import { KIND_LABEL, METHOD_LABEL } from '../lib/factcheck';
+import { safeExternalUrl } from '../lib/api';
+import { displayTitle, formatDateWithWeekday, mmss } from '../lib/format';
+import VerdictBadge from './VerdictBadge.astro';
+
+interface Props {
+  claim: Claim | SpeakerClaim;
+  /** 委員頁用：顯示這一則出自哪一篇 */
+  showArticle?: boolean;
+}
+const { claim, showArticle = false } = Astro.props;
+const source = showArticle && 'article_slug' in claim ? claim : null;
+---
+
+<li class="rounded-[var(--radius-card)] border border-line bg-surface p-4 sm:p-5">
+  <div class="flex flex-wrap items-center gap-x-3 gap-y-1.5 text-[0.75rem] text-muted">
+    <VerdictBadge verdict={claim.verdict} reviewed={claim.reviewed} />
+    <span>{KIND_LABEL[claim.kind] ?? '其他'}</span>
+    <span aria-hidden="true" class="text-line">·</span>
+    <span>{METHOD_LABEL[claim.method]}</span>
+    {
+      source ? (
+        <a
+          href={`/article/${encodeURIComponent(source.article_slug)}#factcheck`}
+          class="min-w-0 truncate transition-colors hover:text-accent sm:ml-auto"
+        >
+          <time datetime={source.date} class="tabular">{formatDateWithWeekday(source.date)}</time>
+          ・{displayTitle(source.article_title)}
+        </a>
+      ) : (
+        <span class="tabular sm:ml-auto">影片 {mmss(claim.timestamp)}</span>
+      )
+    }
+  </div>
+
+  <blockquote class="prose-cn mt-3 border-l-2 border-line pl-3 text-[0.95rem]">
+    「{claim.quote}」
+  </blockquote>
+  <p class="mt-2 text-[0.9rem] text-ink-2">{claim.statement}</p>
+  {claim.rationale && (
+    <p class="mt-2 text-[0.82rem] leading-relaxed text-muted">判定理由：{claim.rationale}</p>
+  )}
+
+  {
+    claim.evidence.length > 0 && (
+      <div class="mt-4 space-y-2.5">
+        {claim.evidence.map((e, i) => {
+          const official = safeExternalUrl(e.official_url);
+          const api = safeExternalUrl(e.api_url);
+          return (
+            <details open={i === 0} class="rounded-lg border border-line-soft bg-bg-soft/60 px-3 py-2.5">
+              <summary class="flex items-start gap-2 text-[0.82rem] text-ink-2">
+                <span class="mt-0.5 shrink-0 rounded bg-surface-2 px-1.5 text-[0.68rem] text-muted">
+                  {e.source === 'law' ? '法條' : '議案'}
+                </span>
+                <span class="min-w-0 flex-1">{e.title}</span>
+                <svg viewBox="0 0 24 24" class="chev mt-1 h-3 w-3 shrink-0 text-muted transition-transform" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                  <path d="M6 9l6 6 6-6" stroke-linecap="round" stroke-linejoin="round" />
+                </svg>
+              </summary>
+              <p class="mt-2 text-[0.82rem] leading-relaxed whitespace-pre-line text-muted">{e.excerpt}</p>
+              <p class="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-[0.75rem]">
+                {official && (
+                  <a href={official} target="_blank" rel="noopener noreferrer" class="text-accent underline underline-offset-4">
+                    官方來源
+                  </a>
+                )}
+                {api && (
+                  <a href={api} target="_blank" rel="noopener noreferrer" class="text-muted underline underline-offset-4 hover:text-accent">
+                    原始資料（LYAPI）
+                  </a>
+                )}
+              </p>
+            </details>
+          );
+        })}
+      </div>
+    )
+  }
+</li>

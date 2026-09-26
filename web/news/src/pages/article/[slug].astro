@@ -4,6 +4,7 @@ import BriefCard from '../../components/BriefCard.astro';
 import Notice from '../../components/Notice.astro';
 import SlideBlock from '../../components/SlideBlock.astro';
 import Transcript from '../../components/Transcript.astro';
+import FactCheckSection from '../../components/FactCheckSection.astro';
 import { getArticle, safeExternalUrl, statusFor } from '../../lib/api';
 import { displayTitle, formatDateWithWeekday, humanDuration, mmss } from '../../lib/format';
 
@@ -141,6 +142,9 @@ const retryHref = Astro.url.pathname;
             />
           </div>
         )}
+
+        <!-- 查證 -->
+        <FactCheckSection claims={article.claims} checked={article.factcheck_checked} />
 
         <!-- 完整逐字稿 -->
         <Transcript text={article.transcript_text} sourceNote={article.source_note} />

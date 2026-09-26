@@ -11,15 +11,17 @@ from __future__ import annotations
 import secrets
 from collections.abc import Callable
 from contextlib import asynccontextmanager
+from datetime import date as date_type
 from urllib.parse import urlparse
 
 from fastapi import Depends, FastAPI, Header, HTTPException
 from pydantic import BaseModel, Field
 
-from .jobs import Job, JobStore
+from .jobs import Job, JobKind, JobStore
 from .runner import JobWorker
 
 MAX_SLIDES = 50
+MAX_TRANSCRIPT = 200_000
 ALLOWED_SCHEMES = ("http", "https")
 
 
@@ -32,9 +34,19 @@ class JobRequest(BaseModel):
     model: str | None = None
 
 
+class FactCheckRequest(BaseModel):
+    # 只用來識別與回溯，不會拿去下載——但一樣限定 http(s)
+    source_url: str = Field(min_length=4)
+    speaker: str = Field(min_length=1, max_length=100)
+    date: date_type
+    meeting: str = Field(default="", max_length=300)
+    transcript_text: str = Field(min_length=1, max_length=MAX_TRANSCRIPT)
+
+
 class JobView(BaseModel):
     id: str
     url: str
+    kind: str = JobKind.DECK.value
     status: str
     detailed: bool
     progress_fraction: float | None = None
@@ -57,7 +69,7 @@ class HealthView(BaseModel):
 
 def _view(job: Job, include_result: bool = True) -> JobView:
     return JobView(
-        id=job.id, url=job.url, status=job.status, detailed=job.detailed,
+        id=job.id, url=job.url, kind=job.kind, status=job.status, detailed=job.detailed,
         progress_fraction=job.progress_fraction, progress_status=job.progress_status,
         error=job.error, created_at=job.created_at, started_at=job.started_at,
         finished_at=job.finished_at,
@@ -108,6 +120,17 @@ def create_app(
         return _view(store.submit(
             request.url, detailed=request.detailed, min_slides=request.min_slides,
             max_slides=request.max_slides, model=request.model))
+
+    @app.post("/factchecks", status_code=202, dependencies=[Depends(require_key)])
+    def submit_factcheck(request: FactCheckRequest) -> JobView:
+        if urlparse(request.source_url).scheme not in ALLOWED_SCHEMES:
+            raise HTTPException(status_code=422, detail="網址必須是 http 或 https")
+        return _view(store.submit(request.source_url, kind=JobKind.FACTCHECK, params={
+            "speaker": request.speaker,
+            "date": request.date.isoformat(),
+            "meeting": request.meeting,
+            "transcript_text": request.transcript_text,
+        }))
 
     @app.get("/jobs", dependencies=[Depends(require_key)])
     def recent(limit: int = 20) -> list[JobView]:

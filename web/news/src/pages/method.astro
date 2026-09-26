@@ -1,0 +1,79 @@
+---
+import Base from '../layouts/Base.astro';
+import { MIN_SAMPLE, VERDICT_LABEL } from '../lib/factcheck';
+import VerdictBadge from '../components/VerdictBadge.astro';
+
+const verdicts = [
+  { v: 'supported', text: '主張的每個數字都出現在證據裡；或模型判讀為支持，而且它引用的句子確實在證據中。' },
+  { v: 'partial', text: '主張有好幾個數字，只有一部分在證據裡找得到。' },
+  { v: 'contradicted', text: '證據裡有同一類的數字，但一個都對不上；或模型判讀為衝突且引用成立。一律經人工確認才公開。' },
+  { v: 'unverifiable', text: '找不到對應的法條或議案、資料來源暫時取不到、證據不足以判斷，或模型的引用不在證據中。' },
+] as const;
+---
+
+<Base title="查證方法" description="立院質詢日報的事實查核怎麼做、查證相符率怎麼算。" back={true}>
+  <article class="prose-cn mx-auto max-w-3xl px-4 py-10 sm:px-6 sm:py-14">
+    <p class="text-[0.7rem] tracking-[0.3em] text-accent uppercase">Methodology</p>
+    <h1 class="headline mt-3 text-3xl font-semibold text-ink sm:text-4xl">查證方法</h1>
+    <p class="mt-5">
+      我們查的是「委員說的，和官方資料對不對得上」，不是「委員有沒有說謊」。說錯、口誤、語音辨識的錯字，在資料上看起來都一樣；我們無從判斷意圖。
+    </p>
+
+    <h2 class="headline mt-12 text-2xl font-semibold text-ink">查什麼</h2>
+    <ul class="mt-4 list-disc space-y-2 pl-5">
+      <li><strong class="text-ink">現行法條的內容</strong>：罰鍰金額、刑期、期限。以發言當天有效的版本為準——法律會修，修法前說的話要對照修法前的條文。</li>
+      <li><strong class="text-ink">議案的內容</strong>：某個版本編列多少、要把罰則改成多少、是誰提的。</li>
+      <li><strong class="text-ink">議案的進度</strong>：是否已經三讀、目前在哪個階段。</li>
+    </ul>
+    <p class="mt-4">
+      只查核該段影片的委員本人。立法院的逐字稿沒有標記講者，所以我們要求模型跳過委員會質詢中官員的回答（例如以「報告委員」開頭，或部長、次長的說明）；但逐字稿分不出講者，仍可能把官員的話誤認成委員的。意見、評價、承諾與預測也不查。
+    </p>
+
+    <h2 class="headline mt-12 text-2xl font-semibold text-ink">資料從哪裡來</h2>
+    <p class="mt-4">
+      法條與議案取自 <a href="https://ly.govapi.tw/" class="text-accent underline underline-offset-4" rel="noopener noreferrer" target="_blank">LYAPI</a>——公民科技社群整理的立法院資料服務，不是立法院官方。所以每一筆證據都附上兩個連結：官方來源（全國法規資料庫、立法院議事暨公報資訊網）與 LYAPI 的原始資料，任何人都能自己核對。
+    </p>
+
+    <h2 class="headline mt-12 text-2xl font-semibold text-ink">怎麼判定</h2>
+    <p class="mt-4">
+      語言模型只做兩件事：從逐字稿挑出可查證的陳述，以及在沒有數字可比的時候判讀文字。它不給分數，也不判斷數字對不對。
+    </p>
+    <ul class="mt-4 list-disc space-y-2 pl-5">
+      <li>模型挑出的每一句話都必須在逐字稿裡逐字找得到，找不到就丟掉——它不能替委員說他沒說過的話。</li>
+      <li>數字由程式比對：「三萬元」「3萬」「5到25萬」先換算成數值，只比同一類（金額對金額、期間對期間）。</li>
+      <li>文字由模型判讀，但它必須逐字引用證據中的一句話作為依據；引用不在證據裡，判讀就作廢。</li>
+    </ul>
+    <dl class="mt-6 space-y-4">
+      {verdicts.map(({ v, text }) => (
+        <div class="flex flex-col gap-1.5 sm:flex-row sm:gap-4">
+          <dt class="shrink-0 sm:w-28"><VerdictBadge verdict={v} /></dt>
+          <dd class="text-[0.95rem]">{text}</dd>
+        </div>
+      ))}
+    </dl>
+
+    <h2 class="headline mt-12 text-2xl font-semibold text-ink">人工確認</h2>
+    <p class="mt-4">
+      「{VERDICT_LABEL.contradicted}」不會自動公開。把具名的人標成講錯，是這個功能唯一可能傷人的地方，而語音辨識的錯字（例如「非紅供應鏈」被聽成「飛鴻公園」）最容易被誤判成不符。每一則「不符」都經人看過、核准後才會出現在網站上並計入分數；誤判的會被駁回。
+    </p>
+
+    <h2 id="score" class="headline mt-12 scroll-mt-24 text-2xl font-semibold text-ink">查證相符率怎麼算</h2>
+    <p class="mt-4">只算已公開的判定，「無法查證」不計入——查不到不代表說錯。</p>
+    <div class="tabular mt-5 overflow-x-auto rounded-lg border border-line bg-surface px-4 py-4 text-[0.95rem] text-ink">
+      <p>n ＝ 相符 ＋ 部分相符 ＋ 不符</p>
+      <p class="mt-2">查證相符率 ＝（相符 ＋ 0.5 × 部分相符 ＋ 1）÷（n ＋ 2）</p>
+    </div>
+    <p class="mt-4">
+      分子分母各加的 1 與 2 讓樣本少時往 50% 靠：只查到一則而且不符，不會變成 0%。可查證的陳述未滿 {MIN_SAMPLE} 則時不顯示百分比，只顯示「樣本不足」與各類的數量。
+    </p>
+
+    <h2 class="headline mt-12 text-2xl font-semibold text-ink">已知限制</h2>
+    <ul class="mt-4 list-disc space-y-2 pl-5">
+      <li>逐字稿由立法院的 AI 自動產生，錯字多，台語發言更差。錯字可能讓陳述找不到對應資料，而被判為無法查證。</li>
+      <li>委員沒講條號時，模型可能依內容推斷條號，推斷不出就不查；我們不會拿主張的數字去整部法律裡找「剛好有這個數字」的條文。</li>
+      <li>逐字稿沒有標記講者。我們要求模型只挑委員本人的話、跳過官員的回答，但仍可能把官員說的話誤認成委員的。</li>
+      <li>政府統計資料、新聞與事實查核中心的報告目前都還沒有納入。</li>
+      <li>查證相符率反映的是「可查證的那一小部分」陳述，不是一個人整體的誠信。</li>
+    </ul>
+  </article>
+</Base>

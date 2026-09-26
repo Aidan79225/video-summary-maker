@@ -49,6 +49,7 @@ python -c "import secrets; print(secrets.token_urlsafe(64))"
 | `GPU_JOB_TIMEOUT_SECONDS` | `1800` | 等單一支影片的上限 |
 | `INGEST_DAILY_LIMIT` | `20` | **每次執行**最多處理幾段（一段約 3～5 分鐘）。回補多天只是多查幾天的清單，處理上限不變。 |
 | `INGEST_HOUR` | `4` | 常駐排程每天幾點跑 |
+| `FACTCHECK_ENABLED` | `False` | 排程要不要自動查核；先量過準確率再打開，見〈事實查核〉 |
 
 ## 每日匯入
 
@@ -99,14 +100,40 @@ uv run python manage.py run_scheduler --backfill-days 0 # 不要回補
 10 4 * * * cd /home/pi/yt-downloader/services/news && /home/pi/.local/bin/uv run python manage.py ingest_ivod >> /var/log/ly-news-ingest.log 2>&1
 ```
 
+## 事實查核
+
+摘要完成的文章會再送去 GPU 主機做事實查核：從委員的發言挑出可以用法條或議案驗證的陳述，取回官方資料比對。設計見 `docs/superpowers/specs/2026-09-19-fact-check-design.md`。
+
+```bash
+uv run python manage.py factcheck_articles                 # 查核還沒查過的文章（FACTCHECK_ENABLED 開啟後，排程會在匯入後自動跑）
+uv run python manage.py factcheck_articles --article 171140
+uv run python manage.py factcheck_articles --article 171140 --force   # 連人工審核過的也重跑
+```
+
+**判定為「不符」的主張不會自動公開**，要到 `/admin/factchecks/claim/?review_status__exact=pending_review` 審核：核准後公開並計入查證相符率，駁回則不公開、不計分（例如語音辨識錯字造成的誤判）。重跑不會洗掉審核紀錄，除非加 `--force`。
+
+| 變數 | 預設 | 說明 |
+|---|---|---|
+| `FACTCHECK_DAILY_LIMIT` | `20` | 每次執行最多查核幾篇 |
+| `FACTCHECK_ENABLED` | `False` | 每日排程要不要在匯入後自動查核；手動的 `factcheck_articles` 不受影響 |
+
+**自動查核預設關閉。** 查核結果除了「不符」以外會直接公開並計入查證相符率，所以上線前要先量準確率：在人工標註的樣本上跑
+
+```bash
+uv run python scripts/eval_factcheck.py scripts/factcheck_labels.jsonl   # 在 repo 根目錄、GPU 主機上跑（需要 Ollama）
+```
+
+確認「相符」的精確率與「不符」的召回率可以接受，再設 `FACTCHECK_ENABLED=true` 打開排程。
+
 ## API
 
 | 端點 | 說明 |
 |---|---|
 | `GET /api/health` | 文章數與最新日期 |
 | `GET /api/articles?date=&speaker=&q=&page=&page_size=` | 已完成的文章清單 |
-| `GET /api/articles/{slug}` | 單篇，含摘要卡（`brief`：一句話、關鍵數字、要求與回應；GPU 端產不出來時為 `null`）、每段的條列與完整敘述、完整逐字稿 |
-| `GET /api/speakers` | 委員與篇數 |
+| `GET /api/articles/{slug}` | 單篇，含摘要卡（`brief`：一句話、關鍵數字、要求與回應；GPU 端產不出來時為 `null`）、每段的條列與完整敘述、完整逐字稿；`claims` 是公開的查證主張（含證據），`factcheck_checked` 表示這篇查核過了沒 |
+| `GET /api/speakers` | 委員與篇數；`factcheck` 是該委員的查證相符率與各判定的則數 |
+| `GET /api/speakers/{name}/claims` | 該委員所有公開的查證主張與相符率 |
 
 清單裡每張卡片的 `teaser` 優先用摘要卡的一句話，沒有卡片才退回第一段的完整敘述。
 
@@ -168,6 +195,15 @@ articles/
 └─ management/commands/
    ├─ ingest_ivod.py    composition root：從 settings 組出 adapter 再注入
    └─ run_scheduler.py
+
+factchecks/
+├─ models.py        FactCheckRun / Claim / Evidence
+├─ scoring.py       查證相符率（公開公式）
+├─ runner.py        use case：送工作 → 落地 → 不符進審核
+├─ review.py        審核動作
+├─ admin.py         審核介面
+├─ api.py           查證資料的 ninja 端點
+└─ management/commands/factcheck_articles.py
 ```
 
 兩個 adapter 都可以注入替身，所以 `ingest.py` 的測試不碰網路。
