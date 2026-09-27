@@ -98,3 +98,17 @@ def test_a_player_without_a_stream_is_reported():
     })
     with pytest.raises(NoSubtitlesAvailable, match="串流"):
         TcccClient(fetch=fetch).video_url(REF)
+
+
+def test_the_council_fetch_keeps_verification_but_drops_the_strict_flag():
+    """攔的 bug：Python 3.13 的預設 context 會拒絕市議會的憑證鏈（CA 憑證缺
+    Subject Key Identifier），整個來源在容器裡一篇都抓不到。只能關 strict，
+    不能關驗證。"""
+    import ssl
+
+    from slidebox.infrastructure.tccc_api import _ssl_context
+
+    context = _ssl_context()
+    assert not (context.verify_flags & ssl.VERIFY_X509_STRICT)
+    assert context.verify_mode == ssl.CERT_REQUIRED
+    assert context.check_hostname

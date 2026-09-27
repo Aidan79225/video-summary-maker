@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import html
 import re
+import ssl
 import urllib.request
 from dataclasses import dataclass
 
@@ -27,8 +28,18 @@ _DURATION_RE = re.compile(r"影片長度：</td>\s*<td[^>]*>\s*(\d{1,2}:\d{2})")
 _STREAM_RE = re.compile(r"""https://[^'"\s]+\.m3u8(?:\?[^'"\s]*)?""")
 
 
+def _ssl_context() -> ssl.SSLContext:
+    """vod.tccc.gov.tw 的憑證鏈裡有一張 CA 憑證沒有 Subject Key Identifier。
+    Python 3.13 起預設開 VERIFY_X509_STRICT，會以「Missing Subject Key Identifier」
+    拒絕它——3.12 以前是接受的。這裡只關掉 strict 旗標，主機名與信任鏈照常驗證，
+    不是關掉驗證。"""
+    context = ssl.create_default_context()
+    context.verify_flags &= ~ssl.VERIFY_X509_STRICT
+    return context
+
+
 def _http_get(url: str) -> str:
-    with urllib.request.urlopen(url, timeout=_TIMEOUT) as resp:
+    with urllib.request.urlopen(url, timeout=_TIMEOUT, context=_ssl_context()) as resp:
         return resp.read().decode("utf-8", errors="replace")
 
 

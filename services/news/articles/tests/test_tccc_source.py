@@ -37,6 +37,20 @@ class FakeFetch:
         return "<html><body><table></table></body></html>"
 
 
+class TlsTests(SimpleTestCase):
+    def test_fetch_keeps_verification_but_drops_the_strict_flag(self):
+        """Python 3.13 的預設 context 會拒絕市議會的憑證鏈（CA 憑證缺 Subject Key
+        Identifier）。只能關 strict，不能關驗證。"""
+        import ssl
+
+        from articles.tccc_source import _ssl_context
+
+        context = _ssl_context()
+        self.assertFalse(context.verify_flags & ssl.VERIFY_X509_STRICT)
+        self.assertEqual(context.verify_mode, ssl.CERT_REQUIRED)
+        self.assertTrue(context.check_hostname)
+
+
 class ParseTests(SimpleTestCase):
     def test_councilors_are_read_with_their_ids(self):
         rows = parse_councilors(_read("tccc_region01.html"))
