@@ -37,7 +37,8 @@ services:
       SLIDEBOX_MODEL: ${SLIDEBOX_MODEL:-qwen3.5:9b}
     volumes:
       - summary-output:/data/output
-      # faster-whisper 第一次用會下載 1.6 GB 的模型，放 volume 才不會每次重建都重抓
+      # faster-whisper 第一次用會下載 1.6 GB 的模型，放 volume 才不會每次重建都重抓。
+      # 臺中市議會的片段沒有逐字稿，全靠它（CPU 跑，約片長的四分之一）。
       - whisper-cache:/root/.cache/huggingface
     depends_on:
       ollama:
