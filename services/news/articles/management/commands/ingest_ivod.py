@@ -16,6 +16,7 @@ from django.utils import timezone
 from articles.gpu_client import GpuApiClient
 from articles.ingest import discover_days, process_pending, retry_imageless
 from articles.ivod_source import IvodDailySource
+from articles.law_source import LawSource, LyApi
 
 
 class Command(BaseCommand):
@@ -37,13 +38,15 @@ class Command(BaseCommand):
         client = GpuApiClient(settings.GPU_API_BASE, settings.GPU_API_KEY)
         timeout = settings.GPU_JOB_TIMEOUT_SECONDS
         limit = options["limit"]
+        law_source = LawSource(LyApi(settings.LYAPI_BASE)) if settings.CITE_LAWS else None
 
         if options["retry_imageless"]:
             self._report(retry_imageless(client, limit=limit, timeout=timeout))
             return
 
         if options["process_only"]:
-            self._report(process_pending(client, limit=limit, timeout=timeout))
+            self._report(process_pending(client, limit=limit, timeout=timeout,
+                                         law_source=law_source))
             return
 
         days = self._days(options)
@@ -58,7 +61,8 @@ class Command(BaseCommand):
             self.stdout.write(f"發現 {report.discovered}、新增 {report.created}")
             return
 
-        processed = process_pending(client, limit=limit, timeout=timeout)
+        processed = process_pending(client, limit=limit, timeout=timeout,
+                                    law_source=law_source)
         report.processed = processed.processed
         report.failed = processed.failed
         report.pending = processed.pending

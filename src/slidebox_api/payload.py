@@ -73,7 +73,8 @@ def brief_payload(brief: Brief | None) -> dict | None:
     return {
         BriefField.ONE_LINER: brief.one_liner,
         BriefField.KEY_NUMBERS: [
-            {"value": n.value, "unit": n.unit, "label": n.label, "quote": n.quote}
+            {"value": n.value, "unit": n.unit, "label": n.label, "quote": n.quote,
+             "law": n.law, "article": n.article}
             for n in brief.key_numbers
         ],
         BriefField.ASKS: [

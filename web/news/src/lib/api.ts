@@ -5,6 +5,7 @@ import type {
   ArticleQuery,
   Brief,
   Health,
+  LawSource,
   Result,
   SpeakerList,
 } from './types';
@@ -189,6 +190,21 @@ function toCard(a: ArticleDetail) {
 
 const str = (v: unknown): string => (typeof v === 'string' ? v : '');
 
+/** 條文來源少了原文或官方連結就不顯示：一個沒有內容的連結只會讓人困惑 */
+function normalizeSources(raw: unknown): LawSource[] {
+  return (Array.isArray(raw) ? raw : [])
+    .filter((x) => x && typeof x === 'object')
+    .map((x) => ({
+      law: str(x.law),
+      article: str(x.article),
+      title: str(x.title),
+      excerpt: str(x.excerpt),
+      official_url: str(x.official_url),
+      api_url: str(x.api_url),
+    }))
+    .filter((x) => x.excerpt && safeExternalUrl(x.official_url));
+}
+
 /**
  * 摘要卡缺欄位不讓整頁爆掉；沒有一句話就當作沒有卡片，
  * 版面退回只用導言的樣子。
@@ -202,7 +218,15 @@ export function normalizeBrief(raw: unknown): Brief | null {
   return {
     one_liner,
     key_numbers: list(o.key_numbers)
-      .map((n) => ({ value: str(n.value), unit: str(n.unit), label: str(n.label), quote: str(n.quote) }))
+      .map((n) => ({
+        value: str(n.value),
+        unit: str(n.unit),
+        label: str(n.label),
+        quote: str(n.quote),
+        law: str(n.law),
+        article: str(n.article),
+        sources: normalizeSources(n.sources),
+      }))
       .filter((n) => n.value && n.label),
     asks: list(o.asks)
       .map((a) => ({ request: str(a.request), deadline: str(a.deadline), response: str(a.response) }))

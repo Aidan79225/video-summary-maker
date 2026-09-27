@@ -21,8 +21,8 @@ TRANSCRIPT = (
 
 
 def _number(value="82.4", unit="億元", label="三年累計編列",
-            quote="國防部累計編列八十二點四億元") -> KeyNumber:
-    return KeyNumber(value=value, unit=unit, label=label, quote=quote)
+            quote="國防部累計編列八十二點四億元", law="", article="") -> KeyNumber:
+    return KeyNumber(value=value, unit=unit, label=label, quote=quote, law=law, article=article)
 
 
 # --- 中文數字 ---
@@ -144,3 +144,56 @@ def test_digest_carries_title_bullets_and_detail_in_order():
     digest = slides_digest(slides)
     assert digest.index("第一段") < digest.index("重點一") < digest.index("完整敘述一")
     assert digest.index("完整敘述一") < digest.index("第二段") < digest.index("重點三")
+
+
+# --- 法條參照 ---
+
+
+def test_article_numbers_are_read_from_every_common_spelling():
+    from slidebox.usecases.brief import article_number, to_chinese
+    assert article_number("第24條") == 24
+    assert article_number("24條") == 24
+    assert article_number("第一百零六條") == 106
+    assert article_number("") is None
+    assert article_number("第0條") is None
+    assert to_chinese(106) == "一百零六"
+    assert to_chinese(110) == "一百一十"
+    assert to_chinese(24) == "二十四"
+    assert to_chinese(10) == "十"
+
+
+def test_a_law_reference_survives_only_when_both_name_and_article_are_in_the_transcript():
+    from slidebox.usecases.brief import article_in_text
+    transcript = "00:32 臺灣民眾黨對醫療法24條跟106條提出修正條文草案 他的行政罰鍰從現行的3萬到5萬"
+    assert article_in_text(24, transcript)
+    assert article_in_text(106, transcript)
+    assert not article_in_text(50, transcript)
+    number = _number(value="3", unit="萬", label="現行罰鍰下限",
+                     quote="他的行政罰鍰從現行的3萬到5萬", law="醫療法", article="第106條")
+    out = ground_brief(Brief("一句話", key_numbers=(number,)), transcript)
+    assert out.key_numbers[0].law == "醫療法"
+    assert out.key_numbers[0].article == "第106條"
+
+
+def test_a_law_reference_the_transcript_never_mentions_is_cleared_not_kept():
+    """附錯法條比沒附更糟：名稱或條號有一邊對不上，兩個一起清掉，數字本身留著。"""
+    transcript = "00:32 他的行政罰鍰從現行的3萬到5萬"
+    number = _number(value="3", unit="萬", label="現行罰鍰下限",
+                     quote="他的行政罰鍰從現行的3萬到5萬", law="醫療法", article="第106條")
+    out = ground_brief(Brief("一句話", key_numbers=(number,)), transcript)
+    assert out.key_numbers[0].value == "3"
+    assert out.key_numbers[0].law == ""
+    assert out.key_numbers[0].article == ""
+    # 名稱在、條號不在
+    number = _number(value="3", unit="萬", label="現行罰鍰下限",
+                     quote="他的行政罰鍰從現行的3萬到5萬", law="醫療法", article="第106條")
+    out = ground_brief(Brief("一句話", key_numbers=(number,)), "00:30 醫療法 " + transcript)
+    assert out.key_numbers[0].law == ""
+
+
+def test_article_numbers_are_normalised_to_arabic():
+    transcript = "00:32 醫療法第一百零六條 罰鍰從現行的3萬到5萬"
+    number = _number(value="3", unit="萬", label="現行罰鍰下限",
+                     quote="罰鍰從現行的3萬到5萬", law="醫療法", article="第一百零六條")
+    out = ground_brief(Brief("一句話", key_numbers=(number,)), transcript)
+    assert out.key_numbers[0].article == "第106條"

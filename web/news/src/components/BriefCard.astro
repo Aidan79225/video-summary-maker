@@ -4,8 +4,12 @@
  *
  * 分段摘要是「照影片順序講了什麼」，這張卡是「他到底要什麼、拿到什麼回應、
  * 憑什麼數字」。固定欄位比散文省腦力——讀者知道眼睛該往哪看。
+ *
+ * 關鍵數字若是在講某一條法律，旁邊掛一個條文連結、卡片底下附條文原文。
+ * 只附來源、不判對錯：「他說 3 到 5 萬，條文在這裡」，讀者自己看。
  */
 import type { Brief } from '../lib/types';
+import { safeExternalUrl } from '../lib/api';
 
 interface Props {
   brief: Brief;
@@ -14,6 +18,7 @@ interface Props {
 const { brief } = Astro.props;
 const numbers = brief.key_numbers.slice(0, 4);
 const asks = brief.asks.slice(0, 4);
+const cited = numbers.filter((n) => n.sources.length > 0);
 ---
 
 <section
@@ -29,17 +34,34 @@ const asks = brief.asks.slice(0, 4);
       <div>
         <p class="text-[0.7rem] tracking-[0.2em] text-muted uppercase">關鍵數字</p>
         <dl class="mt-2 grid grid-cols-2 gap-3 sm:grid-cols-4">
-          {numbers.map((n) => (
-            <div class="border-t border-line-soft pt-2.5">
-              <dd class="text-[1.55rem] leading-tight font-semibold text-ink">
-                {n.value}
-                {n.unit && <span class="ml-0.5 text-[0.85rem] font-medium text-muted">{n.unit}</span>}
-              </dd>
-              <dt class="mt-1 text-[0.75rem] leading-snug text-muted" title={n.quote || undefined}>
-                {n.label}
-              </dt>
-            </div>
-          ))}
+          {numbers.map((n, i) => {
+            const first = n.sources[0];
+            const official = first ? safeExternalUrl(first.official_url) : null;
+            return (
+              <div class="border-t border-line-soft pt-2.5">
+                <dd class="text-[1.55rem] leading-tight font-semibold text-ink">
+                  {n.value}
+                  {n.unit && <span class="ml-0.5 text-[0.85rem] font-medium text-muted">{n.unit}</span>}
+                </dd>
+                <dt class="mt-1 text-[0.75rem] leading-snug text-muted" title={n.quote || undefined}>
+                  {n.label}
+                </dt>
+                {first && official && (
+                  <a
+                    href={`#law-${i + 1}`}
+                    class="mt-1.5 inline-flex max-w-full items-center gap-1 rounded-md border border-line px-1.5 py-0.5 text-[0.7rem] text-ink-2 transition-colors hover:border-accent hover:text-accent"
+                    title="看條文原文"
+                  >
+                    <svg viewBox="0 0 24 24" class="h-3 w-3 shrink-0" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
+                      <path d="M6 3h9l5 5v13H6z" stroke-linejoin="round" />
+                      <path d="M9 12h7M9 16h7" stroke-linecap="round" />
+                    </svg>
+                    <span class="truncate">{first.law} {first.article}</span>
+                  </a>
+                )}
+              </div>
+            );
+          })}
         </dl>
       </div>
     )
@@ -63,6 +85,48 @@ const asks = brief.asks.slice(0, 4);
           ))}
         </ul>
       </div>
+    )
+  }
+
+  {
+    cited.length > 0 && (
+      <details class="more border-t border-line-soft pt-3">
+        <summary class="inline-flex items-center gap-2 text-[0.82rem] text-muted transition-colors hover:text-accent">
+          <svg viewBox="0 0 24 24" class="chev h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+            <path d="M6 9l6 6 6-6" stroke-linecap="round" stroke-linejoin="round" />
+          </svg>
+          條文原文（{cited.reduce((sum, n) => sum + n.sources.length, 0)}）
+        </summary>
+        <p class="mt-2 text-[0.75rem] leading-relaxed text-muted">
+          講者提到的法條，取發言當天有效的版本；只附原文，不判斷講得對不對。
+        </p>
+        <ol class="mt-3 grid gap-3">
+          {numbers.map((n, i) =>
+            n.sources.map((s, j) => {
+              const official = safeExternalUrl(s.official_url);
+              const api = safeExternalUrl(s.api_url);
+              return (
+                <li id={j === 0 ? `law-${i + 1}` : undefined} class="scroll-mt-24 rounded-lg border border-line-soft bg-bg-soft/60 px-3 py-2.5">
+                  <p class="text-[0.82rem] font-medium text-ink-2">{s.title}</p>
+                  <p class="mt-1.5 text-[0.82rem] leading-relaxed whitespace-pre-line text-muted">{s.excerpt}</p>
+                  <p class="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-[0.75rem]">
+                    {official && (
+                      <a href={official} target="_blank" rel="noopener noreferrer" class="text-accent underline underline-offset-4">
+                        全國法規資料庫
+                      </a>
+                    )}
+                    {api && (
+                      <a href={api} target="_blank" rel="noopener noreferrer" class="text-muted underline underline-offset-4 hover:text-accent">
+                        原始資料（LYAPI）
+                      </a>
+                    )}
+                  </p>
+                </li>
+              );
+            }),
+          )}
+        </ol>
+      </details>
     )
   }
 </section>

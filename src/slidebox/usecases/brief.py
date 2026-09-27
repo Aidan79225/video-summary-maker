@@ -140,6 +140,48 @@ def number_in_text(value: str, unit: str, text: str) -> bool:
                for v in _numbers_in(text) for c in candidates)
 
 
+_ARTICLE_RE = re.compile(rf"第?\s*([0-9]+|[{_CN_CHARS}]+)\s*條")
+_CN_ORDINAL = "零一二三四五六七八九"
+
+
+def article_number(text: str) -> int | None:
+    """「第24條」「24條」「第一百零六條」→ 24、106。認不出來回 None。"""
+    m = _ARTICLE_RE.search(unicodedata.normalize("NFKC", text or ""))
+    if m is None:
+        return None
+    token = m.group(1)
+    value = float(token) if token.isdigit() else _parse_integer(token)
+    if value is None or value <= 0 or value != int(value) or value >= 1000:
+        return None
+    return int(value)
+
+
+def to_chinese(n: int) -> str:
+    """1～999 轉成法條用的中文數字：106 → 一百零六、110 → 一百一十、24 → 二十四。"""
+    hundreds, rest = divmod(n, 100)
+    tens, ones = divmod(rest, 10)
+    tail = _CN_ORDINAL[ones] if ones else ""
+    if hundreds:
+        head = _CN_ORDINAL[hundreds] + "百"
+        if rest == 0:
+            return head
+        if tens == 0:
+            return head + "零" + tail
+        return head + _CN_ORDINAL[tens] + "十" + tail
+    if tens:
+        return ("" if tens == 1 else _CN_ORDINAL[tens]) + "十" + tail
+    return tail
+
+
+def article_in_text(number: int, text: str) -> bool:
+    """逐字稿裡有沒有提到這一條：「24條」「第24條」「第二十四條」都算。
+
+    比對的是「數字＋條」而不是裸數字：24 也可能是「24 小時」，那不是條號。
+    """
+    squashed = _squash(text)
+    return any(f"{n}條" in squashed for n in (str(number), to_chinese(number)))
+
+
 def quote_in_transcript(quote: str, transcript: str) -> bool:
     """引用的句子必須真的在逐字稿裡（忽略空白與標點）。"""
     needle = _squash(quote)
@@ -153,8 +195,10 @@ def ground_brief(brief: Brief, transcript: str) -> Brief:
     一樣本來就是模型的轉述。數字不一樣——它會被讀者直接引用。
     """
     numbers = tuple(
-        replace(n, value=n.value.strip(), unit=n.unit.strip(),
-                label=n.label.strip(), quote=n.quote.strip())
+        _ground_citation(
+            replace(n, value=n.value.strip(), unit=n.unit.strip(),
+                    label=n.label.strip(), quote=n.quote.strip()),
+            transcript)
         for n in brief.key_numbers
         if n.label.strip()
         and quote_in_transcript(n.quote, transcript)
@@ -166,6 +210,21 @@ def ground_brief(brief: Brief, transcript: str) -> Brief:
         for a in brief.asks if a.request.strip()
     )[:MAX_ASKS]
     return Brief(one_liner=brief.one_liner.strip(), key_numbers=numbers, asks=asks)
+
+
+def _ground_citation(number: KeyNumber, transcript: str) -> KeyNumber:
+    """法律名稱與條號都要在逐字稿裡才留下，並把條號正規化成「第N條」。
+
+    這兩個欄位會讓新聞服務去抓條文原文附在數字旁邊——附錯法條比沒附更糟，
+    所以只要有一邊對不上就兩個一起清掉。名稱看整份逐字稿而不只看引用句：
+    委員常在前一句講法律名稱、下一句才講數字。
+    """
+    law = number.law.strip()
+    article = article_number(number.article)
+    if (law and article is not None
+            and law in _squash(transcript) and article_in_text(article, transcript)):
+        return replace(number, law=law, article=f"第{article}條")
+    return replace(number, law="", article="")
 
 
 def validate_brief(brief: Brief) -> list[str]:

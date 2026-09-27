@@ -26,11 +26,24 @@ class SlideOut(Schema):
     image_url: str | None
 
 
+class LawSourceOut(Schema):
+    law: str
+    article: str
+    title: str
+    excerpt: str
+    official_url: str
+    api_url: str
+
+
 class KeyNumberOut(Schema):
     value: str
     unit: str
     label: str
     quote: str
+    # 舊資料沒有這三個欄位，給預設值才不會讓整篇 500
+    law: str = ""
+    article: str = ""
+    sources: list[LawSourceOut] = []
 
 
 class AskOut(Schema):

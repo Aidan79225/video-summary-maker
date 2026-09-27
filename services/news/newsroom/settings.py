@@ -125,6 +125,10 @@ GPU_JOB_TIMEOUT_SECONDS = int(os.environ.get("GPU_JOB_TIMEOUT_SECONDS", "1800"))
 
 # 立法院開放資料
 IVOD_API_BASE = os.environ.get("IVOD_API_BASE", "https://ly.govapi.tw/v2/ivods")
+# 摘要卡的關鍵數字若講到某部法律某一條，從 LYAPI 抓條文原文附在旁邊。
+# 只附來源、不判對錯。關掉的話卡片照常，只是沒有條文連結。
+LYAPI_BASE = os.environ.get("LYAPI_BASE", "https://ly.govapi.tw/v2")
+CITE_LAWS = _env_bool("CITE_LAWS", True)
 
 # 每天最多處理幾段發言。一段約 3～5 分鐘，預設 20 段約 1～2 小時。
 INGEST_DAILY_LIMIT = int(os.environ.get("INGEST_DAILY_LIMIT", "20"))
