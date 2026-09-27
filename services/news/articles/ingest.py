@@ -21,7 +21,7 @@ from django.db.models import Count, F, Q, QuerySet
 from django.utils import timezone
 
 from .gpu_client import GpuApiClient, GpuApiError, JobField, JobFailed, JobStatus
-from .ivod_source import IvodClip, IvodDailySource, IvodUnavailable
+from .ivod_source import IvodClip, SourceUnavailable
 from .law_source import LawSource, LawUnavailable
 from .models import Article, ArticleStatus, Slide
 
@@ -115,7 +115,7 @@ def _slug(clip_date: str, ivod_id: str) -> str:
     return f"{clip_date}-{ivod_id}" if clip_date else ivod_id
 
 
-def discover(day: date, source: IvodDailySource) -> tuple[int, int]:
+def discover(day: date, source) -> tuple[int, int]:
     """把某一天的片段登記成待處理的文章。回傳 (發現數, 新增數)。
 
     已經存在的一律不動——尤其不能把已完成的文章打回待處理，那會讓每次
@@ -129,18 +129,22 @@ def discover(day: date, source: IvodDailySource) -> tuple[int, int]:
     return len(clips), created
 
 
-def discover_days(days: Sequence[date], source: IvodDailySource) -> IngestReport:
-    """登記多天份的片段。某一天失敗不影響其他天。"""
+def discover_days(days: Sequence[date], sources: Sequence) -> IngestReport:
+    """登記多天、多來源的片段。某一天或某個來源失敗不影響其他。
+
+    每個來源有 `name` 與 `clips_for(day)`；清單拿不到時丟 SourceUnavailable。
+    """
     report = IngestReport()
-    for day in days:
-        try:
-            found, created = discover(day, source)
-        except IvodUnavailable as e:
-            report.errors.append(f"{day}: {e}")
-            logger.warning("立法院清單取得失敗（%s）：%s", day, e)
-            continue
-        report.discovered += found
-        report.created += created
+    for source in sources:
+        for day in days:
+            try:
+                found, created = discover(day, source)
+            except SourceUnavailable as e:
+                report.errors.append(f"{source.name} {day}: {e}")
+                logger.warning("%s清單取得失敗（%s）：%s", source.name, day, e)
+                continue
+            report.discovered += found
+            report.created += created
     return report
 
 
@@ -155,6 +159,7 @@ def _upsert(clip: IvodClip, day: date) -> tuple[Article, bool]:
             "date": clip.date or day,
             "duration_seconds": clip.duration_seconds,
             "ivod_url": clip.ivod_url,
+            "source": clip.source,
             "status": ArticleStatus.PENDING,
         },
     )
@@ -480,11 +485,11 @@ def _save_slide(article: Article, raw: dict, folder: str, index: int) -> None:
     slide.save()
 
 
-def ingest_day(day: date, source: IvodDailySource, client: GpuApiClient,
+def ingest_day(day: date, sources: Sequence, client: GpuApiClient,
                limit: int, timeout: float,
                law_source: LawSource | None = None) -> IngestReport:
     """一天份的完整流程。"""
-    report = discover_days([day], source)
+    report = discover_days([day], sources)
     # 查不到新片段不影響「把先前登記好的積壓送出去」——兩件事的上游不同，
     # 立法院掛掉時 GPU 沒有理由整夜閒著。
     processed = process_pending(client, limit=limit, timeout=timeout,

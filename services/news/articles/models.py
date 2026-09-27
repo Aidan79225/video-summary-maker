@@ -13,14 +13,23 @@ class ArticleStatus(models.TextChoices):
     FAILED = "failed", "失敗"
 
 
+class ArticleSource(models.TextChoices):
+    LY = "ly", "立法院"
+    TCCC = "tccc", "臺中市議會"
+
+
 class Article(models.Model):
-    """一段 IVOD 發言的摘要。
+    """一段質詢發言的摘要。
 
     ivod_id 是唯一鍵，因為整條 pipeline 都以它為準做 upsert——排程重跑、
     手動補跑、失敗重試都不會產生重複的文章。
     """
 
     ivod_id = models.CharField(max_length=32, unique=True, db_index=True)
+    # 哪個議會。ivod_id 這個名字是歷史包袱——現在是「來源給的識別碼」，
+    # 臺中片段寫成 tccc-<ano>；改欄位名要動 API、前端與既有資料，不值得。
+    source = models.CharField(max_length=16, choices=ArticleSource.choices,
+                              default=ArticleSource.LY, db_index=True)
     slug = models.SlugField(max_length=64, unique=True)
 
     title = models.CharField(max_length=300)
