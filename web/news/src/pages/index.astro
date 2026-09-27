@@ -7,18 +7,22 @@ import Notice from '../components/Notice.astro';
 import Pagination from '../components/Pagination.astro';
 import { getArticles, getSpeakers, mediaUrl, statusFor } from '../lib/api';
 import { displayTitle, formatDateWithWeekday, humanDuration } from '../lib/format';
+import { isSource } from '../lib/sources';
 
 const PAGE_SIZE = 12;
 
 const url = Astro.url;
 const date = url.searchParams.get('date')?.trim() ?? '';
 const speaker = url.searchParams.get('speaker')?.trim() ?? '';
+const rawSource = url.searchParams.get('source')?.trim() ?? '';
+// 只認得兩個來源代碼；亂打的當成沒篩，不要把 422 傳染給整頁
+const source = isSource(rawSource) ? rawSource : '';
 const q = url.searchParams.get('q')?.trim() ?? '';
 const page = Math.max(1, Number(url.searchParams.get('page')) || 1);
 
 const [listRes, speakersRes] = await Promise.all([
-  getArticles({ date, speaker, q, page, page_size: PAGE_SIZE }),
-  getSpeakers(),
+  getArticles({ date, speaker, source, q, page, page_size: PAGE_SIZE }),
+  getSpeakers(source),
 ]);
 
 // 後端掛掉時仍然 render 可讀的頁面，但回報 503 讓監控看得出來
@@ -32,14 +36,19 @@ const items = list?.items ?? [];
 // 分頁越界時說「資料庫裡還沒有文章」會誤導——那兩件事完全不同
 const beyondLastPage = !!list && list.count > 0 && items.length === 0;
 
-const hasFilter = Boolean(date || speaker || q);
+const hasFilter = Boolean(date || speaker || source || q);
 const showLead = !hasFilter && page === 1 && items.length > 1;
 const lead = showLead ? items[0] : null;
 const rest = showLead ? items.slice(1) : items;
 
 const leadCover = lead ? mediaUrl(lead.cover_image_url) : null;
 const retryHref = `${url.pathname}${url.search}`;
-const params = { date: date || undefined, speaker: speaker || undefined, q: q || undefined };
+const params = {
+  date: date || undefined,
+  speaker: speaker || undefined,
+  source: source || undefined,
+  q: q || undefined,
+};
 
 const latestDate = items[0]?.date ?? '';
 ---
@@ -48,13 +57,13 @@ const latestDate = items[0]?.date ?? '';
   <!-- 報頭 -->
   <section class="border-b border-line-soft bg-bg-soft/60">
     <div class="mx-auto max-w-6xl px-4 py-10 sm:px-6 sm:py-14">
-      <p class="text-[0.7rem] tracking-[0.3em] text-accent uppercase">Legislative Yuan · Daily</p>
+      <p class="text-[0.7rem] tracking-[0.3em] text-accent">立法院 · 臺中市議會</p>
       <h1 class="headline mt-3 text-3xl font-semibold sm:text-[2.6rem] sm:leading-[1.2]">
         把質詢台上的幾分鐘<br class="hidden sm:block" />
         整理成看得懂的重點
       </h1>
       <p class="mt-4 max-w-xl text-sm leading-relaxed text-muted sm:text-base">
-        每天彙整立法院 IVOD 的質詢影音，逐段附上畫面截圖、重點條列與完整敘述，並保留可展開的原始逐字稿。
+        每天彙整立法院 IVOD 與臺中市議會隨選視訊的質詢影音，逐段附上畫面截圖、重點條列與完整敘述，並保留可展開的逐字稿。
       </p>
       {
         list && (
@@ -76,6 +85,7 @@ const latestDate = items[0]?.date ?? '';
     <Filters
       date={date}
       speaker={speaker}
+      source={source}
       q={q}
       speakers={speakers}
       speakersFailed={!speakersRes.ok}
@@ -98,8 +108,8 @@ const latestDate = items[0]?.date ?? '';
               beyondLastPage
                 ? `這個條件下只有 ${list?.pages ?? 1} 頁。`
                 : hasFilter
-                  ? '試著放寬條件——換一個日期、清掉關鍵字，或改看全部委員。'
-                  : '後端資料庫裡還沒有文章。等當天的 IVOD 處理完成後，這裡就會出現。'
+                  ? '試著放寬條件——換一個日期、清掉關鍵字，或改看全部來源與發言者。'
+                  : '後端資料庫裡還沒有文章。等當天的影片處理完成後，這裡就會出現。'
             }
             retryHref={beyondLastPage || hasFilter ? '/' : retryHref}
           />

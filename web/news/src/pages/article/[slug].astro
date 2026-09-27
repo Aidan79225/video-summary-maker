@@ -6,6 +6,8 @@ import SlideBlock from '../../components/SlideBlock.astro';
 import Transcript from '../../components/Transcript.astro';
 import { getArticle, safeExternalUrl, statusFor } from '../../lib/api';
 import { displayTitle, formatDateWithWeekday, humanDuration, mmss } from '../../lib/format';
+import { sourceSiteName } from '../../lib/sources';
+import SourceBadge from '../../components/SourceBadge.astro';
 
 const slug = String(Astro.params.slug ?? '');
 const res = slug ? await getArticle(slug) : null;
@@ -41,11 +43,12 @@ const retryHref = Astro.url.pathname;
         <header class="rise">
           <div class="flex flex-wrap items-center gap-x-2.5 gap-y-1.5 text-sm">
             <a
-              href={`/speaker/${encodeURIComponent(article.speaker)}`}
+              href={`/speaker/${encodeURIComponent(article.speaker)}?source=${article.source}`}
               class="lift rounded-full bg-accent-soft px-3 py-1 text-[0.82rem] font-medium text-accent-ink"
             >
               {article.speaker}
             </a>
+            <SourceBadge source={article.source} />
             <time datetime={article.date} class="tabular text-muted">
               {formatDateWithWeekday(article.date)}
             </time>
@@ -88,7 +91,7 @@ const retryHref = Astro.url.pathname;
               <svg viewBox="0 0 24 24" class="h-3 w-3" fill="currentColor" aria-hidden="true">
                 <path d="M8 5.5v13l11-6.5z" />
               </svg>
-              觀看 IVOD 原片
+              觀看{sourceSiteName(article.source)}原片
             </a>
           </dl>
 
@@ -129,14 +132,20 @@ const retryHref = Astro.url.pathname;
         {slides.length > 0 ? (
           <div class="mt-6 space-y-10 sm:mt-8 sm:space-y-12">
             {slides.map((s, i) => (
-              <SlideBlock slide={s} ivodUrl={ivodUrl} order={i + 1} total={slides.length} />
+              <SlideBlock
+                slide={s}
+                ivodUrl={ivodUrl}
+                source={article.source}
+                order={i + 1}
+                total={slides.length}
+              />
             ))}
           </div>
         ) : (
           <div class="mt-12">
             <Notice
               title="這篇還沒有分段重點"
-              body="後端沒有回傳任何段落。你仍然可以展開下方的完整逐字稿，或直接觀看 IVOD 原片。"
+              body="後端沒有回傳任何段落。你仍然可以展開下方的完整逐字稿，或直接觀看原片。"
               retryHref={retryHref}
             />
           </div>

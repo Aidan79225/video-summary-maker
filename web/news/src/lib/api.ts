@@ -8,6 +8,7 @@ import type {
   LawSource,
   Result,
   SpeakerList,
+  Speaker,
 } from './types';
 import fixture from '../fixtures/sample.json';
 
@@ -242,6 +243,7 @@ function fixtureList(query: ArticleQuery): ArticleList {
   const filtered = fixtureArticles().filter((a) => {
     if (query.date && a.date !== query.date) return false;
     if (query.speaker && a.speaker !== query.speaker) return false;
+    if (query.source && a.source !== query.source) return false;
     if (q) {
       const hay = `${a.title} ${a.teaser} ${a.meeting} ${a.speaker} ${a.transcript_text}`;
       if (!hay.includes(q)) return false;
@@ -275,6 +277,7 @@ export async function getArticles(query: ArticleQuery = {}): Promise<Result<Arti
   const params = new URLSearchParams();
   if (query.date) params.set('date', query.date);
   if (query.speaker) params.set('speaker', query.speaker);
+  if (query.source) params.set('source', query.source);
   if (query.q) params.set('q', query.q);
   params.set('page', String(Math.max(1, Number(query.page) || 1)));
   params.set('page_size', String(Math.max(1, Number(query.page_size) || 12)));
@@ -326,22 +329,24 @@ export async function getArticle(slug: string): Promise<Result<ArticleDetail>> {
   };
 }
 
-export async function getSpeakers(): Promise<Result<SpeakerList>> {
+export async function getSpeakers(source?: string): Promise<Result<SpeakerList>> {
   if (isFixtureMode()) {
-    const map = new Map<string, { name: string; count: number; latest_date: string }>();
+    const map = new Map<string, Speaker>();
     for (const a of fixtureArticles()) {
-      const cur = map.get(a.speaker);
+      if (source && a.source !== source) continue;
+      const key = `${a.source}:${a.speaker}`;
+      const cur = map.get(key);
       if (cur) {
         cur.count += 1;
         if (a.date > cur.latest_date) cur.latest_date = a.date;
       } else {
-        map.set(a.speaker, { name: a.speaker, count: 1, latest_date: a.date });
+        map.set(key, { name: a.speaker, source: a.source, count: 1, latest_date: a.date });
       }
     }
     return { ok: true, data: { items: [...map.values()].sort((a, b) => b.count - a.count) } };
   }
 
-  const res = await getJson<SpeakerList>('/api/speakers');
+  const res = await getJson<SpeakerList>(source ? `/api/speakers?source=${source}` : '/api/speakers');
   if (!res.ok) return res;
   return { ok: true, data: { items: Array.isArray(res.data?.items) ? res.data.items : [] } };
 }

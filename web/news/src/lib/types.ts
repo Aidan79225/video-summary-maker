@@ -1,6 +1,12 @@
+import type { ArticleSource } from './sources';
+
+export type { ArticleSource };
+
 export type ArticleCard = {
   slug: string;
+  /** 來源給的識別碼；立法院是 IVOD 數字、臺中市議會是 tccc-<ano> */
   ivod_id: string;
+  source: ArticleSource;
   title: string;
   speaker: string;
   meeting: string;
@@ -75,6 +81,7 @@ export type ArticleList = {
 
 export type Speaker = {
   name: string;
+  source: ArticleSource;
   count: number;
   latest_date: string;
 };
@@ -107,6 +114,7 @@ export type Result<T> = { ok: true; data: T } | { ok: false; error: ApiError };
 export type ArticleQuery = {
   date?: string;
   speaker?: string;
+  source?: string;
   q?: string;
   page?: number;
   page_size?: number;

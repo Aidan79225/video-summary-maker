@@ -1,0 +1,20 @@
+---
+import { sourceLabel } from '../lib/sources';
+
+interface Props {
+  source: string | undefined;
+  class?: string;
+}
+
+const { source, class: extra = '' } = Astro.props;
+const label = sourceLabel(source);
+// 臺中用強調色、立法院用中性色：兩種來源並列時一眼分得出來，單一來源時也不吵
+const tone =
+  source === 'tccc'
+    ? 'border-accent/40 bg-accent-soft text-accent-ink'
+    : 'border-line bg-bg-soft text-muted';
+---
+
+<span class={`inline-flex items-center rounded-full border px-2 py-0.5 text-[0.66rem] tracking-wide ${tone} ${extra}`}>
+  {label}
+</span>
