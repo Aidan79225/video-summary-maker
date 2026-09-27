@@ -261,7 +261,29 @@ def validate_slides(slides: Sequence[Slide], min_slides: int, max_slides: int,
         if detailed and len(slide.detail.strip()) < _MIN_DETAIL:
             problems.append(
                 f"第 {slide.index} 頁的 detail 太短或空白，需要 150 到 300 字的完整敘述")
+        problems.extend(first_person_problems(slide))
     return problems
+
+
+# 引號裡的是引述原話，那明確是講者在說，不算
+_QUOTED_RE = re.compile(r"「[^」]*」|『[^』]*』|“[^”]*”|\"[^\"]*\"")
+# 「我國」「自我」是一般用語，不是視角問題
+_FIRST_PERSON_RE = re.compile(r"我們|我方|本席|(?<!自)我(?![國們方])")
+
+
+def first_person_problems(slide: Slide) -> list[str]:
+    """摘要用了第一人稱就回報問題。
+
+    字幕是講者的第一人稱發言，模型很容易照抄視角，寫出「我們對於滋擾醫院
+    秩序之人…」——讀者會以為「我們」是整理內容的人在說話。實測 89 段裡有
+    45 段中招，所以除了提示詞，這裡再擋一道讓模型重試。
+    """
+    for text in (*slide.bullets, slide.detail):
+        match = _FIRST_PERSON_RE.search(_QUOTED_RE.sub("", text))
+        if match:
+            return [f"第 {slide.index} 頁用了第一人稱「{match.group(0)}」，請改用第三人稱、"
+                    f"稱發言者為「講者」；要引述原話請放在「」裡"]
+    return []
 
 
 # --- 完整逐字稿 ---

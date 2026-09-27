@@ -21,6 +21,7 @@ from articles.ingest import (
     imageless,
     ingest_day,
     process_pending,
+    rerun_ready,
     retry_imageless,
     save_result,
 )
@@ -317,6 +318,35 @@ class RetryImagelessTests(TestCase):
 
     def test_unfinished_articles_are_not_swept_up_by_the_retry(self):
         self.assertEqual(list(imageless(10)), [])
+
+
+@override_settings(MEDIA_ROOT=MEDIA)
+class RerunReadyTests(TestCase):
+    """提示詞改了，舊文章要整批換成新寫法。"""
+
+    def setUp(self):
+        discover(date(2026, 8, 27), FakeSource())
+
+    def test_a_finished_article_is_regenerated_and_stays_published(self):
+        process_pending(FakeClient(), limit=10, timeout=60)
+        client = FakeClient(result=_payload(slides=3))
+        report = rerun_ready(client, limit=10, timeout=60)
+        self.assertEqual(report.processed, 1)
+        article = Article.objects.get(ivod_id="900001")
+        self.assertEqual(article.status, ArticleStatus.READY)
+        self.assertEqual(article.slides.count(), 3)
+
+    def test_unfinished_articles_are_not_rerun(self):
+        client = FakeClient()
+        self.assertEqual(rerun_ready(client, limit=10, timeout=60).processed, 0)
+        self.assertEqual(client.submitted, [])
+
+    def test_a_failed_rerun_does_not_unpublish_the_article(self):
+        """攔的 bug：重跑失敗把文章打成 FAILED，等於讓它從站上消失。"""
+        process_pending(FakeClient(), limit=10, timeout=60)
+        report = rerun_ready(FakeClient(error=JobFailed("boom")), limit=10, timeout=60)
+        self.assertEqual(report.failed, 1)
+        self.assertEqual(Article.objects.get(ivod_id="900001").status, ArticleStatus.READY)
 
 
 @override_settings(MEDIA_ROOT=MEDIA)

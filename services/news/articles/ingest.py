@@ -202,6 +202,18 @@ def retry_imageless(client: GpuApiClient, limit: int, timeout: float) -> IngestR
                     demote_on_failure=False, claim=False)
 
 
+def rerun_ready(client: GpuApiClient, limit: int, timeout: float) -> IngestReport:
+    """把已完成的文章整批重產（摘要與截圖都重做）。
+
+    用在提示詞或模型改了、想讓舊文章也換成新寫法的時候。和補截圖一樣：
+    手動指令、不降級、不搶所有權，文章在重跑期間繼續留在站上。
+    """
+    queryset = (Article.objects
+                .filter(status=ArticleStatus.READY)
+                .order_by("-date", "ivod_id")[:limit])
+    return _process(queryset, client, timeout, demote_on_failure=False, claim=False)
+
+
 def _process(queryset: QuerySet, client: GpuApiClient, timeout: float,
              demote_on_failure: bool = True, claim: bool = True,
              law_source: LawSource | None = None) -> IngestReport:
