@@ -39,3 +39,34 @@ def test_a_lookalike_host_is_not_accepted():
     """攔的 bug：用 in 比對主機名，evil-ivod.ly.gov.tw.attacker.com 會被當成
     自己人，程式就會把使用者貼的網址拿去對別人的伺服器組 API 請求。"""
     assert ivod_id("https://ivod.ly.gov.tw.attacker.com/Play/Clip/1M/1") is None
+
+
+# --- 臺中市議會 ---
+
+from slidebox.usecases.sources import TcccRef, tccc_clip, tccc_id  # noqa: E402
+
+
+@pytest.mark.parametrize("url", [
+    "https://vod.tccc.gov.tw/index.asp?url=12&cno=85&ano=14833",
+    "https://vod.tccc.gov.tw/index.asp?url=12&cno=85&ano=14833&pageno=1",
+    "https://vod.tccc.gov.tw/index.asp?ano=14833&cno=85&url=12",
+    "http://VOD.TCCC.GOV.TW/index.asp?url=12&cno=85&ano=14833",
+    "  https://vod.tccc.gov.tw/index.asp?url=12&cno=85&ano=14833  ",
+])
+def test_recognises_taichung_council_clip_pages(url):
+    assert tccc_clip(url) == TcccRef("85", "14833")
+    assert tccc_id(url) == "tccc-14833"
+
+
+@pytest.mark.parametrize("url", [
+    "https://vod.tccc.gov.tw/index.asp?url=12&cno=85",          # 只有議員，沒有片段
+    "https://vod.tccc.gov.tw/index.asp?url=11",
+    "https://vod.tccc.gov.tw/wb_region02.asp?url=12&cno=85&ano=14833",  # 內頁不是公開網址
+    "https://vod.tccc.gov.tw.attacker.com/index.asp?url=12&cno=85&ano=14833",
+    "https://ivod.ly.gov.tw/Play/Clip/1M/171180",
+    "https://vod.tccc.gov.tw/index.asp?url=12&cno=abc&ano=14833",
+    "",
+])
+def test_everything_else_is_not_a_taichung_clip(url):
+    assert tccc_clip(url) is None
+    assert tccc_id(url) is None
