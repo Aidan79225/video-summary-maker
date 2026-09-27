@@ -16,6 +16,9 @@ x-news-backend: &news-backend
     # Pi5 上容器走 bridge 連國外套件庫只有幾十 KB/s，建置時改走 host 網路（只影響 build）
     network: host
   image: ly-news-backend
+  # 這個映像是本機 build 的，不在任何 registry；沒有這行，Portainer 勾「Re-pull image」
+  # 時會去 Docker Hub 拉 ly-news-backend 而失敗
+  pull_policy: build
   restart: unless-stopped
   # 和 Pi 上其他 stack 一樣用 uid 1000 跑：磁碟陣列上的資料夾交給 1000 就好，不會留下 root 的檔案
   user: "1000:1000"
@@ -63,6 +66,7 @@ services:
       context: ./web/news
       network: host
     image: ly-news-web
+    pull_policy: build
     container_name: ly-news-web
     restart: unless-stopped
     environment:
