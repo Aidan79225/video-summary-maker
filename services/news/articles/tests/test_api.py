@@ -34,9 +34,10 @@ BRIEF = {
 
 
 def _article(ivod_id="900001", speaker="範例一", day="2026-08-27", status=None,
-             slides=2, with_image=True, brief=None):
+             slides=2, with_image=True, brief=None, source="ly"):
     article = Article.objects.create(
         ivod_id=ivod_id,
+        source=source,
         slug=f"{day}-{ivod_id}",
         title=f"{day} {speaker}－第11屆第5會期第23次會議",
         speaker=speaker,
@@ -275,3 +276,32 @@ class StaticServingTests(TestCase):
         response = self.client.get("/static/admin/css/base.css")
         self.assertEqual(response.status_code, 200)
         self.assertIn("text/css", response["Content-Type"])
+
+
+@override_settings(MEDIA_ROOT=MEDIA)
+class SourceTests(TestCase):
+    """兩個議會並列：卡片要說自己是哪裡來的，而且可以只看其中一個。"""
+
+    def test_cards_carry_their_source_and_can_be_filtered_by_it(self):
+        _article("900001", speaker="範例一")
+        _article("tccc-14833", speaker="楊啓邦", source="tccc")
+        res = self.client.get("/api/articles").json()
+        self.assertEqual({i["source"] for i in res["items"]}, {"ly", "tccc"})
+        res = self.client.get("/api/articles?source=tccc").json()
+        self.assertEqual([i["ivod_id"] for i in res["items"]], ["tccc-14833"])
+        self.assertEqual(self.client.get("/api/articles?source=nope").status_code, 422)
+
+    def test_the_detail_carries_the_source_too(self):
+        _article("tccc-14833", speaker="楊啓邦", source="tccc")
+        res = self.client.get("/api/articles/2026-08-27-tccc-14833").json()
+        self.assertEqual(res["source"], "tccc")
+
+    def test_speakers_are_listed_per_source(self):
+        _article("900001", speaker="範例一")
+        _article("tccc-14833", speaker="楊啓邦", source="tccc")
+        items = self.client.get("/api/speakers").json()["items"]
+        self.assertEqual({(i["name"], i["source"]) for i in items},
+                         {("範例一", "ly"), ("楊啓邦", "tccc")})
+        items = self.client.get("/api/speakers?source=tccc").json()["items"]
+        self.assertEqual([i["name"] for i in items], ["楊啓邦"])
+        self.assertEqual(self.client.get("/api/speakers?source=nope").status_code, 422)
