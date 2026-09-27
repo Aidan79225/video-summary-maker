@@ -19,6 +19,25 @@ logger = logging.getLogger(__name__)
 DEFAULT_BACKFILL_DAYS = 3
 
 
+def daily_job(days: int) -> None:
+    # 包起來：例外若冒出排程，APScheduler 會把這個工作移除，之後
+    # 就再也不會跑——而使用者不會發現，只會覺得「新聞停更了」。
+    try:
+        call_command("ingest_ivod", days=days)
+    except Exception:  # noqa: BLE001
+        logger.exception("每日匯入失敗，排程繼續")
+    if not settings.FACTCHECK_ENABLED:
+        # 準確率量過之前不自動查核：結果會直接公開、計分
+        logger.info("FACTCHECK_ENABLED 未開啟，略過每日查核")
+        return
+    # 查核接在匯入之後：它需要摘要已經完成的文章。分開包，匯入那邊
+    # 掛了也還能把先前的積壓查完。
+    try:
+        call_command("factcheck_articles")
+    except Exception:  # noqa: BLE001
+        logger.exception("每日查核失敗，排程繼續")
+
+
 class Command(BaseCommand):
     help = "每天固定時間自動匯入立法院當日的質詢摘要"
 
@@ -35,12 +54,7 @@ class Command(BaseCommand):
         hour, minute = options["hour"], options["minute"]
 
         def job(days: int = options["backfill_days"] or 1) -> None:
-            # 包起來：例外若冒出排程，APScheduler 會把這個工作移除，之後
-            # 就再也不會跑——而使用者不會發現，只會覺得「新聞停更了」。
-            try:
-                call_command("ingest_ivod", days=days)
-            except Exception:  # noqa: BLE001
-                logger.exception("每日匯入失敗，排程繼續")
+            daily_job(days)
 
         # 每天也跑回補而不只查昨天：立法院的 AI 逐字稿有時晚幾小時才出現，
         # 而 discover 只收「已經有逐字稿」的片段。晚到排程時間之後的那些，

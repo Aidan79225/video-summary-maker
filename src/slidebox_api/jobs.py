@@ -26,6 +26,12 @@ class JobStatus(StrEnum):
 
 _FINISHED = frozenset({JobStatus.DONE, JobStatus.FAILED, JobStatus.CANCELLED})
 
+
+class JobKind(StrEnum):
+    """工作種類。兩種共用同一條佇列：都要用 Ollama，而 GPU 只有一張卡。"""
+    DECK = "deck"
+    FACTCHECK = "factcheck"
+
 # 預設保留幾筆工作。每筆成品帶著 base64 圖片，這個服務又會連續跑好幾個月，
 # 不設上限記憶體只會一路長。
 _MAX_JOBS = 50
@@ -40,6 +46,9 @@ class Job:
     min_slides: int | None = None
     max_slides: int | None = None
     model: str | None = None
+    kind: JobKind = JobKind.DECK
+    # 各種類自己的輸入（查核用：speaker、date、meeting、transcript_text）
+    params: dict = field(default_factory=dict)
 
     status: JobStatus = JobStatus.QUEUED
     progress_fraction: float | None = None
@@ -102,9 +111,12 @@ class JobStore:
     # --- 轉換 ---
 
     def submit(self, url: str, detailed: bool = True, min_slides: int | None = None,
-               max_slides: int | None = None, model: str | None = None) -> Job:
+               max_slides: int | None = None, model: str | None = None,
+               kind: JobKind = JobKind.DECK, params: dict | None = None) -> Job:
         job = Job(id=uuid.uuid4().hex, url=url, detailed=detailed,
-                  min_slides=min_slides, max_slides=max_slides, model=model)
+                  min_slides=min_slides, max_slides=max_slides, model=model,
+                  # 複製一份：呼叫端之後改自己的 dict 不該改到已經排隊的工作
+                  kind=kind, params=dict(params or {}))
         with self._lock:
             self._jobs[job.id] = job
             self._order.append(job.id)

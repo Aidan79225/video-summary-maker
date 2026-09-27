@@ -21,11 +21,12 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "src
 
 from fastapi import FastAPI
 
+from factcheck.composition import build_factcheck
 from slidebox.composition import build_usecase
 from slidebox.domain.entities import Settings
 from slidebox_api.app import create_app
-from slidebox_api.jobs import JobStore
-from slidebox_api.runner import JobWorker, SlideboxExecutor
+from slidebox_api.jobs import JobKind, JobStore
+from slidebox_api.runner import FactCheckExecutor, JobWorker, KindDispatcher, SlideboxExecutor
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8800
@@ -73,7 +74,12 @@ def build() -> FastAPI:
     store = JobStore()
     # use case 只建一次：它會連帶建立語音辨識器，模型載入要 40 秒並佔著
     # VRAM，每個工作重建一次等於每次重付。
-    executor = SlideboxExecutor(build_usecase(settings), settings)
+    executor = KindDispatcher({
+        JobKind.DECK: SlideboxExecutor(build_usecase(settings), settings),
+        JobKind.FACTCHECK: FactCheckExecutor(
+            build_factcheck(settings.ollama_host, settings.model, settings.num_ctx),
+            settings.model),
+    })
     return create_app(
         store=store,
         worker=JobWorker(store, executor),

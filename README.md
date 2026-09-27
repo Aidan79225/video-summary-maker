@@ -245,6 +245,7 @@ uv run --group api serve_api.py
 |---|---|
 | `GET /health` | Ollama 是否連得上、目前忙不忙 |
 | `POST /jobs` | `{url, detailed, min_slides, max_slides}` → `202 {id}` |
+| `POST /factchecks` | `{source_url, speaker, date, meeting, transcript_text}` → `202 {id}`；事實查核，結果一樣用 `GET /jobs/{id}` 取 |
 | `GET /jobs/{id}` | 進度與結果 |
 | `DELETE /jobs/{id}` | 取消 |
 

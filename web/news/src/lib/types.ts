@@ -43,11 +43,62 @@ export type Brief = {
   asks: Ask[];
 };
 
+export type Verdict = 'supported' | 'partial' | 'contradicted' | 'unverifiable';
+
+export type ClaimMethod = 'numeric' | 'model' | 'none';
+
+export type Evidence = {
+  source: string;
+  title: string;
+  official_url: string;
+  api_url: string;
+  excerpt: string;
+};
+
+export type Claim = {
+  index: number;
+  quote: string;
+  timestamp: number;
+  kind: string;
+  statement: string;
+  verdict: Verdict;
+  method: ClaimMethod;
+  rationale: string;
+  /** 「不符」經人工核准後才會出現；true 代表有人看過 */
+  reviewed: boolean;
+  evidence: Evidence[];
+};
+
+export type FactCheckScore = {
+  /** 可查證陳述不足 min_sample 則時為 null */
+  rate: number | null;
+  checked: number;
+  supported: number;
+  partial: number;
+  contradicted: number;
+  unverifiable: number;
+  min_sample: number;
+};
+
+export type SpeakerClaim = Claim & {
+  article_slug: string;
+  article_title: string;
+  date: string;
+};
+
+export type SpeakerClaims = {
+  speaker: string;
+  score: FactCheckScore;
+  items: SpeakerClaim[];
+};
+
 export type ArticleDetail = ArticleCard & {
   source_note: string;
   transcript_text: string;
   brief: Brief | null;
   slides: Slide[];
+  factcheck_checked: boolean;
+  claims: Claim[];
 };
 
 export type ArticleList = {
@@ -62,6 +113,7 @@ export type Speaker = {
   name: string;
   count: number;
   latest_date: string;
+  factcheck?: FactCheckScore;
 };
 
 export type SpeakerList = { items: Speaker[] };

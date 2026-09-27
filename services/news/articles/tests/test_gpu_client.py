@@ -106,6 +106,19 @@ class GpuClientTests(SimpleTestCase):
         client.wait("abc", timeout=600, on_progress=lambda job: seen.append(job))
         self.assertEqual(len(seen), 2)
 
+    def test_a_factcheck_is_submitted_with_the_speech(self):
+        from datetime import date
+        client, transport, _ = _client([{"id": "fc-1", "status": "queued"}])
+        job_id = client.submit_factcheck("https://ivod.ly.gov.tw/Play/Clip/1M/171140", "邱慧洳",
+                                         date(2026, 8, 25), "院會", "00:32 逐字稿")
+        self.assertEqual(job_id, "fc-1")
+        call = transport.calls[0]
+        self.assertTrue(call["url"].endswith("/factchecks"))
+        self.assertEqual(call["method"], "POST")
+        self.assertEqual(call["body"], {
+            "source_url": "https://ivod.ly.gov.tw/Play/Clip/1M/171140", "speaker": "邱慧洳",
+            "date": "2026-08-25", "meeting": "院會", "transcript_text": "00:32 逐字稿"})
+
 
 class ErrorClassificationTests(SimpleTestCase):
     """一篇壞掉的文章與一個掛掉的服務，處置方式完全不同。"""

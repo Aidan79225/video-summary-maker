@@ -7,9 +7,16 @@ from django.db.models import Count, Max, Q
 from django.shortcuts import get_object_or_404
 from ninja import NinjaAPI, Query, Schema
 
+from factchecks.api import ClaimOut, ScoreOut, article_claims, is_checked, score_out
+from factchecks.api import router as factcheck_router
+from factchecks.scoring import Score, scores_by_speaker
+
 from .models import Article, ArticleStatus
 
 api = NinjaAPI(title="立法院質詢摘要 API", version="1.0", urls_namespace="news")
+
+# 查證的端點（/speakers/{name}/claims）在 factchecks app 裡
+api.add_router("", factcheck_router)
 
 _MAX_PAGE_SIZE = 50
 # 頁碼上限：SQLite 的 OFFSET 綁定超過 int64 會直接 500，而前端會把訪客
@@ -65,6 +72,8 @@ class ArticleDetailOut(ArticleCardOut):
     # 沒有摘要卡就是 null：前端退回只用導言的版面
     brief: BriefOut | None
     slides: list[SlideOut]
+    factcheck_checked: bool
+    claims: list[ClaimOut]
 
 
 class ArticleListOut(Schema):
@@ -79,6 +88,7 @@ class SpeakerOut(Schema):
     name: str
     count: int
     latest_date: date_type | None
+    factcheck: ScoreOut
 
 
 class SpeakerListOut(Schema):
@@ -176,6 +186,8 @@ def article_detail(request, slug: str) -> dict:
             "timestamp": s.timestamp,
             "image_url": s.image.url if s.image else None,
         } for s in article.slides.all()],
+        "factcheck_checked": is_checked(article),
+        "claims": article_claims(article),
     })
     return data
 
@@ -186,7 +198,9 @@ def speakers(request) -> dict:
             .values("speaker")
             .annotate(count=Count("id"), latest_date=Max("date"))
             .order_by("-latest_date", "-count"))
+    scores = scores_by_speaker()
     return {"items": [
-        {"name": r["speaker"], "count": r["count"], "latest_date": r["latest_date"]}
+        {"name": r["speaker"], "count": r["count"], "latest_date": r["latest_date"],
+         "factcheck": score_out(scores.get(r["speaker"], Score()))}
         for r in rows if r["speaker"]
     ]}
