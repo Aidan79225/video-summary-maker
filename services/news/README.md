@@ -44,6 +44,8 @@ python -c "import secrets; print(secrets.token_urlsafe(64))"
 | `DJANGO_MEDIA_ROOT` | `services/news/media` | 截圖放這裡 |
 | `DJANGO_SERVE_MEDIA` | `True` | 由 Django 直接服務 `/media`；前面有 nginx 時設 `False` |
 | `DJANGO_MEDIA_CACHE_SECONDS` | `86400` | `/media` 回應的 `Cache-Control: max-age`。設 `0` 就不加快取標頭 |
+| `CITE_LAWS` | `True` | 摘要卡的關鍵數字若講到某部法律某一條，從 LYAPI 抓條文原文附在旁邊。只附來源、不判對錯；關掉只是沒有條文連結 |
+| `LYAPI_BASE` | `https://ly.govapi.tw/v2` | 法條資料來源（公民科技社群整理的立法院資料，非官方；每筆來源同時附全國法規資料庫的連結） |
 | `GPU_API_BASE` | `http://localhost:8800` | GPU 主機上的摘要 API |
 | `GPU_API_KEY` | 空 | 對應 GPU 端的 `SLIDEBOX_API_KEY` |
 | `GPU_JOB_TIMEOUT_SECONDS` | `1800` | 等單一支影片的上限 |
@@ -109,6 +111,8 @@ uv run python manage.py run_scheduler --backfill-days 0 # 不要回補
 | `GET /api/speakers` | 委員與篇數 |
 
 清單裡每張卡片的 `teaser` 優先用摘要卡的一句話，沒有卡片才退回第一段的完整敘述。
+
+摘要卡裡的關鍵數字若帶 `law` 與 `article`（GPU 端已確認講者自己講了法律名稱與條號），落地後會從 LYAPI 抓發言當天有效版本的條文原文，放進 `sources`：講者引的那一條，加上最多兩條「內文提到它」的罰則條文（委員說第 24 條，罰鍰其實在第 106 條）。LYAPI 取不到時文章照常發佈，只是沒有 `sources`。
 
 圖片欄位回的是**相對路徑**（`/media/articles/<ivod_id>/<批次>/01.webp`），由前端接上自己的 API base——回絕對網址要猜對外主機名，在反向代理後面很容易猜錯。
 

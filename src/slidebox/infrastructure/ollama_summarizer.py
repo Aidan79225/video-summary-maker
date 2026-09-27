@@ -118,8 +118,10 @@ def brief_schema() -> dict:
                         "unit": {"type": "string"},
                         "label": {"type": "string"},
                         "quote": {"type": "string"},
+                        "law": {"type": "string"},
+                        "article": {"type": "string"},
                     },
-                    "required": ["value", "unit", "label", "quote"],
+                    "required": ["value", "unit", "label", "quote", "law", "article"],
                 },
             },
             "asks": {
@@ -157,7 +159,8 @@ def parse_brief_response(payload: str) -> Brief:
         raise SummarizerOutputInvalid("模型回應不是物件")
     numbers = tuple(
         KeyNumber(value=_str(n.get("value")), unit=_str(n.get("unit")),
-                  label=_str(n.get("label")), quote=_str(n.get("quote")))
+                  label=_str(n.get("label")), quote=_str(n.get("quote")),
+                  law=_str(n.get("law")), article=_str(n.get("article")))
         for n in (data.get("key_numbers") or []) if isinstance(n, dict)
     )
     asks = tuple(
@@ -222,6 +225,9 @@ _BRIEF_SYSTEM = """你是新聞編輯。使用者會給你一段發言（通常�
   - label：這個數字是什麼，10 字以內（例如「三年累計編列」）
   - quote：摘要裡**原封不動**出現這個數字的那一句話。不可改寫、不可自己補數字；
     摘要裡沒有明確數字的事就不要列
+  - law、article：這個數字如果是在講**現行某部法律某一條的內容**（罰鍰金額、刑期、
+    期限），填法律全名（例如「醫療法」）與條號（例如「第106條」），而且必須是講者
+    自己講出來的法律名稱與條號，不要推斷。不是在講法條，或講者沒講條號，就兩個都空字串
 - asks：講者提出的要求或行動，最多 4 項，每項包含：
   - request：要求什麼，30 字以內
   - deadline：講者說的期限（例如「一個月內」「本會期結束前」），沒有就空字串

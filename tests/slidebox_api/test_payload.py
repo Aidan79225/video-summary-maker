@@ -69,13 +69,15 @@ def test_the_brief_travels_with_the_deck(tmp_path):
     deck = _deck(tmp_path)
     deck = Deck(**{**deck.__dict__, "brief": Brief(
         "國防部三年編 82.4 億買無人機，交到部隊的不到一半",
-        key_numbers=(KeyNumber("82.4", "億元", "三年累計編列", "累計編列八十二點四億元"),),
+        key_numbers=(KeyNumber("82.4", "億元", "三年累計編列", "累計編列八十二點四億元",
+                               law="預算法", article="第1條"),),
         asks=(Ask("提出交機時程清冊", "一個月內", "部長允諾"),),
     )})
     brief = deck_payload(deck, video_id="171180")["brief"]
     assert brief["one_liner"].startswith("國防部")
     assert brief["key_numbers"] == [
-        {"value": "82.4", "unit": "億元", "label": "三年累計編列", "quote": "累計編列八十二點四億元"}]
+        {"value": "82.4", "unit": "億元", "label": "三年累計編列", "quote": "累計編列八十二點四億元",
+         "law": "預算法", "article": "第1條"}]
     assert brief["asks"] == [{"request": "提出交機時程清冊", "deadline": "一個月內", "response": "部長允諾"}]
 
 

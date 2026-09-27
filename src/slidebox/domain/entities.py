@@ -66,6 +66,11 @@ class KeyNumber:
     unit: str
     label: str
     quote: str
+    # 這個數字若是在講某部法律某一條的內容（罰鍰、刑期、期限），記下法律名稱
+    # 與條號（正規化成「第N條」），讓新聞服務去取條文原文附在旁邊。不是
+    # 就兩個都空字串。這裡只記「講的是哪一條」，不判斷講得對不對。
+    law: str = ""
+    article: str = ""
 
 
 @dataclass(frozen=True)

@@ -14,6 +14,7 @@ from django.test import SimpleTestCase, TestCase, override_settings
 
 from articles.gpu_client import GpuApiClient, GpuApiError, JobFailed
 from articles.ingest import (
+    attach_citations,
     clean_brief,
     discover,
     discover_days,
@@ -24,6 +25,7 @@ from articles.ingest import (
     save_result,
 )
 from articles.ivod_source import IvodClip, IvodUnavailable
+from articles.law_source import LawUnavailable
 from articles.models import Article, ArticleStatus
 
 IMAGE = b"\x00\x01fake-webp\xff"
@@ -43,10 +45,29 @@ def _clip(ivod_id="900001", speaker="範例一"):
 BRIEF = {
     "one_liner": "國防部三年編 82.4 億買無人機，交到部隊的不到一半",
     "key_numbers": [
-        {"value": "82.4", "unit": "億元", "label": "三年累計編列", "quote": "累計編列八十二點四億元"},
+        {"value": "82.4", "unit": "億元", "label": "三年累計編列", "quote": "累計編列八十二點四億元",
+         "law": "", "article": ""},
+        {"value": "3", "unit": "萬元", "label": "現行罰鍰下限", "quote": "罰鍰從現行的3萬到5萬",
+         "law": "醫療法", "article": "第106條"},
     ],
     "asks": [{"request": "提出交機時程清冊", "deadline": "一個月內", "response": "部長允諾"}],
 }
+SOURCE = {"law": "醫療法", "article": "第一百零六條", "title": "醫療法 第一百零六條（2026-05-08 修正版）",
+          "excerpt": "違反第二十四條第二項規定者，處新臺幣三萬元以上五萬元以下罰鍰",
+          "official_url": "https://law.moj.gov.tw/x", "api_url": "https://ly.govapi.tw/v2/x"}
+
+
+class FakeLawSource:
+    def __init__(self, sources=None, error: Exception | None = None):
+        self._sources = [SOURCE] if sources is None else sources
+        self._error = error
+        self.calls: list[tuple[str, str, date]] = []
+
+    def find(self, law, article, on):
+        self.calls.append((law, article, on))
+        if self._error is not None:
+            raise self._error
+        return list(self._sources)
 
 
 def _payload(slides=2, with_image=True, brief=BRIEF):
@@ -156,6 +177,38 @@ class ProcessTests(TestCase):
         self.assertEqual(article.brief["key_numbers"][0]["value"], "82.4")
         self.assertEqual(article.brief["asks"][0]["deadline"], "一個月內")
         self.assertEqual(article.teaser, BRIEF["one_liner"])
+
+    def test_law_references_get_their_source_text_attached_after_saving(self):
+        laws = FakeLawSource()
+        process_pending(FakeClient(), limit=10, timeout=60, law_source=laws)
+        article = Article.objects.get(ivod_id="900001")
+        self.assertEqual(laws.calls, [("醫療法", "第106條", date(2026, 8, 27))])
+        numbers = article.brief["key_numbers"]
+        self.assertEqual(numbers[0]["sources"], [])
+        self.assertEqual(numbers[1]["sources"][0]["article"], "第一百零六條")
+        self.assertEqual(article.status, ArticleStatus.READY)
+
+    def test_an_unreachable_law_api_leaves_the_article_ready_without_sources(self):
+        """來源是加值：LYAPI 掛掉不能讓幾分鐘的 GPU 成品跟著失敗。"""
+        laws = FakeLawSource(error=LawUnavailable("429"))
+        report = process_pending(FakeClient(), limit=10, timeout=60, law_source=laws)
+        article = Article.objects.get(ivod_id="900001")
+        self.assertEqual(report.processed, 1)
+        self.assertEqual(article.status, ArticleStatus.READY)
+        self.assertEqual(article.brief["key_numbers"][1]["sources"], [])
+
+    def test_without_a_law_source_nothing_is_looked_up(self):
+        process_pending(FakeClient(), limit=10, timeout=60)
+        article = Article.objects.get(ivod_id="900001")
+        self.assertEqual(article.brief["key_numbers"][1]["sources"], [])
+
+    def test_attach_citations_skips_articles_without_law_references(self):
+        process_pending(FakeClient(result=_payload(brief={
+            "one_liner": "一句話", "key_numbers": [{"value": "1", "label": "x"}], "asks": []})),
+            limit=10, timeout=60)
+        laws = FakeLawSource()
+        self.assertEqual(attach_citations(Article.objects.get(ivod_id="900001"), laws), 0)
+        self.assertEqual(laws.calls, [])
 
     def test_an_article_without_a_brief_falls_back_to_the_first_detail(self):
         """GPU 端產不出卡片時是 null，導言退回第一段的完整敘述。"""
@@ -455,6 +508,8 @@ class CleanBriefTests(SimpleTestCase):
         })
         self.assertEqual(out["one_liner"], "一句話")
         self.assertEqual(out["key_numbers"][0]["value"], "82.4")
+        self.assertEqual(out["key_numbers"][0]["law"], "")
+        self.assertEqual(out["key_numbers"][0]["sources"], [])
         self.assertEqual(out["asks"], [{"request": "清冊", "deadline": "", "response": ""}])
 
     def test_junk_is_dropped_rather_than_stored(self):
@@ -470,3 +525,9 @@ class CleanBriefTests(SimpleTestCase):
         self.assertIsNone(clean_brief(None))
         self.assertIsNone(clean_brief("不是物件"))
         self.assertIsNone(clean_brief({"one_liner": "  ", "key_numbers": [{"value": "1", "label": "x"}]}))
+
+    def test_sources_already_attached_survive_a_re_clean(self):
+        out = clean_brief({"one_liner": "一句話", "key_numbers": [
+            {"value": "3", "label": "罰鍰", "law": "醫療法", "article": "第106條",
+             "sources": [SOURCE, "junk"]}]})
+        self.assertEqual(out["key_numbers"][0]["sources"], [SOURCE])

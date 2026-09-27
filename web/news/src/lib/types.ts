@@ -21,6 +21,16 @@ export type Slide = {
   image_url: string | null;
 };
 
+/** 一條法條的原文，附官方與 LYAPI 兩個連結。只附來源，不判對錯。 */
+export type LawSource = {
+  law: string;
+  article: string;
+  title: string;
+  excerpt: string;
+  official_url: string;
+  api_url: string;
+};
+
 export type KeyNumber = {
   /** 只有阿拉伯數字，例如 "82.4"；單位另放，卡片才能把數字放大、單位縮小 */
   value: string;
@@ -28,6 +38,11 @@ export type KeyNumber = {
   label: string;
   /** 逐字稿裡講出這個數字的那句話，生成端已驗證過它真的在逐字稿裡 */
   quote: string;
+  /** 講者自己講出的法律名稱與條號（「第106條」）；不是在講法條就都是空字串 */
+  law: string;
+  article: string;
+  /** 後端抓回來的條文原文：講者引的那一條，加上提到它的罰則條文 */
+  sources: LawSource[];
 };
 
 export type Ask = {

@@ -21,6 +21,13 @@ BRIEF = {
     "one_liner": "國防部三年編 82.4 億買無人機，交到部隊的不到一半",
     "key_numbers": [
         {"value": "82.4", "unit": "億元", "label": "三年累計編列", "quote": "累計編列八十二點四億元"},
+        {"value": "3", "unit": "萬元", "label": "現行罰鍰下限", "quote": "罰鍰從現行的3萬到5萬",
+         "law": "醫療法", "article": "第106條",
+         "sources": [{"law": "醫療法", "article": "第一百零六條",
+                      "title": "醫療法 第一百零六條（2026-05-08 修正版）",
+                      "excerpt": "違反第二十四條第二項規定者，處新臺幣三萬元以上五萬元以下罰鍰",
+                      "official_url": "https://law.moj.gov.tw/x",
+                      "api_url": "https://ly.govapi.tw/v2/x"}]},
     ],
     "asks": [{"request": "提出交機時程清冊", "deadline": "一個月內", "response": "部長允諾"}],
 }
@@ -138,6 +145,12 @@ class ApiTests(TestCase):
         self.assertEqual(body["brief"]["one_liner"], BRIEF["one_liner"])
         self.assertEqual(body["brief"]["key_numbers"][0]["unit"], "億元")
         self.assertEqual(body["brief"]["asks"][0]["response"], "部長允諾")
+        numbers = body["brief"]["key_numbers"]
+        # 舊資料沒有 law／sources 也要出得來
+        self.assertEqual(numbers[0]["law"], "")
+        self.assertEqual(numbers[0]["sources"], [])
+        self.assertEqual(numbers[1]["sources"][0]["article"], "第一百零六條")
+        self.assertTrue(numbers[1]["sources"][0]["official_url"].startswith("https://"))
         self.assertEqual(body["teaser"], BRIEF["one_liner"])
         card = self.client.get("/api/articles").json()["items"][0]
         self.assertEqual(card["teaser"], BRIEF["one_liner"])

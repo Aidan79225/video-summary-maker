@@ -17,7 +17,9 @@ GOOD = """{
   "one_liner": "國防部三年編 82.4 億買無人機，交到部隊的不到一半",
   "key_numbers": [
     {"value": "82.4", "unit": "億元", "label": "三年累計編列",
-     "quote": "累計編列八十二點四億元"}
+     "quote": "累計編列八十二點四億元", "law": "", "article": ""},
+    {"value": "3", "unit": "萬元", "label": "現行罰鍰下限",
+     "quote": "罰鍰從現行的3萬到5萬", "law": "醫療法", "article": "第106條"}
   ],
   "asks": [
     {"request": "提出分機種交機時程清冊", "deadline": "一個月內", "response": "部長允諾"}
@@ -31,6 +33,8 @@ def test_parses_every_field():
     assert brief.key_numbers[0].value == "82.4"
     assert brief.key_numbers[0].unit == "億元"
     assert brief.key_numbers[0].quote == "累計編列八十二點四億元"
+    assert brief.key_numbers[1].law == "醫療法"
+    assert brief.key_numbers[1].article == "第106條"
     assert brief.asks[0].deadline == "一個月內"
     assert brief.asks[0].response == "部長允諾"
 
@@ -56,7 +60,7 @@ def test_schema_requires_every_field_so_the_model_cannot_skip_them():
     schema = brief_schema()
     assert set(schema["required"]) == {"one_liner", "key_numbers", "asks"}
     number = schema["properties"]["key_numbers"]["items"]
-    assert set(number["required"]) == {"value", "unit", "label", "quote"}
+    assert set(number["required"]) == {"value", "unit", "label", "quote", "law", "article"}
     ask = schema["properties"]["asks"]["items"]
     assert set(ask["required"]) == {"request", "deadline", "response"}
 
@@ -72,5 +76,5 @@ def test_prompt_carries_the_digest_and_the_retry_hint():
 def test_system_prompt_names_every_field_the_schema_expects():
     """模型只會產出提示裡指名的欄位；欄位名沒寫進提示，schema 也救不回內容。"""
     for name in ("one_liner", "key_numbers", "value", "unit", "label", "quote",
-                 "asks", "request", "deadline", "response"):
+                 "law", "article", "asks", "request", "deadline", "response"):
         assert name in _BRIEF_SYSTEM

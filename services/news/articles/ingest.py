@@ -22,6 +22,7 @@ from django.utils import timezone
 
 from .gpu_client import GpuApiClient, GpuApiError, JobField, JobFailed, JobStatus
 from .ivod_source import IvodClip, IvodDailySource, IvodUnavailable
+from .law_source import LawSource, LawUnavailable
 from .models import Article, ArticleStatus, Slide
 
 logger = logging.getLogger(__name__)
@@ -74,7 +75,10 @@ def clean_brief(raw: object) -> dict | None:
 
     numbers = [
         {"value": text(n, "value"), "unit": text(n, "unit"),
-         "label": text(n, "label"), "quote": text(n, "quote")}
+         "label": text(n, "label"), "quote": text(n, "quote"),
+         "law": text(n, "law"), "article": text(n, "article"),
+         # 條文來源由 attach_citations 填；重新清理時保留已經抓到的
+         "sources": [x for x in (n.get("sources") or []) if isinstance(x, dict)]}
         for n in (raw.get("key_numbers") or []) if isinstance(n, dict)
     ]
     asks = [
@@ -157,7 +161,8 @@ def _upsert(clip: IvodClip, day: date) -> tuple[Article, bool]:
     return article, created
 
 
-def process_pending(client: GpuApiClient, limit: int, timeout: float) -> IngestReport:
+def process_pending(client: GpuApiClient, limit: int, timeout: float,
+                    law_source: LawSource | None = None) -> IngestReport:
     """把待處理（與先前失敗）的文章送去 GPU 主機，一次一篇。
 
     失敗的會留在 failed 狀態並附上原因，下一次排程再試——立法院的逐字稿
@@ -167,7 +172,7 @@ def process_pending(client: GpuApiClient, limit: int, timeout: float) -> IngestR
                 .filter(_claimable(timeout))
                 .filter(attempts__lt=MAX_ATTEMPTS)
                 .order_by("-date", "ivod_id")[:limit])
-    return _process(queryset, client, timeout)
+    return _process(queryset, client, timeout, law_source=law_source)
 
 
 def imageless(limit: int) -> QuerySet:
@@ -198,7 +203,8 @@ def retry_imageless(client: GpuApiClient, limit: int, timeout: float) -> IngestR
 
 
 def _process(queryset: QuerySet, client: GpuApiClient, timeout: float,
-             demote_on_failure: bool = True, claim: bool = True) -> IngestReport:
+             demote_on_failure: bool = True, claim: bool = True,
+             law_source: LawSource | None = None) -> IngestReport:
     """逐篇處理。
 
     demote_on_failure=False 時失敗只記錄原因、不動狀態：重跑已發佈文章的
@@ -216,7 +222,7 @@ def _process(queryset: QuerySet, client: GpuApiClient, timeout: float,
             report.skipped += 1
             continue
         try:
-            _process_one(article, client, timeout)
+            _process_one(article, client, timeout, law_source)
         except (GpuApiError, JobFailed) as e:
             _record_failure(article, e, report, demote_on_failure)
             if isinstance(e, GpuApiError):
@@ -286,7 +292,8 @@ def _claim(article: Article, timeout: float) -> bool:
     return bool(claimed)
 
 
-def _process_one(article: Article, client: GpuApiClient, timeout: float) -> None:
+def _process_one(article: Article, client: GpuApiClient, timeout: float,
+                 law_source: LawSource | None = None) -> None:
     """送一篇去 GPU 主機並等它跑完。呼叫前必須已經 _claim 成功。"""
     job_id = _resume_or_submit(article, client, timeout)
     result = client.wait(job_id, timeout=timeout,
@@ -294,6 +301,36 @@ def _process_one(article: Article, client: GpuApiClient, timeout: float) -> None
                              "文章 %s：%s", article.ivod_id,
                              job.get(JobField.PROGRESS) or job.get(JobField.STATUS)))
     save_result(article, result)
+    # 落地之後才附來源：文章已經是 READY，LYAPI 掛掉只會少了條文連結，
+    # 不會讓幾分鐘的 GPU 成品跟著失敗。
+    if law_source is not None:
+        attach_citations(article, law_source)
+
+
+def attach_citations(article: Article, source: LawSource) -> int:
+    """摘要卡裡講到法條的關鍵數字，抓條文原文附在旁邊。回傳附上幾則。
+
+    只附來源、不判對錯。整篇任何一則取不到就整篇略過並記 log：來源的
+    有無應該一致，一半有一半沒有讀者會以為沒連結的那些查無此條。
+    """
+    brief = article.brief if isinstance(article.brief, dict) else None
+    if not brief:
+        return 0
+    numbers = brief.get("key_numbers") or []
+    wanted = [n for n in numbers if n.get("law") and n.get("article")]
+    if not wanted:
+        return 0
+    attached = 0
+    try:
+        for number in wanted:
+            number["sources"] = source.find(number["law"], number["article"], article.date)
+            attached += 1 if number["sources"] else 0
+    except LawUnavailable as e:
+        logger.warning("文章 %s 的條文來源取不到：%s", article.ivod_id, e)
+        return 0
+    article.brief = brief
+    article.save(update_fields=["brief", "updated_at"])
+    return attached
 
 
 def _resume_or_submit(article: Article, client: GpuApiClient, timeout: float) -> str:
@@ -432,12 +469,14 @@ def _save_slide(article: Article, raw: dict, folder: str, index: int) -> None:
 
 
 def ingest_day(day: date, source: IvodDailySource, client: GpuApiClient,
-               limit: int, timeout: float) -> IngestReport:
+               limit: int, timeout: float,
+               law_source: LawSource | None = None) -> IngestReport:
     """一天份的完整流程。"""
     report = discover_days([day], source)
     # 查不到新片段不影響「把先前登記好的積壓送出去」——兩件事的上游不同，
     # 立法院掛掉時 GPU 沒有理由整夜閒著。
-    processed = process_pending(client, limit=limit, timeout=timeout)
+    processed = process_pending(client, limit=limit, timeout=timeout,
+                                law_source=law_source)
     report.processed = processed.processed
     report.failed = processed.failed
     report.pending = processed.pending

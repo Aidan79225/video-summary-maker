@@ -38,6 +38,7 @@ header .source { font-size: 13px; color: #8a6d3b; margin: 8px 0 0; }
 .brief .kn b { font-size: 1.5em; }
 .brief .kn small { margin-left: 2px; color: #6b7280; }
 .brief .kn span { display: block; font-size: .85em; color: #6b7280; }
+.brief .kn .law { font-size: .78em; }
 .brief .asks { margin: 14px 0 0; padding-left: 18px; }
 .brief .asks em { font-style: normal; font-size: .85em; color: #6b7280; }
 .brief .asks .reply { display: block; font-size: .9em; color: #6b7280; }
@@ -106,7 +107,10 @@ def _render_brief(brief: Brief | None) -> str:
         return ""
     numbers = "".join(
         f'<div class="kn"><b>{html.escape(n.value)}</b>'
-        f'<small>{html.escape(n.unit)}</small><span>{html.escape(n.label)}</span></div>'
+        f'<small>{html.escape(n.unit)}</small><span>{html.escape(n.label)}</span>'
+        + (f'<span class="law">{html.escape(n.law)}{html.escape(n.article)}</span>'
+           if n.law else "")
+        + '</div>'
         for n in brief.key_numbers
     )
     asks = ""
