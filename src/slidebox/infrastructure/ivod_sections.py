@@ -6,13 +6,17 @@ IVOD 只提供 m3u8，而 yt-dlp 的分段下載不支援 HLS（會產出沒有�
 
 輸出形狀與 YtDlpSectionGateway 完全相同（一個時間點一個本地檔），所以
 抽幀那一步與 use case 都不需要知道來源是誰。
+
+`HlsSectionGateway` 通用於任何 m3u8 來源（臺中市議會也用它），差別只在
+「由網址找到串流」那一步，用建構參數注入；`IvodSectionGateway` 是接上
+IVOD client 的薄包裝。
 """
 from __future__ import annotations
 
 import os
 import shutil
 import subprocess
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 
 from ..domain.errors import NoSubtitlesAvailable, OperationCancelled
 from ..domain.ports import CancelCheck, ProgressCallback
@@ -38,10 +42,11 @@ DEFAULT_CLIP_SECONDS = 4.0
 _USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
 
 
-class IvodSectionGateway:
-    def __init__(self, client: IvodClient, clip_seconds: float = DEFAULT_CLIP_SECONDS,
+class HlsSectionGateway:
+    def __init__(self, stream_for: Callable[[str], str],
+                 clip_seconds: float = DEFAULT_CLIP_SECONDS,
                  runner=subprocess.run, ffmpeg_exe: str | None = None):
-        self._client = client
+        self._stream_for = stream_for
         self._clip_seconds = clip_seconds
         self._runner = runner
         self._exe = ffmpeg_exe or get_ffmpeg_exe()
@@ -55,23 +60,17 @@ class IvodSectionGateway:
         progress: ProgressCallback,
         is_cancelled: CancelCheck,
     ) -> list[str | None]:
-        """max_height 用不到：IVOD 的 API 只給一個串流網址，沒得挑畫質。"""
+        """max_height 用不到：這些來源只給一個串流網址，沒得挑畫質。"""
         os.makedirs(dest_dir, exist_ok=True)
         total = max(1, len(timestamps))
-        video_id = ivod_id(url)
-        if video_id is None:
-            # 走到這裡表示路由接錯了。不打 API——少了 id 會變成打清單端點，
-            # 一次無謂的請求換一個看不懂的錯。
-            progress(1.0, f"這不是 IVOD 的播放網址（{url[:60]}），將產出無截圖的摘要")
-            return [None] * len(timestamps)
         try:
-            stream = self._client.video_url(video_id)
+            stream = self._stream_for(url)
         except (NoSubtitlesAvailable, OSError) as e:
             # 逐字稿已經拿到了，沒有截圖的摘要依然有用——這正是既有的
             # 「部分截圖失敗仍然出片」策略。完整會議的影片主機連不上時
             # 就會走到這裡。收窄例外型別是刻意的：裸 Exception 會把程式
             # 錯誤也靜默降級成「沒有畫面」，而截圖全缺是最難察覺的失效。
-            progress(1.0, f"這段 IVOD 沒有可用的影片（{str(e)[:80]}），將產出無截圖的摘要")
+            progress(1.0, f"這段影片沒有可用的串流（{str(e)[:80]}），將產出無截圖的摘要")
             return [None] * len(timestamps)
 
         results: list[str | None] = []
@@ -128,3 +127,22 @@ class IvodSectionGateway:
         if result.returncode == 0 and os.path.exists(dest) and os.path.getsize(dest) > 0:
             return dest, ""
         return None, (getattr(result, "stderr", "") or "").strip()[:200] or "ffmpeg 失敗"
+
+
+def _ivod_stream(client: IvodClient) -> Callable[[str], str]:
+    def resolve(url: str) -> str:
+        video_id = ivod_id(url)
+        if video_id is None:
+            # 走到這裡表示路由接錯了。不打 API——少了 id 會變成打清單端點，
+            # 一次無謂的請求換一個看不懂的錯。
+            raise NoSubtitlesAvailable(f"這不是 IVOD 的播放網址（{url[:60]}）")
+        return client.video_url(video_id)
+    return resolve
+
+
+class IvodSectionGateway(HlsSectionGateway):
+    def __init__(self, client: IvodClient, clip_seconds: float = DEFAULT_CLIP_SECONDS,
+                 runner=subprocess.run, ffmpeg_exe: str | None = None):
+        super().__init__(_ivod_stream(client), clip_seconds, runner, ffmpeg_exe)
+        # composition 的測試會確認兩個 IVOD adapter 共用同一個 client
+        self._client = client

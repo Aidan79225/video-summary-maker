@@ -9,22 +9,26 @@ from .domain.ports import CancelCheck, ProgressCallback
 from .infrastructure.ffmpeg_frames import FfmpegFrameExtractor
 from .infrastructure.html_renderer import HtmlDeckRenderer
 from .infrastructure.ivod_api import IvodClient, IvodSubtitleGateway
-from .infrastructure.ivod_sections import IvodSectionGateway
+from .infrastructure.ivod_sections import HlsSectionGateway, IvodSectionGateway
 from .infrastructure.ollama_summarizer import (
     OllamaBriefWriter,
     OllamaModelCatalog,
     OllamaSummarizer,
 )
 from .infrastructure.routing import (
+    BySourceAudioGateway,
     BySourceSectionGateway,
     BySourceSubtitleGateway,
 )
 from .infrastructure.settings_repository import JsonSettingsRepository
+from .infrastructure.tccc_api import TcccClient
+from .infrastructure.tccc_audio import NoSubtitlesGateway, TcccAudioGateway
 from .infrastructure.whisper_transcriber import FasterWhisperTranscriber
 from .infrastructure.ytdlp_audio import YtDlpAudioGateway
 from .infrastructure.ytdlp_sections import YtDlpSectionGateway
 from .infrastructure.ytdlp_subtitles import YtDlpSubtitleGateway
 from .usecases.build_deck import BuildDeckUseCase
+from .usecases.sources import tccc_clip
 
 if TYPE_CHECKING:
     from .presentation.main_window import MainWindow
@@ -98,15 +102,22 @@ def build_usecase(settings: Settings) -> BuildDeckUseCase:
     IVOD 的兩個 adapter 共用同一個 client，讓同一筆 record 只抓一次。
     """
     ivod_client = IvodClient()
+    # 臺中市議會沒有逐字稿：字幕 gateway 直接說沒有，音訊用 ffmpeg 抓 HLS 後
+    # 交給 Whisper；截圖與 IVOD 同一套 ffmpeg 切 m3u8，只差「怎麼找到串流」。
+    tccc_client = TcccClient()
     return BuildDeckUseCase(
-        BySourceSubtitleGateway(YtDlpSubtitleGateway(), IvodSubtitleGateway(ivod_client)),
+        BySourceSubtitleGateway(
+            YtDlpSubtitleGateway(), IvodSubtitleGateway(ivod_client),
+            tccc=NoSubtitlesGateway("臺中市議會沒有逐字稿，改用語音辨識")),
         CurrentSettingsSummarizer(settings),
-        BySourceSectionGateway(YtDlpSectionGateway(), IvodSectionGateway(ivod_client)),
+        BySourceSectionGateway(
+            YtDlpSectionGateway(), IvodSectionGateway(ivod_client),
+            tccc=HlsSectionGateway(lambda url: tccc_client.video_url(tccc_clip(url)))),
         FfmpegFrameExtractor(),
         HtmlDeckRenderer(),
         # 沒有字幕時的語音辨識備援。模型在第一次需要時才載入（約 40 秒）並
         # 快取在這個實例裡；改 whisper_model 需重開 app（語言模型與 host 則每次生成時即時讀取）。
-        audio=YtDlpAudioGateway(),
+        audio=BySourceAudioGateway(YtDlpAudioGateway(), tccc=TcccAudioGateway(tccc_client)),
         transcriber=FasterWhisperTranscriber(settings.whisper_model),
         # 詳細模式下多寫一張摘要卡（一句話、關鍵數字、要求與回應）
         brief_writer=CurrentSettingsBriefWriter(settings),
