@@ -302,7 +302,7 @@ Stacks → Add stack → **Repository**：
 | Compose path | `compose.yaml` |
 | Environment variables | 照 `.env.docker.example` 填（Advanced mode 可以整份貼上） |
 
-按 Deploy 會直接在 Pi 上建映像（第一次約十幾分鐘）。之後更新程式：stack 頁面 → **Pull and redeploy**；或打開 GitOps updates 讓它定時自己拉。
+按 Deploy 會直接在 Pi 上建映像（第一次約十幾分鐘）。之後更新程式：stack 頁面 → **Pull and redeploy**，**「Re-pull image」不要勾**——這兩個映像是本機 build 的，不在任何 registry，勾了會去 Docker Hub 拉而失敗（compose 裡已設 `pull_policy: build` 擋這件事，但舊版 Portainer 不一定認得）。或打開 GitOps updates 讓它定時自己拉。
 
 管理指令用容器的 Console（Containers → `api` → Console → `/bin/sh`）：
 
