@@ -14,7 +14,7 @@ from django.core.management.base import BaseCommand, CommandError
 from django.utils import timezone
 
 from articles.gpu_client import GpuApiClient
-from articles.ingest import discover_days, process_pending, retry_imageless
+from articles.ingest import discover_days, process_pending, rerun_ready, retry_imageless
 from articles.ivod_source import IvodDailySource
 from articles.law_source import LawSource, LyApi
 
@@ -34,11 +34,19 @@ class Command(BaseCommand):
                             help="重跑「一張截圖都沒有」的文章（立法院的影片 CDN "
                                  "會間歇性掛掉）。會連摘要一起重做，很花 GPU 時間。")
 
+        parser.add_argument("--rerun-ready", action="store_true",
+                            help="把已完成的文章整批重產（提示詞或模型改了的時候用）。"
+                                 "摘要與截圖都重做，每篇要花幾分鐘 GPU 時間。")
+
     def handle(self, *args, **options) -> None:
         client = GpuApiClient(settings.GPU_API_BASE, settings.GPU_API_KEY)
         timeout = settings.GPU_JOB_TIMEOUT_SECONDS
         limit = options["limit"]
         law_source = LawSource(LyApi(settings.LYAPI_BASE)) if settings.CITE_LAWS else None
+
+        if options["rerun_ready"]:
+            self._report(rerun_ready(client, limit=limit, timeout=timeout))
+            return
 
         if options["retry_imageless"]:
             self._report(retry_imageless(client, limit=limit, timeout=timeout))
