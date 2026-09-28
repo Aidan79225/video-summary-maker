@@ -1,10 +1,12 @@
 ---
 import type { Speaker } from '../lib/types';
 import { buildQuery } from '../lib/format';
+import { SOURCES, SOURCE_LABEL, sourceLabel } from '../lib/sources';
 
 interface Props {
   date?: string;
   speaker?: string;
+  source?: string;
   q?: string;
   speakers: Speaker[];
   /** 讀不到委員清單時，改用純文字輸入 */
@@ -12,14 +14,22 @@ interface Props {
   action?: string;
 }
 
-const { date = '', speaker = '', q = '', speakers, speakersFailed = false, action = '/' } =
-  Astro.props;
+const {
+  date = '',
+  speaker = '',
+  source = '',
+  q = '',
+  speakers,
+  speakersFailed = false,
+  action = '/',
+} = Astro.props;
 
-const current = { date, speaker, q };
-const hasAny = Boolean(date || speaker || q);
+const current = { date, speaker, source, q };
+const hasAny = Boolean(date || speaker || source || q);
 const chips = [
+  source ? { key: 'source', label: `來源：${sourceLabel(source)}` } : null,
   date ? { key: 'date', label: `日期：${date}` } : null,
-  speaker ? { key: 'speaker', label: `委員：${speaker}` } : null,
+  speaker ? { key: 'speaker', label: `發言者：${speaker}` } : null,
   q ? { key: 'q', label: `關鍵字：${q}` } : null,
 ].filter(Boolean) as { key: string; label: string }[];
 
@@ -34,14 +44,26 @@ const label = 'mb-1.5 block text-[0.7rem] tracking-wider text-muted';
     action={action}
     class="rounded-[var(--radius-card)] border border-line bg-surface/70 p-4 sm:p-5"
   >
-    <div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-[11rem_13rem_minmax(0,1fr)_auto] lg:items-end">
+    <div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-[9rem_11rem_13rem_minmax(0,1fr)_auto] lg:items-end">
+      <div>
+        <label class={label} for="f-source">來源</label>
+        <select id="f-source" name="source" class={field}>
+          <option value="">全部</option>
+          {SOURCES.map((s) => (
+            <option value={s} selected={s === source}>
+              {SOURCE_LABEL[s]}
+            </option>
+          ))}
+        </select>
+      </div>
+
       <div>
         <label class={label} for="f-date">日期</label>
         <input id="f-date" type="date" name="date" value={date} class={field} />
       </div>
 
       <div>
-        <label class={label} for="f-speaker">委員</label>
+        <label class={label} for="f-speaker">發言者</label>
         {
           speakersFailed || speakers.length === 0 ? (
             <input
@@ -49,15 +71,15 @@ const label = 'mb-1.5 block text-[0.7rem] tracking-wider text-muted';
               type="text"
               name="speaker"
               value={speaker}
-              placeholder="輸入委員姓名"
+              placeholder="輸入姓名"
               class={field}
             />
           ) : (
             <select id="f-speaker" name="speaker" class={field}>
-              <option value="">全部委員</option>
+              <option value="">全部發言者</option>
               {speakers.map((s) => (
                 <option value={s.name} selected={s.name === speaker}>
-                  {s.name}（{s.count}）
+                  {s.name}（{SOURCE_LABEL[s.source] ?? s.source}，{s.count}）
                 </option>
               ))}
             </select>

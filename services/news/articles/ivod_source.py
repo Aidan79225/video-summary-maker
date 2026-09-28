@@ -44,6 +44,10 @@ class IvodUnavailable(Exception):
     """立法院的 API 這次拿不到。屬於暫時性問題，下次排程會再試。"""
 
 
+# 每個來源都丟同一個例外，discover 才能一視同仁地「記錯誤、跳過、繼續」。
+SourceUnavailable = IvodUnavailable
+
+
 @dataclass(frozen=True)
 class IvodClip:
     ivod_id: str
@@ -53,6 +57,8 @@ class IvodClip:
     duration_seconds: int
     ivod_url: str
     has_transcript: bool
+    # 對應 Article.source；立法院是預設值，讓既有的呼叫端不用改
+    source: str = "ly"
 
     @property
     def title(self) -> str:
@@ -110,6 +116,8 @@ def _clip(raw: dict) -> IvodClip | None:
 
 
 class IvodDailySource:
+    name = "立法院"
+
     def __init__(self, base: str, fetch=_http_get):
         self._base = base.rstrip("/")
         self._fetch = fetch

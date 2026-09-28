@@ -13,7 +13,7 @@ from slidebox.domain.entities import Settings
 from slidebox.domain.errors import OperationCancelled
 from slidebox.usecases.build_deck import BuildDeckUseCase
 from slidebox.usecases.queue import video_key
-from slidebox.usecases.sources import ivod_id
+from slidebox.usecases.sources import ivod_id, tccc_id
 
 from .jobs import Job, JobStore
 from .payload import deck_payload
@@ -91,10 +91,11 @@ class JobWorker:
 def video_id_of(url: str) -> str:
     """新聞服務用來當主鍵的識別碼。
 
-    IVOD 給裸的數字 id（Django 那邊的 ivod_id 就是它），其他來源退回佇列
+    IVOD 給裸的數字 id（Django 那邊的 ivod_id 就是它），臺中市議會給
+    tccc-<ano>（加前綴才不會跟立法院撞），其他來源退回佇列
     用的那把鑰匙，至少保證同一支影片得到同一個值。
     """
-    return ivod_id(url) or video_key(url)
+    return ivod_id(url) or tccc_id(url) or video_key(url)
 
 
 class SlideboxExecutor:

@@ -189,3 +189,22 @@ def test_an_empty_output_counts_as_failure(tmp_path):
 
 def test_cleanup_tolerates_a_directory_that_was_never_created(tmp_path):
     _gateway().cleanup(str(tmp_path / "nope"))
+
+
+def test_a_generic_hls_gateway_takes_any_stream_resolver(tmp_path):
+    """臺中市議會也是 m3u8：同一套 ffmpeg 切片，只有「怎麼找到串流」不同。"""
+    from slidebox.infrastructure.ivod_sections import HlsSectionGateway
+
+    seen = []
+
+    def resolve(url):
+        seen.append(url)
+        return M3U8
+
+    runner = FakeRunner()
+    gateway = HlsSectionGateway(resolve, runner=runner, ffmpeg_exe="ffmpeg")
+    tccc = "https://vod.tccc.gov.tw/index.asp?url=12&cno=85&ano=1"
+    paths = gateway.download_sections(tccc, [3.0], None, str(tmp_path / "hls"), _noop, lambda: False)
+    assert seen == [tccc]
+    assert paths[0] is not None
+    assert M3U8 in runner.commands[0]

@@ -3,6 +3,7 @@ import type { ArticleCard } from '../lib/types';
 import { mediaUrl } from '../lib/api';
 import { displayTitle, formatDateWithWeekday, humanDuration } from '../lib/format';
 import Figure from './Figure.astro';
+import SourceBadge from './SourceBadge.astro';
 
 interface Props {
   article: ArticleCard;
@@ -33,11 +34,12 @@ const title = displayTitle(article.title);
       <time datetime={article.date} class="tabular">{formatDateWithWeekday(article.date)}</time>
       <span aria-hidden="true" class="text-line">·</span>
       <a
-        href={`/speaker/${encodeURIComponent(article.speaker)}`}
+        href={`/speaker/${encodeURIComponent(article.speaker)}?source=${article.source}`}
         class="relative z-10 rounded-full bg-accent-soft px-2 py-0.5 font-medium text-accent-ink transition-opacity hover:opacity-80"
       >
         {article.speaker}
       </a>
+      <SourceBadge source={article.source} class="ml-auto" />
     </div>
 
     <h2 class="headline text-[1.05rem] font-semibold sm:text-lg">

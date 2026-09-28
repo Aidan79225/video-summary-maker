@@ -130,6 +130,11 @@ IVOD_API_BASE = os.environ.get("IVOD_API_BASE", "https://ly.govapi.tw/v2/ivods")
 LYAPI_BASE = os.environ.get("LYAPI_BASE", "https://ly.govapi.tw/v2")
 CITE_LAWS = _env_bool("CITE_LAWS", True)
 
+# 臺中市議會「議員個人質詢隨選視訊」。沒有逐字稿，片段長（15～60 分鐘），
+# 要在 GPU 主機跑語音辨識，一篇 10～20 分鐘。不想抓就關掉。
+TCCC_ENABLED = _env_bool("TCCC_ENABLED", True)
+TCCC_VOD_BASE = os.environ.get("TCCC_VOD_BASE", "https://vod.tccc.gov.tw")
+
 # 每天最多處理幾段發言。一段約 3～5 分鐘，預設 20 段約 1～2 小時。
 INGEST_DAILY_LIMIT = int(os.environ.get("INGEST_DAILY_LIMIT", "20"))
 # 排程每天幾點跑（24 小時制，台北時間）。立法院的逐字稿不是即時產生的，

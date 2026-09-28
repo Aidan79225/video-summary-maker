@@ -123,6 +123,16 @@ ollama pull qwen3.5:9b
 - **完整會議**（8 小時以上）的影片主機實測連不上，會產出**沒有截圖**的摘要；而且一場 8 小時的會議壓成十幾頁本來就不是好的呈現單位——IVOD 的 Clip（一位委員的一段發言）才是自然的單位
 - 還沒有 AI 逐字稿的片段會直接說明原因，不會退到語音辨識（那條路用的是 yt-dlp，它不認得 IVOD 網址）
 
+## 臺中市議會
+
+貼「議員個人質詢隨選視訊系統」的片段網址：`https://vod.tccc.gov.tw/index.asp?url=12&cno=<議員>&ano=<片段>`（進到某位議員的頁面、點某一段，網址列就是這個）。
+
+- **沒有逐字稿可抓**：議事錄系統（yishi.tccc.gov.tw）有依發言人拆的正式紀錄，但沒有時間戳，對不上影片。所以這條路走語音辨識——用 ffmpeg 把 HLS 串流的音訊抓成 16 kHz wav，交給 faster-whisper（`large-v3-turbo`，CPU int8）
+- **片段長**：市政總質詢一段約 50 分鐘、業務質詢約 15 分鐘（頁面上的「影片長度 00:50」是 HH:MM）。實測 CPU 語音辨識約為片長的四分之一，50 分鐘的片段要 12 分鐘，加上摘要約 17 分鐘一篇
+- 截圖與 IVOD 同一套：ffmpeg 直接切 m3u8，串流網址從播放器頁（rds.ginnet.cloud）解析出來
+- 成品會標明「由語音辨識產生，可能有辨識錯誤」；人名偶有同音錯字（「楊啟邦」應為「楊啓邦」），標題裡的姓名以網站為準
+- 網站的憑證鏈在 Python 3.13 預設的嚴格驗證下會被拒絕（CA 憑證缺 Subject Key Identifier），程式只關掉 strict 旗標，主機名與信任鏈照常驗證
+
 ## 外語影片
 
 英文、日文、韓文影片一律產出**繁體中文**投影片。字幕依下列順序挑選：
@@ -281,7 +291,9 @@ curl http://localhost:8800/health   # ollama_reachable 要是 true
 
 ## 2. 後端（Pi）
 
-`services/news/` — Django + django-ninja。每天凌晨抓前一天的質詢片段、送去 GPU 主機產生**詳細模式**的摘要、存成文章，並開出 news API。見 `services/news/README.md`。
+`services/news/` — Django + django-ninja。每天凌晨抓前一天的質詢片段（立法院 IVOD 與臺中市議會）、送去 GPU 主機產生**詳細模式**的摘要、存成文章，並開出 news API。見 `services/news/README.md`。
+
+兩個來源的差別只在「怎麼找到當天的片段」：立法院查開放 API，臺中逐一翻 61 位議員的頁面（每天 61 次 HTTP）。臺中不想抓的話設 `TCCC_ENABLED=false`。臺中的片段長、要跑語音辨識，一篇 10～20 分鐘；`GPU_JOB_TIMEOUT_SECONDS` 預設 1800 對 60 分鐘的片段偏緊，建議設 2700。
 
 ## 3. 前端（Pi）
 

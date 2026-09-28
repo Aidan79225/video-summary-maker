@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from datetime import date as date_type
+from typing import Literal
 
 from django.db.models import Count, Max, Q
 from django.shortcuts import get_object_or_404
@@ -9,7 +10,11 @@ from ninja import NinjaAPI, Query, Schema
 
 from .models import Article, ArticleStatus
 
-api = NinjaAPI(title="立法院質詢摘要 API", version="1.0", urls_namespace="news")
+api = NinjaAPI(title="議會質詢摘要 API", version="1.0", urls_namespace="news")
+
+# 來源代碼（Article.source）。宣告成 Literal，ninja 會把非法值擋成 422，
+# 而不是讓一個打錯的 ?source= 變成空清單或 500。
+SourceParam = Literal["ly", "tccc"]
 
 _MAX_PAGE_SIZE = 50
 # 頁碼上限：SQLite 的 OFFSET 綁定超過 int64 會直接 500，而前端會把訪客
@@ -61,6 +66,7 @@ class BriefOut(Schema):
 class ArticleCardOut(Schema):
     slug: str
     ivod_id: str
+    source: str
     title: str
     speaker: str
     meeting: str
@@ -90,6 +96,8 @@ class ArticleListOut(Schema):
 
 class SpeakerOut(Schema):
     name: str
+    # 同名的人在不同議會分開算：立法院的「王〇〇」與市議會的不是同一位
+    source: str
     count: int
     latest_date: date_type | None
 
@@ -109,6 +117,7 @@ def _card(article: Article) -> dict:
     return {
         "slug": article.slug,
         "ivod_id": article.ivod_id,
+        "source": article.source,
         "title": article.title,
         "speaker": article.speaker,
         "meeting": article.meeting,
@@ -135,7 +144,7 @@ def health(request) -> dict:
 
 @api.get("/articles", response=ArticleListOut)
 def list_articles(request, date: date_type | None = None, speaker: str | None = None,
-                  q: str | None = None,
+                  q: str | None = None, source: SourceParam | None = None,
                   page: int = Query(1, ge=1, le=_MAX_PAGE),
                   page_size: int = 20) -> dict:
     """只回已完成的文章——處理中或失敗的是內部狀態，不是新聞。
@@ -153,6 +162,8 @@ def list_articles(request, date: date_type | None = None, speaker: str | None = 
         queryset = queryset.filter(date=date)
     if speaker:
         queryset = queryset.filter(speaker=speaker)
+    if source:
+        queryset = queryset.filter(source=source)
     if q:
         queryset = queryset.filter(
             Q(title__icontains=q)
@@ -194,12 +205,15 @@ def article_detail(request, slug: str) -> dict:
 
 
 @api.get("/speakers", response=SpeakerListOut)
-def speakers(request) -> dict:
-    rows = (Article.objects.filter(status=ArticleStatus.READY)
-            .values("speaker")
+def speakers(request, source: SourceParam | None = None) -> dict:
+    queryset = Article.objects.filter(status=ArticleStatus.READY)
+    if source:
+        queryset = queryset.filter(source=source)
+    rows = (queryset.values("speaker", "source")
             .annotate(count=Count("id"), latest_date=Max("date"))
             .order_by("-latest_date", "-count"))
     return {"items": [
-        {"name": r["speaker"], "count": r["count"], "latest_date": r["latest_date"]}
+        {"name": r["speaker"], "source": r["source"], "count": r["count"],
+         "latest_date": r["latest_date"]}
         for r in rows if r["speaker"]
     ]}

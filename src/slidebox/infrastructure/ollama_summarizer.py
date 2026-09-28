@@ -219,7 +219,7 @@ def _build_user_prompt(compressed: str, duration: float, min_slides: int,
     return "\n\n".join(parts)
 
 
-_BRIEF_SYSTEM = """你是新聞編輯。使用者會給你一段發言（通常是立法委員的質詢）的分段摘要，
+_BRIEF_SYSTEM = """你是新聞編輯。使用者會給你一段發言（通常是立法委員或市議員的質詢）的分段摘要，
 請寫出一張「摘要卡」，讓讀者在十秒內知道講者要什麼。一律使用繁體中文，只輸出 JSON：
 
 - one_liner：一句話（40 字以內）講清楚講者指出的問題與提出的要求，不要用「本段」「影片」開頭。

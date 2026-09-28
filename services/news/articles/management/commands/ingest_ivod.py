@@ -1,4 +1,4 @@
-"""每日匯入：立法院清單 → GPU 摘要 → 文章。
+"""每日匯入：立法院與臺中市議會的清單 → GPU 摘要 → 文章。
 
     python manage.py ingest_ivod                # 預設抓昨天
     python manage.py ingest_ivod --date 2026-08-27
@@ -17,10 +17,11 @@ from articles.gpu_client import GpuApiClient
 from articles.ingest import discover_days, process_pending, rerun_ready, retry_imageless
 from articles.ivod_source import IvodDailySource
 from articles.law_source import LawSource, LyApi
+from articles.tccc_source import TcccDailySource
 
 
 class Command(BaseCommand):
-    help = "抓立法院某一天的質詢片段，送去 GPU 主機產生詳細摘要"
+    help = "抓立法院與臺中市議會某一天的質詢片段，送去 GPU 主機產生詳細摘要"
 
     def add_arguments(self, parser) -> None:
         parser.add_argument("--date", help="YYYY-MM-DD，預設昨天")
@@ -58,13 +59,16 @@ class Command(BaseCommand):
             return
 
         days = self._days(options)
-        source = IvodDailySource(settings.IVOD_API_BASE)
-        self.stdout.write(f"=== {days[-1]} ～ {days[0]} ===")
+        sources = [IvodDailySource(settings.IVOD_API_BASE)]
+        if settings.TCCC_ENABLED:
+            sources.append(TcccDailySource(settings.TCCC_VOD_BASE))
+        names = "、".join(s.name for s in sources)
+        self.stdout.write(f"=== {days[-1]} ～ {days[0]}（{names}）===")
 
         # 先把所有天的清單登記完，再跑**一次**處理。一天一次 process_pending
         # 的話，--days 3 會讓當晚的處理上限悄悄變成三倍——GPU 主機是使用者
         # 的桌機，那會一路跑進上班時間。
-        report = discover_days(days, source)
+        report = discover_days(days, sources)
         if options["discover_only"]:
             self.stdout.write(f"發現 {report.discovered}、新增 {report.created}")
             return

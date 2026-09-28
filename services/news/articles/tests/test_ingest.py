@@ -43,6 +43,15 @@ def _clip(ivod_id="900001", speaker="範例一"):
     )
 
 
+def _clip_tccc(ano="14833", speaker="楊啓邦"):
+    return IvodClip(
+        ivod_id=f"tccc-{ano}", date="2026-08-27", speaker=speaker,
+        meeting="第4屆第8次定期會 市政總質詢", duration_seconds=3000,
+        ivod_url=f"https://vod.tccc.gov.tw/index.asp?url=12&cno=85&ano={ano}",
+        has_transcript=True, source="tccc",
+    )
+
+
 BRIEF = {
     "one_liner": "國防部三年編 82.4 億買無人機，交到部隊的不到一半",
     "key_numbers": [
@@ -90,6 +99,8 @@ def _payload(slides=2, with_image=True, brief=BRIEF):
 
 
 class FakeSource:
+    name = "假來源"
+
     def __init__(self, clips=None, error=None):
         self._clips = clips if clips is not None else [_clip()]
         self._error = error
@@ -277,7 +288,7 @@ class ProcessTests(TestCase):
 @override_settings(MEDIA_ROOT=MEDIA)
 class IngestDayTests(TestCase):
     def test_the_whole_day_runs_end_to_end(self):
-        report = ingest_day(date(2026, 8, 27), FakeSource(), FakeClient(),
+        report = ingest_day(date(2026, 8, 27), [FakeSource()], FakeClient(),
                             limit=10, timeout=60)
         self.assertEqual((report.discovered, report.created, report.processed),
                          (1, 1, 0 + 1))
@@ -287,7 +298,7 @@ class IngestDayTests(TestCase):
         """Pi 半夜跑排程，立法院那邊偶爾就是連不上。下一輪會再試。"""
         with self.assertLogs("articles.ingest", level="WARNING"):
             report = ingest_day(date(2026, 8, 27),
-                                FakeSource(error=IvodUnavailable("逾時")),
+                                [FakeSource(error=IvodUnavailable("逾時"))],
                                 FakeClient(), limit=10, timeout=60)
         self.assertEqual(report.discovered, 0)
         self.assertTrue(report.errors)
@@ -479,13 +490,15 @@ class UpstreamOutageTests(TestCase):
         client = FakeClient()
         with self.assertLogs("articles.ingest", level="WARNING"):
             report = ingest_day(date(2026, 8, 28),
-                                FakeSource(error=IvodUnavailable("逾時")),
+                                [FakeSource(error=IvodUnavailable("逾時"))],
                                 client, limit=10, timeout=60)
         self.assertEqual(len(client.submitted), 1)
         self.assertEqual(report.processed, 1)
 
     def test_one_bad_day_does_not_stop_the_other_days(self):
         class FlakySource:
+            name = "立法院"
+
             def __init__(self):
                 self.calls = 0
 
@@ -497,9 +510,23 @@ class UpstreamOutageTests(TestCase):
 
         source = FlakySource()
         with self.assertLogs("articles.ingest", level="WARNING"):
-            report = discover_days([date(2026, 8, 27), date(2026, 8, 26)], source)
+            report = discover_days([date(2026, 8, 27), date(2026, 8, 26)], [source])
         self.assertEqual(report.created, 1)
         self.assertTrue(report.errors)
+
+    def test_discover_days_runs_every_source_and_keeps_going_after_one_fails(self):
+        from articles.models import ArticleSource
+
+        ok = FakeSource([_clip("900001"), _clip_tccc("14833")])
+        broken = FakeSource(error=IvodUnavailable("掛了"))
+        broken.name = "臺中市議會"
+        with self.assertLogs("articles.ingest", level="WARNING"):
+            report = discover_days([date(2026, 8, 27)], [broken, ok])
+        self.assertEqual((report.discovered, report.created), (2, 2))
+        self.assertEqual(len(report.errors), 1)
+        self.assertIn("臺中市議會", report.errors[0])
+        self.assertEqual(Article.objects.get(ivod_id="tccc-14833").source, ArticleSource.TCCC)
+        self.assertEqual(Article.objects.get(ivod_id="900001").source, ArticleSource.LY)
 
 
 @override_settings(MEDIA_ROOT=MEDIA)

@@ -64,3 +64,7 @@ def test_the_payload_is_keyed_by_the_ivod_id():
 
 def test_a_youtube_url_still_gets_a_stable_key():
     assert video_id_of(YOUTUBE) == video_id_of(YOUTUBE + "&t=30")
+
+
+def test_a_taichung_clip_is_keyed_by_its_prefixed_ano():
+    assert video_id_of("https://vod.tccc.gov.tw/index.asp?url=12&cno=85&ano=14833") == "tccc-14833"
