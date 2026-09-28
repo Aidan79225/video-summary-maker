@@ -6,14 +6,22 @@
 from __future__ import annotations
 
 import json
+import time
+import urllib.error
 import urllib.parse
 import urllib.request
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date
 from enum import StrEnum
 
 _PAGE_SIZE = 100
 _TIMEOUT = 30.0
+# 打太快會被 LYAPI 429：--days 45 在 4 秒內連打 45 次，整批清單全部失敗。
+# 兩道防線：連續請求之間留一點間隔；真的被擋就退避重試，秒數的長度就是重試次數。
+_PACE_SECONDS = 0.5
+_RETRY_DELAYS = (2.0, 4.0, 8.0)
+_MAX_RETRY_AFTER = 10.0
 
 
 class VideoKind(StrEnum):
@@ -115,12 +123,27 @@ def _clip(raw: dict) -> IvodClip | None:
     )
 
 
+def _retry_delay(error: urllib.error.HTTPError, attempt: int) -> float:
+    # Retry-After 是伺服器主動告知的等待秒數，比我們猜的退避更準
+    headers = getattr(error, "headers", None)
+    retry_after = headers.get("Retry-After") if headers is not None else None
+    if retry_after:
+        try:
+            return min(float(retry_after), _MAX_RETRY_AFTER)
+        except ValueError:
+            pass
+    return _RETRY_DELAYS[attempt]
+
+
 class IvodDailySource:
     name = "立法院"
 
-    def __init__(self, base: str, fetch=_http_get):
+    def __init__(self, base: str, fetch=_http_get,
+                 sleep: Callable[[float], None] = time.sleep):
         self._base = base.rstrip("/")
         self._fetch = fetch
+        self._sleep = sleep
+        self._requests = 0
 
     def clips_for(self, day: date, only_with_transcript: bool = True) -> list[IvodClip]:
         """某一天的質詢片段，最早的排前面。
@@ -158,7 +181,20 @@ class IvodDailySource:
             "limit": _PAGE_SIZE,
             "page": page,
         })
-        try:
-            return json.loads(self._fetch(f"{self._base}?{query}"))
-        except (OSError, ValueError) as e:
-            raise IvodUnavailable(f"立法院 API 取得失敗：{str(e)[:200]}") from e
+        url = f"{self._base}?{query}"
+        for attempt in range(len(_RETRY_DELAYS) + 1):
+            if self._requests:
+                # 第一次不等；之後每次請求前留間隔，多天回補才不會一口氣打爆對方
+                self._sleep(_PACE_SECONDS)
+            self._requests += 1
+            try:
+                return json.loads(self._fetch(url))
+            # HTTPError 是 OSError 的子類別，要排在前面才能只針對 429 重試
+            except urllib.error.HTTPError as e:
+                if e.code == 429 and attempt < len(_RETRY_DELAYS):
+                    self._sleep(_retry_delay(e, attempt))
+                    continue
+                raise IvodUnavailable(f"立法院 API 取得失敗：{str(e)[:200]}") from e
+            except (OSError, ValueError) as e:
+                raise IvodUnavailable(f"立法院 API 取得失敗：{str(e)[:200]}") from e
+        raise AssertionError("unreachable：迴圈每次都會 return 或 raise")

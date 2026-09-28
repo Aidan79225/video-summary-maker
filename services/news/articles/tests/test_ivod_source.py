@@ -115,3 +115,61 @@ class SchemaChangeTests(SimpleTestCase):
         pages = [{"ivods": [_row("abc"), _row(2)], "total_page": 1}]
         source, _ = _source(pages)
         self.assertEqual(len(source.clips_for(date(2026, 8, 27))), 2)
+
+
+class RateLimitTests(SimpleTestCase):
+    """攔的 bug：--days 45 在 4 秒內連打 45 次 LYAPI，全部 429、整批清單失敗。"""
+
+    def _429(self):
+        import urllib.error
+        return urllib.error.HTTPError("https://example/ivods", 429, "Too Many Requests",
+                                      {"Retry-After": "3"}, None)
+
+    def test_a_429_is_retried_after_backing_off(self):
+        import json as _json
+        calls, slept = [], []
+        page = {"ivods": [_row(1)], "total_page": 1}
+
+        def fetch(url):
+            calls.append(url)
+            if len(calls) < 3:
+                raise self._429()
+            return _json.dumps(page, ensure_ascii=False)
+
+        source = IvodDailySource("https://example/ivods", fetch=fetch, sleep=slept.append)
+        clips = source.clips_for(date(2026, 8, 27))
+        self.assertEqual([c.ivod_id for c in clips], ["1"])
+        self.assertEqual(len(calls), 3)
+        # Retry-After 說 3 秒就等 3 秒；重試前也有間隔
+        self.assertIn(3.0, slept)
+
+    def test_a_429_that_never_clears_is_reported_as_unavailable(self):
+        def fetch(url):
+            raise self._429()
+
+        source = IvodDailySource("https://example/ivods", fetch=fetch, sleep=lambda s: None)
+        with self.assertRaises(IvodUnavailable):
+            source.clips_for(date(2026, 8, 27))
+
+    def test_consecutive_requests_are_paced_but_the_first_is_not(self):
+        pages = [{"ivods": [_row(1)], "total_page": 1}, {"ivods": [_row(2)], "total_page": 1}]
+        fetch = FakeFetch(pages)
+        slept = []
+        source = IvodDailySource("https://example/ivods", fetch=fetch, sleep=slept.append)
+        source.clips_for(date(2026, 8, 27))
+        self.assertEqual(slept, [])
+        source.clips_for(date(2026, 8, 26))
+        self.assertEqual(slept, [0.5])
+
+    def test_other_http_errors_are_not_retried(self):
+        import urllib.error
+        calls = []
+
+        def fetch(url):
+            calls.append(url)
+            raise urllib.error.HTTPError(url, 500, "Server Error", {}, None)
+
+        source = IvodDailySource("https://example/ivods", fetch=fetch, sleep=lambda s: None)
+        with self.assertRaises(IvodUnavailable):
+            source.clips_for(date(2026, 8, 27))
+        self.assertEqual(len(calls), 1)
