@@ -149,6 +149,15 @@ def discover_days(days: Sequence[date], sources: Sequence) -> IngestReport:
     return report
 
 
+def _as_date(value) -> date | None:
+    if isinstance(value, date):
+        return value
+    try:
+        return date.fromisoformat(str(value).strip())
+    except ValueError:
+        return None
+
+
 def _upsert(clip: IvodClip, day: date) -> tuple[Article, bool]:
     article, created = Article.objects.get_or_create(
         ivod_id=clip.ivod_id,
@@ -157,7 +166,9 @@ def _upsert(clip: IvodClip, day: date) -> tuple[Article, bool]:
             "title": clip.title,
             "speaker": clip.speaker,
             "meeting": clip.meeting,
-            "date": clip.date or day,
+            # 來源給的是字串（"2026-08-27"）。存進去之前先轉成 date：剛建立的 article 物件
+            # 不會重讀資料庫，date 會一直是字串，後面拿去跟任期日期比就會 TypeError。
+            "date": _as_date(clip.date) or day,
             "duration_seconds": clip.duration_seconds,
             "ivod_url": clip.ivod_url,
             "source": clip.source,
