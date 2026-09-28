@@ -53,3 +53,35 @@ class AdminTests(TestCase):
         res = self.client.get(f"/admin/articles/article/{a.pk}/change/")
         self.assertEqual(res.status_code, 200)
         self.assertContains(res, "模型輸出重試後仍不符合要求")
+
+
+class PersonAdminTests(TestCase):
+    def setUp(self):
+        user = get_user_model().objects.create_superuser("admin2", "b@example.com", "pw")
+        self.client.force_login(user)
+
+    def test_merging_moves_memberships_and_articles_and_keeps_aliases(self):
+        from articles.members_sync import MemberRecord, link_article, sync
+        from articles.models import Membership, Person
+
+        sync([MemberRecord(source="tccc", external_id="66", name="楊啓邦", party="中國國民黨")])
+        sync([MemberRecord(source="ly", external_id="9", name="楊啟邦", party="中國國民黨")])
+        self.assertEqual(Person.objects.count(), 2)
+        a = _article("tccc-1", ArticleStatus.READY, source="tccc", speaker="楊啓邦")
+        link_article(a)
+        keep, other = Person.objects.order_by("id")
+        res = self.client.post("/admin/articles/person/", {
+            "action": "merge", "_selected_action": [keep.pk, other.pk]}, follow=True)
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(Person.objects.count(), 1)
+        keep.refresh_from_db()
+        self.assertEqual(keep.aliases, ["楊啟邦"])
+        self.assertEqual(Membership.objects.filter(person=keep).count(), 2)
+        a.refresh_from_db()
+        self.assertEqual(a.membership.person_id, keep.pk)
+
+    def test_the_membership_list_renders(self):
+        from articles.members_sync import MemberRecord, sync
+        sync([MemberRecord(source="ly", external_id="1", name="甲", party="民主進步黨")])
+        self.assertEqual(self.client.get("/admin/articles/membership/").status_code, 200)
+        self.assertEqual(self.client.get("/admin/articles/person/").status_code, 200)
