@@ -284,3 +284,56 @@ def test_the_initial_prompt_is_passed_to_faster_whisper():
     assert seen["prompt"] == "楊啓邦"
     t.transcribe("a.wav", 1.0, lambda f, s: None, lambda: False, initial_prompt="")
     assert seen["prompt"] is None
+
+
+# --- auto 裝置的退路 ---
+
+
+class _FakeWhisperModel:
+    """建構時記下裝置；cuda 的在第一次辨識才失敗，模擬 Windows 缺 cuBLAS DLL。"""
+
+    built: list[str] = []
+
+    def __init__(self, name, device, compute_type):
+        self.device = device
+        _FakeWhisperModel.built.append(device)
+
+    def transcribe(self, audio, **kwargs):
+        if self.device == "cuda":
+            raise RuntimeError("Library cublas64_12.dll is not found or cannot be loaded")
+        return iter(()), None
+
+
+def test_auto_falls_back_to_cpu_when_cuda_fails_on_first_use(monkeypatch):
+    """攔的 bug：建模型成功、第一次辨識才因為缺 DLL 失敗，舊的退路攔不到，
+    桌面 app 的語音辨識整個壞掉。"""
+    import faster_whisper
+
+    from slidebox.infrastructure import whisper_transcriber as wt
+
+    _FakeWhisperModel.built = []
+    monkeypatch.setattr(faster_whisper, "WhisperModel", _FakeWhisperModel)
+    monkeypatch.setattr(wt, "_cuda_available", lambda: True)
+    monkeypatch.delenv(wt.DEVICE_ENV, raising=False)
+    model = wt._default_model_factory("large-v3-turbo")
+    assert model.device == "cpu"
+    assert _FakeWhisperModel.built == ["cuda", "cpu"]
+
+
+def test_an_explicit_cuda_request_reports_the_failure(monkeypatch):
+    import faster_whisper
+
+    from slidebox.infrastructure import whisper_transcriber as wt
+
+    monkeypatch.setattr(faster_whisper, "WhisperModel", _FakeWhisperModel)
+    monkeypatch.setenv(wt.DEVICE_ENV, "cuda")
+    model = wt._default_model_factory("large-v3-turbo")
+    # 明確指定就不先試跑、也不偷偷退回：失敗會在真正辨識時照實報出來
+    assert model.device == "cuda"
+
+
+def test_auto_never_picks_cuda_outside_linux(monkeypatch):
+    from slidebox.infrastructure import whisper_transcriber as wt
+
+    monkeypatch.setattr(wt.sys, "platform", "win32")
+    assert wt._cuda_available() is False

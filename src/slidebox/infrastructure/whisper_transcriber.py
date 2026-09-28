@@ -8,6 +8,7 @@ cuBLAS／cuDNN，臺中市議會 50 分鐘的片段在顯示卡上一兩分鐘�
 from __future__ import annotations
 
 import os
+import sys
 from collections.abc import Callable
 
 from ..domain.entities import Cue
@@ -26,6 +27,15 @@ def resolve_device(requested: str | None, cuda_available: bool) -> tuple[str, st
 
 
 def _cuda_available() -> bool:
+    """auto 只在 Linux（GPU 主機的容器）才考慮顯示卡。
+
+    Windows 上 ctranslate2 看得到顯示卡，但 cuBLAS／cuDNN 的 DLL 通常沒裝，而且要到
+    第一次辨識才會失敗（「cublas64_12.dll is not found」）——建模型時的例外攔不到，
+    桌面 app 的語音辨識會整個壞掉。容器映像有裝這兩個函式庫，所以只在 Linux 上自動用。
+    Windows 上真的裝好了，就明確設 SLIDEBOX_WHISPER_DEVICE=cuda。
+    """
+    if not sys.platform.startswith("linux"):
+        return False
     try:
         import ctranslate2
 
@@ -34,19 +44,33 @@ def _cuda_available() -> bool:
         return False
 
 
+def _warm_up(model) -> None:
+    """跑一秒靜音。CUDA 函式庫缺了要到第一次編碼才會出錯，這裡先逼它出來。"""
+    import numpy as np
+
+    segments, _ = model.transcribe(np.zeros(16000, dtype=np.float32), language="zh",
+                                   vad_filter=False)
+    for _ in segments:
+        pass
+
+
 def _default_model_factory(name: str):
     # 延遲 import：faster-whisper 會連帶載入 ctranslate2、onnxruntime、av，
     # 放在模組頂端會拖慢整個 app 的啟動，而多數影片根本用不到語音辨識。
     from faster_whisper import WhisperModel
 
     requested = os.environ.get(DEVICE_ENV)
+    automatic = (requested or "auto").strip().lower() == "auto"
     device, compute_type = resolve_device(requested, _cuda_available())
     try:
-        return WhisperModel(name, device=device, compute_type=compute_type)
+        model = WhisperModel(name, device=device, compute_type=compute_type)
+        if device == "cuda" and automatic:
+            _warm_up(model)
+        return model
     except Exception:
-        # auto 挑到 cuda 卻載不起來（少了 cuBLAS／cuDNN、驅動太舊）：退回 CPU，
-        # 慢一點總比一篇都做不了好。明確指定 cuda 的就照實報錯。
-        if device == "cuda" and (requested or "auto").strip().lower() == "auto":
+        # auto 挑到 cuda 卻載不起來或第一次編碼就失敗（少了 cuBLAS／cuDNN、驅動太舊）：
+        # 退回 CPU，慢一點總比一篇都做不了好。明確指定 cuda 的就照實報錯。
+        if device == "cuda" and automatic:
             return WhisperModel(name, device="cpu", compute_type="int8")
         raise
 
