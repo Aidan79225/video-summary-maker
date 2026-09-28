@@ -7,7 +7,7 @@ import Notice from '../components/Notice.astro';
 import Pagination from '../components/Pagination.astro';
 import { getArticles, getParties, getSpeakers, mediaUrl, statusFor } from '../lib/api';
 import { displayTitle, formatDateWithWeekday, humanDuration } from '../lib/format';
-import { isSource } from '../lib/sources';
+import { isSource, SOURCES, SOURCE_LABEL } from '../lib/sources';
 
 const PAGE_SIZE = 12;
 
@@ -55,19 +55,21 @@ const params = {
 };
 
 const latestDate = items[0]?.date ?? '';
+// 報頭小字與頁首同一份來源清單，從來源表組出來
+const bodies = SOURCES.map((s) => SOURCE_LABEL[s]).join(' · ');
 ---
 
 <Base title={hasFilter ? '篩選結果' : ''}>
   <!-- 報頭 -->
   <section class="border-b border-line-soft bg-bg-soft/60">
     <div class="mx-auto max-w-6xl px-4 py-10 sm:px-6 sm:py-14">
-      <p class="text-[0.7rem] tracking-[0.3em] text-accent">立法院 · 臺中市議會</p>
+      <p class="text-[0.7rem] tracking-[0.3em] text-accent">{bodies}</p>
       <h1 class="headline mt-3 text-3xl font-semibold sm:text-[2.6rem] sm:leading-[1.2]">
         把質詢台上的幾分鐘<br class="hidden sm:block" />
         整理成看得懂的重點
       </h1>
       <p class="mt-4 max-w-xl text-sm leading-relaxed text-muted sm:text-base">
-        每天彙整立法院 IVOD 與臺中市議會隨選視訊的質詢影音，逐段附上畫面截圖、重點條列與完整敘述，並保留可展開的逐字稿。
+        每天彙整立法院 IVOD、臺中市議會隨選視訊與新北市議會議事影音的質詢片段，逐段附上畫面截圖、重點條列與完整敘述，並保留可展開的逐字稿。
       </p>
       {
         list && (
