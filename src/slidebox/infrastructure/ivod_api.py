@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import json
+import re
 import urllib.request
 from collections.abc import Sequence
 
@@ -164,14 +165,17 @@ def _cue(segment: object) -> Cue | None:
     return Cue(start=start, end=end, text=text)
 
 
+# 會議名稱裡的提案委員：「委員范雲等17人」「本院委員涂權吉等16人」
+_CO_SPONSOR_RE = re.compile(r"委員([一-鿿]{2,4}?)(?=等|、|，|,|\d)")
+
+
 def _keep_terms(record: dict, video_id: str) -> list[str]:
-    """標題（日期 委員－會議）加上會議資料裡的名稱：會議名稱會列出連署委員
-    （「委員賴士葆等27人」），他們的名字也常在發言裡出現。"""
+    """標題（日期 委員－會議）加上會議名稱裡的提案委員。會議名稱在 record 的最上層，
+    名字夾在「委員范雲等17人」裡，要用正規表示式抽出來才會是獨立的保護詞。"""
     meeting = record.get("會議資料")
-    extra = ""
-    if isinstance(meeting, dict):
-        extra = " ".join(str(meeting.get(k) or "") for k in ("會議名稱", "標題"))
-    return keep_terms_from(f"{_title(record, video_id)} {extra}")
+    title = meeting.get("標題") if isinstance(meeting, dict) else ""
+    names = _CO_SPONSOR_RE.findall(str(record.get("會議名稱") or ""))
+    return [*keep_terms_from(f"{_title(record, video_id)} {title or ''}"), *names]
 
 
 def _title(record: dict, video_id: str) -> str:

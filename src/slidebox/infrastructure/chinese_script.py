@@ -33,19 +33,18 @@ from functools import lru_cache
 _CONFIG = "s2tw"
 
 # OpenCC 當成簡體、但在臺灣是正確寫法的字
-_TAIWAN_CHARS = frozenset("雇霉庄么虱")
+_TAIWAN_CHARS = frozenset("雇霉庄么虱恒")
 
 # 臺灣用語／地名：轉完被改掉就改回來（位置必須對得上原文）
 _TAIWAN_TERMS = (
-    "里長", "里民", "鄰里", "里辦公處", "里幹事", "村里長", "萬里", "后里", "大里",
+    "里長", "里民", "鄰里", "里辦公處", "里幹事", "村里長", "萬里", "后里", "大里", "八里",
     "雇主", "雇員", "雇用", "倒霉", "發霉", "老么", "族群", "群組", "病床", "尖峰",
-    "核准", "批准", "了解", "咨文", "主秘", "秘書", "苧麻", "虱目", "表決", "記名",
+    "核准", "了解", "咨文", "主秘", "秘書", "苧麻", "虱目", "表決", "記名",
 )
 
-# 共用字的逐字規則用到的字集
-_KEEP_ALWAYS = frozenset("台占")                     # 臺灣兩種寫法都通行：保留原字
-_SURNAMES = frozenset("游范余于郁岳涂")              # 當姓氏時不能改成 遊範餘於鬱嶽塗
-_NOT_SURNAME_BEFORE = frozenset("旅导導上下交漫周云雲优優关關由至对對其多剩业業残殘")
+# 漂移段落裡的共用字：預設採用 OpenCC 的結果（它的詞庫知道「屬於」「遊說」「颱風」
+# 「準備」「委託」），只有下面這些是 OpenCC 的單字預設或已知錯誤的詞條，逐一例外。
+_SURNAMES = frozenset("游范余于郁岳涂")              # 單字預設會變成 遊範餘於鬱嶽塗
 _TITLES = (
     "局长", "局長", "委员", "委員", "议员", "議員", "市长", "市長", "部长", "部長", "院长",
     "院長", "主委", "处长", "處長", "先生", "小姐", "女士", "老师", "老師", "署长", "署長",
@@ -54,20 +53,24 @@ _TITLES = (
     "專員", "立委", "议长", "議長", "区长", "區長", "里长", "里長", "教授", "医师", "醫師",
     "律师", "律師", "同学", "同學", "召委", "总统", "總統", "院士", "代表", "副座", "大哥",
 )
-_ZHUN_KEEP_AFTER = frozenset("不批核获獲照恩允")      # 不准、批准、核准…的「准」是對的
-_TUO_KEEP_BEFORE = frozenset("育婴嬰儿兒盘盤")        # 托育、托嬰、托兒、托盤
-# 「只」後面接這些是副詞「只」（只有、只能、只是…），不是量詞「隻」
-_ZHI_ADVERB_NEXT = frozenset(
-    "有能要好會会是剩不可得管因在想知說说需须須限跟和對对怕看做作用拿讓让給给把被為为"
-    "從从就許许見见算還还够夠准準差")
-_QIAN_LOT_BEFORE = frozenset("抽标標书書求中牙")      # 抽籤、標籤、書籤、求籤、中籤、牙籤
-_LI_INSIDE_AFTER = frozenset("面头頭边邊")            # 里面／里頭／里邊 的「里」是「裡」
-_LI_INSIDE_BEFORE = frozenset("这那哪這")             # 这里／那里／哪里 的「里」是「裡」
-# 保護詞的詞界：這些字接在前面，表示這個位置其實屬於前一個詞
-_NOT_A_TERM_AFTER = {
-    "里": frozenset("这這那哪家心城屋村夜手眼嘴鄉乡縣县市"),
-    "后": frozenset("然以最之往前背落此事午今而"),
-}
+# OpenCC 的「是只→是隻」「这只→這隻」：前面是這些字、後面又不是被數的東西，就是副詞「只」
+_ZHI_ADVERB_BEFORE = frozenset("是这這那就也都不还還才只")
+_COUNTED = frozenset("狗猫貓鸡雞鸟鳥鴨鸭鱼魚手脚腳眼船车車牛羊猪豬犬兔虫蟲熊猴马馬鹿鼠蚊")
+_ZHUN_WORD_AFTER = frozenset("确確备備时時则則绳繩点點")  # 不準確、不準備、準則…才是「準」
+_TUO_KEEP_BEFORE = frozenset("育婴嬰儿兒盘盤")          # 托育、托嬰、托兒、托盤
+_TUO_COMPOUND_AFTER = frozenset("委拜请請信寄嘱囑推")     # 委託、拜託…的「托」照 OpenCC
+_QIAN_LOT_BEFORE = frozenset("抽求竹牙标標书書号號")      # 抽籤、求籤、竹籤、書籤、號碼籤
+_QIAN_LOT_AFTER = frozenset("诗詩筒王")
+# 「里」：後面接 面／頭／邊 是「裡」；前面是這些字、或後面是 長／民／辦… 是行政區的「里」
+_LI_INSIDE_AFTER = frozenset("面头頭边邊")
+_LI_VILLAGE_BEFORE = frozenset("全該该本各每個个們们")
+_LI_VILLAGE_AFTER = frozenset("長长民辦办幹干鄰邻")
+_LI_PLACES = frozenset({"萬里", "万里", "鄰里", "邻里", "大里", "后里", "八里"})
+_NUMERALS = frozenset("零一二三四五六七八九十百千两兩几幾")
+# 保護詞的詞界
+_LI_TERM_AFTER = frozenset("这這那哪家心城屋村夜手眼嘴鄉乡")   # 这里长期 不是 里長
+_CITY_BEFORE_LI = ("城市", "都市")                            # 城市里民众 不是 里民
+_HOU_TERM_BEFORE = frozenset("在到去住從从的是中台臺 ，。、")   # 只有這些後面的「后里」才是地名
 
 # 「什么」「怎么」的「么」是簡體的「麼」；「老么」的「么」是正確的正體
 _ME_RE = re.compile(r"(?<=[什怎这這那多要])么")
@@ -108,6 +111,30 @@ def _tables():
     return simplified_only, traditional_only, to_trad, to_simp
 
 
+@lru_cache(maxsize=1)
+def _phrases() -> tuple[frozenset[str], int]:
+    """OpenCC 的簡轉繁詞庫（簡體詞）：一個字在詞裡，就信 OpenCC 的詞級結果。"""
+    import opencc
+
+    path = os.path.join(os.path.dirname(opencc.__file__), "dictionary", "STPhrases.txt")
+    keys = set()
+    with open(path, encoding="utf-8") as f:
+        for line in f:
+            key, sep, _ = line.partition("\t")
+            if sep:
+                keys.add(key)
+    return frozenset(keys), max(len(k) for k in keys)
+
+
+def _in_phrase(norm: str, i: int) -> bool:
+    keys, longest = _phrases()
+    for size in range(2, min(longest, 6) + 1):
+        for start in range(max(0, i - size + 1), min(i, len(norm) - size) + 1):
+            if norm[start:start + size] in keys:
+                return True
+    return False
+
+
 def _available():
     try:
         return _tables()
@@ -132,8 +159,11 @@ def fix_transcript(texts: Sequence[str], keep_terms: Iterable[str] = ()) -> list
     if tables is None:
         return list(texts)
     keep = tuple(dict.fromkeys(t for t in (*_TAIWAN_TERMS, *keep_terms) if len(t) >= 2))
-    scores = [_score(t, keep, tables) for t in texts]
-    drift = _smooth(scores)
+    counts = [_counts(t, keep, tables) for t in texts]
+    drift = _smooth([simp - trad for simp, trad in counts])
+    # 只有正體證據、沒有任何簡體字的段落，不管鄰居怎麼說都不是漂移：
+    # 「每個里都有」夾在漂移區段前面，不能被鄰居拉去整段轉換
+    drift = [d and not (simp == 0 and trad > 0) for d, (simp, trad) in zip(drift, counts)]
     return [_convert(t, d, keep, tables) for t, d in zip(texts, drift)]
 
 
@@ -162,12 +192,17 @@ def _masked(text: str, keep: Sequence[str]) -> list[bool]:
     return mask
 
 
-def _score(text: str, keep: Sequence[str], tables) -> int:
+def _counts(text: str, keep: Sequence[str], tables) -> tuple[int, int]:
     simplified_only, traditional_only, _, _ = tables
     mask = _masked(text, keep)
     simp = sum(1 for ch, m in zip(text, mask) if not m and ch in simplified_only)
     simp += len(_ME_RE.findall(text))
     trad = sum(1 for ch, m in zip(text, mask) if not m and ch in traditional_only)
+    return simp, trad
+
+
+def _score(text: str, keep: Sequence[str], tables) -> int:
+    simp, trad = _counts(text, keep, tables)
     return simp - trad
 
 
@@ -215,37 +250,61 @@ def _convert(text: str, drift: bool, keep: Sequence[str], tables) -> str:
         elif i in me:
             out.append("麼")
         elif o in simplified_only:
-            if o == "签" and c == "籤" and prev not in _QIAN_LOT_BEFORE:
-                c = "簽"          # OpenCC 單字預設是「籤」；說話裡的「签」幾乎都是簽名的簽
-            out.append(c)
-        elif o == "里" and (nxt in _LI_INSIDE_AFTER or prev in _LI_INSIDE_BEFORE):
-            out.append("裡")      # 里面／这里：兩種模式都該換（OpenCC 的「格里」會蓋掉「里面」）
-        elif not drift:
-            out.append(o)         # 正體段落裡的共用字一律不動
+            out.append(_simplified(text, i, o, c, prev, nxt))
+        elif drift:
+            out.append(_shared(text, norm, i, o, c, prev, nxt))
+        elif o == "里" and (prev == "这" or nxt in "头边"):
+            out.append("裡")      # 正體段落裡夾著「这里」「里头」：旁邊的字就是簡體證據
         else:
-            out.append(_shared(text, i, o, c, prev, nxt))
+            out.append(o)         # 正體段落裡的共用字一律不動
     return _protect(text, norm, "".join(out), keep, to_simp, traditional_only)
 
 
-def _shared(text: str, i: int, o: str, c: str, prev: str, nxt: str) -> str:
-    """漂移段落裡的共用字：預設採用 OpenCC 的詞級結果，臺灣用法例外。"""
-    if o in _KEEP_ALWAYS:
-        return o
-    if o in _SURNAMES and _surname_like(text, i, prev):
-        return o
-    if o == "准" and prev in _ZHUN_KEEP_AFTER:
-        return o
-    if o == "托" and nxt in _TUO_KEEP_BEFORE:
-        return o
-    if o == "只" and c == "隻" and nxt in _ZHI_ADVERB_NEXT:
-        return o              # OpenCC 詞庫的「是只」「这只」會把副詞「只有／只能」改成「隻」
+def _simplified(text: str, i: int, o: str, c: str, prev: str, nxt: str) -> str:
+    """簡體專用字：採用 OpenCC 的詞級結果；「签」的單字預設「籤」是例外。"""
+    if o == "签" and c == "籤":
+        lottery = (prev in _QIAN_LOT_BEFORE or nxt in _QIAN_LOT_AFTER
+                   or (prev == "上" and i >= 2 and text[i - 2] == "上"))
+        return c if lottery else "簽"
     return c
 
 
-def _surname_like(text: str, i: int, prev: str) -> bool:
-    """後面 1～3 個字內接職稱（游淑慧議員、余局長），前面又不是「旅游」「其余」之類的詞。"""
-    if prev in _NOT_SURNAME_BEFORE:
-        return False
+def _shared(text: str, norm: str, i: int, o: str, c: str, prev: str, nxt: str) -> str:
+    """漂移段落裡的共用字：預設採用 OpenCC 的詞級結果，只修它的單字預設與已知錯誤的詞條。"""
+    if o == "里":
+        return _li(text, i, c, prev, nxt)
+    if o in "台占" and c in "臺佔":
+        return o              # 臺灣兩種寫法都通行；但「台风」的「颱」要照 OpenCC
+    if o in _SURNAMES and not _in_phrase(norm, i) and _title_follows(text, i):
+        return o              # 不在任何詞裡、後面接職稱：是姓氏（游局長、范雲委員）
+    if o == "只" and c == "隻" and nxt not in _COUNTED and (
+            prev in _ZHI_ADVERB_BEFORE
+            or (prev in _NUMERALS and i >= 2 and text[i - 2] == "第" and nxt in "是有能要")):
+        return o              # 是只有、这只能、那只针对、第一只是：副詞
+    if o == "准" and c == "準" and prev == "不" and nxt not in _ZHUN_WORD_AFTER:
+        return o              # 不准停車（OpenCC 詞庫把「不准」排成「不準」）
+    if o == "托" and nxt in _TUO_KEEP_BEFORE and prev not in _TUO_COMPOUND_AFTER:
+        return o              # 托育、托嬰（OpenCC 會變成「託嬰」）；委托兒福 仍是委託
+    if o == "表" and c == "錶" and nxt in "决決":
+        return o              # 記名表決（OpenCC 的「名表→名錶」）
+    return c
+
+
+def _li(text: str, i: int, c: str, prev: str, nxt: str) -> str:
+    if prev in "这這那哪":
+        return "裡"           # 这里长期、那里民众：「這裡」「那裡」優先
+    if prev in _LI_TERM_AFTER or text[max(0, i - 2):i] in _CITY_BEFORE_LI:
+        return "裡"           # 家里、村里住、在城市里长大：「在…裡」
+    if nxt in _LI_INSIDE_AFTER:
+        place = prev + "里" in _LI_PLACES
+        money = prev in "万萬" and i >= 2 and text[i - 2] in _NUMERALS   # 三千万里面
+        return "里" if place and not money else "裡"
+    if nxt in _LI_VILLAGE_AFTER or prev in _LI_VILLAGE_BEFORE:
+        return "里"           # 里長、里民、全里、每個里：行政區
+    return c
+
+
+def _title_follows(text: str, i: int) -> bool:
     return any(text.startswith(title, j) for j in range(i + 1, i + 4) for title in _TITLES)
 
 
@@ -276,8 +335,16 @@ def _protect(original: str, norm: str, out: str, keep: Sequence[str], to_simp,
 
 
 def _crosses_word(original: str, start: int, end: int, term: str) -> bool:
+    """這個位置的保護詞其實是別的詞的一部分，就不要改回來。"""
     before = original[start - 1] if start > 0 else ""
     after = original[end] if end < len(original) else ""
-    if before in _NOT_A_TERM_AFTER.get(term[0], ()):
-        return True
-    return term.endswith("里") and after in _LI_INSIDE_AFTER
+    if term[0] == "里":
+        if before in _LI_TERM_AFTER or original[max(0, start - 2):start] in _CITY_BEFORE_LI:
+            return True
+    if term[0] == "后" and before and before not in _HOU_TERM_BEFORE:
+        return True           # 然后里面、会后里长 的「后」屬於前一個詞
+    if term.endswith("里") and after in _LI_INSIDE_AFTER:
+        return before in _NUMERALS or term[0] in "万萬" and start >= 1 and original[start - 1] in _NUMERALS
+    if term.endswith("准") and after in _ZHUN_WORD_AFTER:
+        return True           # 考核准则 是 準則
+    return False
