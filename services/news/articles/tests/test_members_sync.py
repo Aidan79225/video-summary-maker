@@ -170,6 +170,15 @@ class NtpcSourceTests(SimpleTestCase):
         self.assertEqual(len(fetch.urls), 68)
         self.assertEqual(sleeps, [1.0] * 67)
 
+    def test_a_profile_without_the_current_term_gets_the_roster_term(self):
+        """洪佳君的「現任」只列社團職務；總覽頁上的人都是本屆，屆次用其他人的補。"""
+        no_term = re.sub(r"<li>新北市第4屆議員</li>", "<li>新北市體育總會副理事長</li>",
+                         _read("ntpc_councilor_C520.html"))
+        self.assertEqual(parse_ntpc_profile(no_term), ("民主進步黨", "", ""))
+        fetch = self._fetch(**{"&C=532": no_term})
+        records = NtpcMemberSource(self.BASE, fetch=fetch, sleep=lambda s: None).fetch()
+        self.assertEqual(next(r for r in records if r.external_id == "532").term, "第4屆")
+
     def test_an_error_page_is_skipped_rather_than_recorded_blank(self):
         """錯誤頁也回 200：寫進去會把議長的職位洗成空的。"""
         fetch = self._fetch(**{"&C=483": "<html>系統忙碌中，請稍後再試</html>"})

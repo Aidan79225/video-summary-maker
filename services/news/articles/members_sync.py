@@ -15,8 +15,9 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from collections import Counter
 from collections.abc import Callable, Iterable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import date
 
 from django.conf import settings
@@ -316,6 +317,12 @@ class NtpcMemberSource:
                 source=ArticleSource.NTPC, external_id=cid, name=name, party=party,
                 district=f"第{area}選區", term=term, role=role,
                 caucus=caucus_of.get(cid, "")))
+        # 有人的「現任」只列社團職務、沒寫「新北市第4屆議員」（2026-09 的洪佳君）。
+        # 總覽頁列的都是本屆議員，屆次就用其他人頁面上的那一屆補。
+        terms = Counter(r.term for r in records if r.term)
+        if terms:
+            current = terms.most_common(1)[0][0]
+            records = [r if r.term else replace(r, term=current) for r in records]
         return records
 
     def _caucuses(self) -> dict[str, str]:
