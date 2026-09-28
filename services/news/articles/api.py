@@ -4,7 +4,7 @@ from __future__ import annotations
 from datetime import date as date_type
 from typing import Literal
 
-from django.db.models import Count, Max, Q
+from django.db.models import Max, Q
 from django.shortcuts import get_object_or_404
 from ninja import NinjaAPI, Query, Schema
 
@@ -161,7 +161,7 @@ def list_articles(request, date: date_type | None = None, speaker: str | None = 
     if date:
         queryset = queryset.filter(date=date)
     if speaker:
-        queryset = queryset.filter(speaker=speaker)
+        queryset = queryset.filter(_speaker_q(speaker))
     if source:
         queryset = queryset.filter(source=source)
     if q:
@@ -204,16 +204,32 @@ def article_detail(request, slug: str) -> dict:
     return data
 
 
+# 聯合質詢的文章講者是「甲、乙、丙」（見 tccc_source.SPEAKER_SEPARATOR）。
+# 查某一位時要能命中這種文章，但不能用 contains——「王立」會誤中「王立任」。
+_SEP = "、"
+
+
+def _speaker_q(name: str) -> Q:
+    return (Q(speaker=name)
+            | Q(speaker__startswith=name + _SEP)
+            | Q(speaker__contains=_SEP + name + _SEP)
+            | Q(speaker__endswith=_SEP + name))
+
+
 @api.get("/speakers", response=SpeakerListOut)
 def speakers(request, source: SourceParam | None = None) -> dict:
     queryset = Article.objects.filter(status=ArticleStatus.READY)
     if source:
         queryset = queryset.filter(source=source)
-    rows = (queryset.values("speaker", "source")
-            .annotate(count=Count("id"), latest_date=Max("date"))
-            .order_by("-latest_date", "-count"))
-    return {"items": [
-        {"name": r["speaker"], "source": r["source"], "count": r["count"],
-         "latest_date": r["latest_date"]}
-        for r in rows if r["speaker"]
-    ]}
+    # 在 Python 裡彙總：聯合質詢的「甲、乙、丙」要拆成三個人各算一篇
+    stats: dict[tuple[str, str], dict] = {}
+    for speaker, article_source, day in queryset.values_list("speaker", "source", "date"):
+        for name in filter(None, (n.strip() for n in speaker.split(_SEP))):
+            entry = stats.setdefault((name, article_source),
+                                     {"name": name, "source": article_source,
+                                      "count": 0, "latest_date": day})
+            entry["count"] += 1
+            if day > entry["latest_date"]:
+                entry["latest_date"] = day
+    items = sorted(stats.values(), key=lambda e: (e["latest_date"], e["count"]), reverse=True)
+    return {"items": items}

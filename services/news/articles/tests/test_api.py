@@ -305,3 +305,24 @@ class SourceTests(TestCase):
         items = self.client.get("/api/speakers?source=tccc").json()["items"]
         self.assertEqual([i["name"] for i in items], ["楊啓邦"])
         self.assertEqual(self.client.get("/api/speakers?source=nope").status_code, 422)
+
+
+@override_settings(MEDIA_ROOT=MEDIA)
+class JointSpeakerTests(TestCase):
+    """聯合質詢的講者是「甲、乙、丙」：查任何一位都要命中，清單要拆成三個人。"""
+
+    def test_each_member_of_a_joint_article_can_be_looked_up(self):
+        _article("tccc-1", speaker="謝志忠、黃守達、王立任", source="tccc")
+        _article("tccc-2", speaker="王立", source="tccc")
+        for name in ("謝志忠", "黃守達", "王立任"):
+            res = self.client.get(f"/api/articles?speaker={name}").json()
+            self.assertEqual([i["ivod_id"] for i in res["items"]], ["tccc-1"], name)
+        res = self.client.get("/api/articles?speaker=王立").json()
+        self.assertEqual([i["ivod_id"] for i in res["items"]], ["tccc-2"])
+
+    def test_the_speaker_list_splits_joint_articles(self):
+        _article("tccc-1", speaker="謝志忠、黃守達", source="tccc", day="2026-09-24")
+        _article("tccc-2", speaker="謝志忠", source="tccc", day="2026-09-02")
+        items = {(i["name"], i["count"], i["latest_date"])
+                 for i in self.client.get("/api/speakers").json()["items"]}
+        self.assertEqual(items, {("謝志忠", 2, "2026-09-24"), ("黃守達", 1, "2026-09-24")})

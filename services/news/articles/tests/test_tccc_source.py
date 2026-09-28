@@ -139,6 +139,75 @@ class SourceTests(SimpleTestCase):
         self.assertEqual(clips[0].duration_seconds, 0)
 
 
+def _councilor_list(*pairs):
+    return "".join(f'<a href="index.asp?url=12&cno={c}" target="_top"><font color="blue">{n}</font></a>'
+                   for c, n in pairs)
+
+
+def _row(cno, ano, meeting, day):
+    return (f'<tr><td><a href="index.asp?url=12&cno={cno}&ano={ano}&pageno=1" target="_top">{meeting}</a></td>'
+            f'<td valign="top" nowrap="nowrap">{day}</td></tr>')
+
+
+def _clip_page(player, day, meeting, hhmm="00:50"):
+    return (f'<iframe class="embed-responsive-item" src="{player}"></iframe>'
+            f'<font color="#0D57BB">{meeting}</font>'
+            f'<td>會議日期：</td><td width="100%">{day}</td>'
+            f'<td>影片長度：</td><td>{hhmm}</td>')
+
+
+class JointInterpellationTests(SimpleTestCase):
+    """聯合質詢：同一支影片掛在三位議員名下，只登記一篇、講者用頓號串起。"""
+
+    JOINT = "https://rds.ginnet.cloud/player/x/joint"
+    SOLO = "https://rds.ginnet.cloud/player/x/solo"
+    DAY = "2026-09-24"
+
+    def _source(self):
+        meeting_joint = "市政總質詢(甲、乙、丙等議員聯合質詢)"
+        pages = {
+            "wb_region01.asp": _councilor_list(("1", "甲"), ("2", "乙"), ("3", "丙"), ("4", "丁")),
+            # 每位議員的清單頁有分頁連結（選中的是更早的一筆），所以不會觸發二次抓取
+            "cno=1&ano=11": _clip_page(self.JOINT, self.DAY, meeting_joint),
+            "cno=2&ano=12": _clip_page(self.JOINT, self.DAY, meeting_joint),
+            "cno=3&ano=13": _clip_page(self.JOINT, self.DAY, meeting_joint),
+            "cno=4&ano=14": _clip_page(self.SOLO, self.DAY, "市政總質詢", "00:45"),
+            "cno=1": _row("1", "11", meeting_joint, self.DAY) + "&ano=1&PageNo=1",
+            "cno=2": _row("2", "12", meeting_joint, self.DAY) + "&ano=2&PageNo=1",
+            "cno=3": _row("3", "13", meeting_joint, self.DAY) + "&ano=3&PageNo=1",
+            "cno=4": _row("4", "14", "市政總質詢", self.DAY) + "&ano=4&PageNo=1",
+        }
+        return TcccDailySource("https://vod.example", fetch=FakeFetch(pages))
+
+    def test_the_same_video_is_registered_once_with_all_speakers(self):
+        clips = self._source().clips_for(date(2026, 9, 24))
+        self.assertEqual([(c.ivod_id, c.speaker) for c in clips],
+                         [("tccc-11", "甲、乙、丙"), ("tccc-14", "丁")])
+        self.assertEqual(clips[0].duration_seconds, 50 * 60)
+        self.assertEqual(clips[1].duration_seconds, 45 * 60)
+
+
+class NoPagerTests(SimpleTestCase):
+    """片段少於一頁時沒有分頁連結，要靠第二次抓取拿到最新那筆；兩次要合併。"""
+
+    def test_both_the_newest_and_the_selected_clip_survive(self):
+        newest_page = _clip_page("https://p/new", "2026-09-24", "市政總質詢")
+        # 第一次（不帶 ano）：最新的 20 被選中沒有連結，只看得到 19
+        first = _row("1", "19", "業務質詢", "2026-09-02") + newest_page
+        # 第二次（ano=19）：19 被選中沒有連結，換成 20 有連結
+        second = _row("1", "20", "市政總質詢", "2026-09-24") + \
+            _clip_page("https://p/old", "2026-09-02", "業務質詢", "00:15")
+        pages = {
+            "wb_region01.asp": _councilor_list(("1", "甲")),
+            "cno=1&ano=19": second,
+            "cno=1&ano=20": newest_page,
+            "cno=1": first,
+        }
+        source = TcccDailySource("https://vod.example", fetch=FakeFetch(pages))
+        self.assertEqual([c.ivod_id for c in source.clips_for(date(2026, 9, 24))], ["tccc-20"])
+        self.assertEqual([c.ivod_id for c in source.clips_for(date(2026, 9, 2))], ["tccc-19"])
+
+
 class CommandSourceTests(SimpleTestCase):
     """--source 只查一個來源；沒給就看 TCCC_ENABLED。"""
 
