@@ -103,3 +103,40 @@ def test_the_pipeline_has_a_rewriter_wired_in():
 
     usecase = build_usecase(Settings(output_dir="OUT"))
     assert isinstance(usecase._rewriter, CurrentSettingsSlideRewriter)
+
+
+def test_a_new_taipei_url_reaches_the_new_taipei_gateways():
+    """攔的 bug：漏接或接反新北分支時網址會被送進 yt-dlp，錯誤訊息是無關的
+    「Unsupported URL」，而且字幕、截圖、音訊三條路要各自接對才會動。"""
+    import pytest
+
+    from slidebox.composition import build_usecase
+    from slidebox.domain.errors import NoSubtitlesAvailable
+    from slidebox.infrastructure.ntpc_api import NtpcClient
+    from slidebox.infrastructure.ntpc_audio import NtpcAudioGateway
+
+    url = ("https://vod.ntp.gov.tw/VodCloudV2/VOD/ViewMetaData"
+           "?assetID=ebc80ece-7491-4288-be73-7c59f6b4815c")
+    usecase = build_usecase(Settings(output_dir="OUT"))
+
+    # 字幕：一律說沒有，讓 use case 走語音辨識
+    with pytest.raises(NoSubtitlesAvailable, match="新北市議會沒有逐字稿"):
+        usecase._subtitles.fetch(url, ("zh-TW",))
+
+    # 音訊：新北的 gateway，接的是 NtpcClient
+    audio = usecase._audio._ntpc
+    assert isinstance(audio, NtpcAudioGateway)
+    assert isinstance(audio._client, NtpcClient)
+
+    # 截圖：找串流走的是同一個 NtpcClient 的播放器頁——換掉它的 fetch 就看得到
+    seen: list[str] = []
+
+    def fetch(page_url):
+        seen.append(page_url)
+        return ("<source src=\"https://vodwms.ntp.gov.tw:443/NTP/x.mp4/playlist.m3u8"
+                "?device=PC&amp;kind=Guest\" />")
+
+    audio._client._fetch = fetch
+    stream = usecase._sections._ntpc._stream_for(url)
+    assert stream == "https://vodwms.ntp.gov.tw:443/NTP/x.mp4/playlist.m3u8?device=PC&kind=Guest"
+    assert len(seen) == 1 and "VideoPlayer" in seen[0]
