@@ -12,7 +12,7 @@ from collections.abc import Sequence
 from ..domain.entities import Cue, Transcript
 from ..domain.errors import SubtitleDownloadFailed
 from ..usecases.sources import ivod_id
-from .chinese_script import TraditionalFixer, keep_terms_from
+from .chinese_script import fix_transcript, keep_terms_from
 
 _BASE = "https://ly.govapi.tw/v2/ivods"
 
@@ -111,10 +111,10 @@ class IvodSubtitleGateway:
 
         cues = tuple(c for c in (_cue(s) for s in _whisperx(record))
                      if c is not None)
-        # 立法院的 WhisperX 逐字稿也會漂成簡體（IVOD 170000 有 9/14 段）。依序修正，
+        # 立法院的 WhisperX 逐字稿也會漂成簡體（IVOD 170000 有 9/14 段）。整份一起判斷，
         # 委員姓名與會議名稱當成保護詞，免得「游」「范」這類姓被改掉。
-        fixer = TraditionalFixer(keep_terms_from(_title(record, video_id)))
-        cues = tuple(Cue(c.start, c.end, fixer(c.text)) for c in cues)
+        texts = fix_transcript([c.text for c in cues], _keep_terms(record, video_id))
+        cues = tuple(Cue(c.start, c.end, t) for c, t in zip(cues, texts))
         if not cues:
             # 刻意用 SubtitleDownloadFailed：一般的 NoSubtitlesAvailable 會啟動
             # 語音備援，而備援用的是 yt-dlp，它不認得 IVOD 網址——使用者最後
@@ -162,6 +162,16 @@ def _cue(segment: object) -> Cue | None:
     if not text or start is None or end is None:
         return None
     return Cue(start=start, end=end, text=text)
+
+
+def _keep_terms(record: dict, video_id: str) -> list[str]:
+    """標題（日期 委員－會議）加上會議資料裡的名稱：會議名稱會列出連署委員
+    （「委員賴士葆等27人」），他們的名字也常在發言裡出現。"""
+    meeting = record.get("會議資料")
+    extra = ""
+    if isinstance(meeting, dict):
+        extra = " ".join(str(meeting.get(k) or "") for k in ("會議名稱", "標題"))
+    return keep_terms_from(f"{_title(record, video_id)} {extra}")
 
 
 def _title(record: dict, video_id: str) -> str:

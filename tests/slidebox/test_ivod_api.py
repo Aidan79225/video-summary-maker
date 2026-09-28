@@ -227,3 +227,20 @@ def test_a_record_with_no_video_url_is_reported():
     client = IvodClient(fetch=FakeFetch({"data": record}))
     with pytest.raises(SubtitleDownloadFailed):
         client.video_url("171180")
+
+
+def test_drifted_whisperx_segments_are_converted_and_the_legislator_name_is_kept():
+    """立法院自己的 WhisperX 逐字稿也會漂成簡體；委員姓名（范雲）不能被改成「範雲」。"""
+    record = dict(RECORD, **{
+        "委員名稱": "范雲",
+        "transcript": {"whisperx": [
+            {"start": 0.0, "end": 5.0, "text": "谢谢主席 今天的公听会我们对照的是修法版本"},
+            {"start": 5.0, "end": 9.0, "text": "范云认为这个问题很重要"},
+        ]},
+    })
+    gateway, _ = _gateway(FakeFetch({"data": record}))
+    transcript = gateway.fetch(URL, ())
+    assert [c.text for c in transcript.cues] == [
+        "謝謝主席 今天的公聽會我們對照的是修法版本",
+        "范雲認為這個問題很重要",
+    ]
