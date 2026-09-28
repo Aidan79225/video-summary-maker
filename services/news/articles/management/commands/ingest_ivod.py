@@ -96,25 +96,31 @@ class Command(BaseCommand):
         if only == "tccc":
             return [TcccDailySource(settings.TCCC_VOD_BASE)]
         if only == "ntpc":
-            return [self._ntpc_source()]
+            return [s for s in (self._ntpc_source(),) if s is not None]
         sources = [IvodDailySource(settings.IVOD_API_BASE)]
         if settings.TCCC_ENABLED:
             sources.append(TcccDailySource(settings.TCCC_VOD_BASE))
         if settings.NTPC_ENABLED:
-            sources.append(self._ntpc_source())
+            ntpc = self._ntpc_source()
+            if ntpc is not None:
+                sources.append(ntpc)
         return sources
 
-    def _ntpc_source(self) -> NtpcDailySource:
+    def _ntpc_source(self) -> NtpcDailySource | None:
         """新北的講者規則要靠名冊（誰是議長、誰屬於哪個黨團）。名冊還是空的（第一次
-        部署、或排程還沒跑到週日的同步）就先同步一次；拿不到就用空名冊，只套用不需要
-        名冊的規則，下次再說。"""
+        部署、或排程還沒跑到週日的同步）就先同步一次；同步失敗就**這次不查新北**。
+
+        不能用空名冊繼續：文章的講者在登記那一刻就定了、之後不會重算，空名冊登記的
+        片段會永遠把議長、副議長與別黨團的召集人列成講者。晚一天查不會少任何片段。
+        """
         if not Membership.objects.filter(source=ArticleSource.NTPC).exists():
             self.stdout.write("新北市議會的名冊是空的，先同步一次…")
             try:
                 report = sync(NtpcMemberSource(settings.NTPC_WEB_BASE).fetch())
                 self.stdout.write(f"新北市議會：{report}")
             except MembersUnavailable as e:
-                self.stderr.write(f"  ! 新北市議會的名冊同步失敗，這次用空名冊：{e}")
+                self.stderr.write(f"  ! 新北市議會的名冊同步失敗，這次不查新北：{e}")
+                return None
         return NtpcDailySource(settings.NTPC_VOD_BASE, roster=NtpcRoster.from_db(),
                                include_mixed=settings.NTPC_INCLUDE_MIXED)
 

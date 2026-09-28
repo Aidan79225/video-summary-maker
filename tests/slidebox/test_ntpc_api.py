@@ -251,3 +251,16 @@ def test_a_truncated_response_degrades_instead_of_failing_the_job():
     gateway = HlsSectionGateway(lambda u: client.video_url(ntpc_clip(u)), ffmpeg_exe="ffmpeg")
     assert gateway.download_sections(url, [3.0, 60.0], None, "unused", lambda f, s: None,
                                      lambda: False) == [None, None]
+
+
+@pytest.mark.parametrize("page", ["ViewMetaData", "VideoPlayer"])
+def test_an_incomplete_read_on_either_page_is_reported(page):
+    """IncompleteRead 不是 OSError：metadata 頁與播放器頁都要轉成「抓不到」。"""
+    import http.client
+
+    client = NtpcClient(fetch=FakeFetch({}, error=http.client.IncompleteRead(b"partial")))
+    with pytest.raises(NoSubtitlesAvailable, match="新北市議會"):
+        if page == "ViewMetaData":
+            client.record(REF)
+        else:
+            client.video_url(REF)

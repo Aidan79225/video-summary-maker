@@ -191,6 +191,29 @@ class NtpcSourceTests(SimpleTestCase):
             NtpcMemberSource(self.BASE, fetch=self._fetch(error_for=["C=482"]),
                              sleep=lambda s: None).fetch()
 
+    def test_an_ordinary_councilors_unreachable_profile_also_fails_the_sync(self):
+        """議長、副議長以外的人抓不到也一樣：略過會讓那位議員的政黨與黨團從名冊消失。"""
+        with self.assertRaises(MembersUnavailable):
+            NtpcMemberSource(self.BASE, fetch=self._fetch(error_for=["C=520"]),
+                             sleep=lambda s: None).fetch()
+
+    def test_a_transient_profile_error_is_retried(self):
+        fetch = self._fetch()
+        failures = {"left": 2}
+        original = fetch.__call__
+
+        def flaky(url):
+            if "C=520" in url and failures["left"]:
+                failures["left"] -= 1
+                raise OSError("timed out")
+            return original(url)
+
+        sleeps = []
+        records = NtpcMemberSource(self.BASE, fetch=flaky, sleep=sleeps.append).fetch()
+        self.assertEqual(len(records), 64)
+        self.assertIn(3.0, sleeps)
+        self.assertIn(10.0, sleeps)
+
     def test_a_roster_without_exactly_one_speaker_and_deputy_is_rejected(self):
         normal = _read("ntpc_councilor_C520.html")
         for page in ("&C=483", "&C=482"):

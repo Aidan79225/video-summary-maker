@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import html
+import http.client
 import json
 import logging
 import re
@@ -85,6 +86,9 @@ def _http_get(url: str, sleep: Callable[[float], None] = time.sleep) -> str:
                 sleep(_RETRY_DELAYS[attempt])
                 continue
             raise
+        except http.client.HTTPException as e:
+            # IncompleteRead 不是 OSError，呼叫端的「抓不到」接不到它
+            raise OSError(f"回應不完整：{e!r}") from e
     raise AssertionError("unreachable")
 
 
@@ -225,6 +229,7 @@ NTPC_CAUCUSES = {"1": "國民黨團", "2": "民進黨團", "3": "無黨團結聯
 # 官網寫「無政黨」，立法院與臺中寫「無黨籍」；統一成後者，政黨篩選才不會分成兩個
 _NTPC_PARTY_ALIASES = {"無政黨": "無黨籍"}
 _NTPC_PACE_SECONDS = 1.0
+_NTPC_PROFILE_RETRIES = (3.0, 10.0)
 
 _NTPC_AREA_RE = re.compile(r'<div class="review-meeting all-list" id="area(\d+)"')
 # href 的引號前有一個空白（`C=590 "`），名字前後也有一堆空白
@@ -304,7 +309,7 @@ class NtpcMemberSource:
         records: list[MemberRecord] = []
         for cid, name, area in listing:
             try:
-                page = self._get(f"councilor-detail?program=37&A={area}&C={cid}")
+                page = self._get_retrying(f"councilor-detail?program=37&A={area}&C={cid}")
             except OSError as e:
                 # 不能略過這個人：少了議長或副議長，總質詢就會把主席當成講者，而且表不是
                 # 空的就不會再同步。整次失敗，下次排程再來。
@@ -345,6 +350,17 @@ class NtpcMemberSource:
             for cid in members:
                 caucus_of.setdefault(cid, caucus)
         return caucus_of
+
+    def _get_retrying(self, path: str) -> str:
+        """個人頁一頁失敗就整次同步失敗（見 fetch），所以暫時性的逾時要先重試兩次。"""
+        for attempt in range(len(_NTPC_PROFILE_RETRIES) + 1):
+            try:
+                return self._get(path)
+            except OSError:
+                if attempt == len(_NTPC_PROFILE_RETRIES):
+                    raise
+                self._sleep(_NTPC_PROFILE_RETRIES[attempt])
+        raise AssertionError("unreachable")
 
     def _get(self, path: str) -> str:
         if self._requests:

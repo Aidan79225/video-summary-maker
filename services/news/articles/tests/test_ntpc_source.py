@@ -557,13 +557,16 @@ class IngestCommandTests(TestCase):
             self.assertEqual(cls.return_value.fetch.call_count, 1)
         self.assertEqual(source._roster.chairs, frozenset({"蔣根煌"}))
 
-    def test_a_failed_sync_continues_with_an_empty_roster(self):
+    def test_a_failed_sync_skips_new_taipei_for_this_run(self):
+        """空名冊登記的片段會永遠把主席列成講者（講者只在登記時決定）：寧可晚一天。"""
         with mock.patch("articles.management.commands.ingest_ivod.NtpcMemberSource") as cls:
             cls.return_value.fetch.side_effect = MembersUnavailable("連不上")
             command = self._command()
-            [source] = command._sources("ntpc")
-        self.assertTrue(source._roster.is_empty)
-        self.assertIn("連不上", command.stderr.getvalue())
+            self.assertEqual(command._sources("ntpc"), [])
+            names = [s.name for s in command._sources(None)]
+        self.assertNotIn("新北市議會", names)
+        self.assertIn("立法院", names)
+        self.assertIn("這次不查新北", command.stderr.getvalue())
 
     @override_settings(NTPC_INCLUDE_MIXED=False)
     def test_the_mixed_setting_is_passed_through(self):
@@ -676,3 +679,30 @@ class LayoutChangeTests(SimpleTestCase):
             page = _read("ntpc_search_2026-09-16.html").replace(old, new)
             with self.assertRaises(SourceUnavailable, msg=old):
                 _source(FakeHttp([page])).clips_for(date(2026, 9, 16))
+
+
+
+class TruncatedResponseTests(SimpleTestCase):
+    def test_an_incomplete_read_becomes_an_oserror(self):
+        """IncompleteRead 不是 OSError；沒轉的話一段截斷的回應會讓整晚的匯入停掉。"""
+        import http.client
+
+        from articles.ntpc_source import NtpcHttp
+
+        http_client = NtpcHttp("https://vod.example")
+
+        def broken(url, data=None, timeout=None):
+            raise http.client.IncompleteRead(b"partial")
+
+        http_client._opener.open = broken
+        with self.assertRaises(OSError):
+            http_client.get("/VodCloudV2/VodStream/VideoPlayer?assetID=x&type=Book_SD")
+        with self.assertRaises(OSError):
+            http_client.post_form("/VodCloudV2/VOD/Search", {"pageindex": "1"})
+
+
+class WrongDateTests(SimpleTestCase):
+    def test_a_listing_where_no_card_is_on_the_requested_day_is_unavailable(self):
+        page = _read("ntpc_search_2026-09-16.html").replace("開會日期：115-09-16", "開會日期：115-09-15")
+        with self.assertRaises(SourceUnavailable):
+            _source(FakeHttp([page])).clips_for(date(2026, 9, 16))

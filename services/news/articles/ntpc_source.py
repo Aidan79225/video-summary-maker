@@ -22,6 +22,7 @@ docs/superpowers/specs/2026-09-29-ntpc-source-design.md 的決策 2、3。
 from __future__ import annotations
 
 import html
+import http.client
 import http.cookiejar
 import logging
 import re
@@ -327,11 +328,21 @@ class NtpcHttp:
 
     def post_form(self, path: str, fields: Mapping[str, str]) -> str:
         body = urllib.parse.urlencode(fields).encode("ascii")
-        with self._opener.open(self._base + path, data=body, timeout=self._timeout) as resp:
-            return resp.read().decode("utf-8", errors="replace")
+        return self._open(self._base + path, body)
 
     def get(self, path: str) -> str:
-        with self._opener.open(self._base + path, timeout=self._timeout) as resp:
+        return self._open(self._base + path, None)
+
+    def _open(self, url: str, body: bytes | None) -> str:
+        """連線中途斷掉（IncompleteRead）不是 OSError；轉成 OSError，呼叫端「抓不到」的
+        處理才接得到——否則一段截斷的回應會讓整晚的匯入（連立法院、臺中）一起停掉。"""
+        try:
+            return self._read(url, body)
+        except http.client.HTTPException as e:
+            raise OSError(f"回應不完整：{e!r}") from e
+
+    def _read(self, url: str, body: bytes | None) -> str:
+        with self._opener.open(url, data=body, timeout=self._timeout) as resp:
             return resp.read().decode("utf-8", errors="replace")
 
 
