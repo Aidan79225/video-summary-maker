@@ -38,6 +38,9 @@ _SELECTED_ANO_RE = re.compile(r"&ano=(\d+)&PageNo=\d+")
 _SELECTED_MEETING_RE = re.compile(r'<font color="#0D57BB">([^<]+)</font>')
 _SELECTED_DATE_RE = re.compile(r"會議日期：</td>\s*<td[^>]*>\s*(\d{4}-\d{2}-\d{2})")
 _SELECTED_DURATION_RE = re.compile(r"影片長度：</td>\s*<td[^>]*>\s*(\d{1,2}):(\d{2})")
+_PLAYER_RE = re.compile(r'<iframe[^>]+src="(https://rds\.ginnet\.cloud/player/[^"]+)"', re.I)
+# 聯合質詢的講者：同一支影片掛在每位議員名下，登記成一篇、姓名用頓號串起
+SPEAKER_SEPARATOR = "、"
 
 
 def _ssl_context() -> ssl.SSLContext:
@@ -92,6 +95,22 @@ def parse_selected_duration(page: str) -> int:
     return int(match.group(1)) * 3600 + int(match.group(2)) * 60
 
 
+def parse_selected_player(page: str) -> str:
+    """選中片段的播放器網址。聯合質詢時幾位議員的片段指向同一支影片，靠它去重。"""
+    match = _PLAYER_RE.search(page)
+    return html.unescape(match.group(1)) if match else ""
+
+
+@dataclass
+class _Found:
+    cno: str
+    ano: str
+    meeting: str
+    date: str
+    duration_seconds: int
+    speakers: list[str]
+
+
 class TcccDailySource:
     name = "臺中市議會"
 
@@ -109,21 +128,30 @@ class TcccDailySource:
         if not councilors:
             raise SourceUnavailable("臺中市議會的議員清單解析不出任何議員，頁面格式可能改了")
         wanted = day.isoformat()
-        clips: list[IvodClip] = []
+        # 依影片去重：聯合質詢（謝志忠、黃守達、王立任等議員聯合質詢）是同一支
+        # 50 分鐘的影片掛在每位議員名下，登記三篇會跑三次 GPU、網站出現三篇一樣的
+        # 文章。鍵是播放器網址；抓不到的當成各自獨立。
+        found: dict[str, _Found] = {}
         for cno, name in councilors:
             for row in self._rows_for(cno, name):
                 if row.date != wanted:
                     continue
-                clips.append(IvodClip(
-                    ivod_id=f"{SOURCE}-{row.ano}",
-                    date=row.date,
-                    speaker=name,
-                    meeting=row.meeting,
-                    duration_seconds=self._duration(cno, row.ano),
-                    ivod_url=f"{self._base}/index.asp?url=12&cno={cno}&ano={row.ano}",
-                    has_transcript=True,
-                    source=SOURCE,
-                ))
+                duration, player = self._clip_page(cno, row.ano)
+                key = player or f"ano:{row.ano}"
+                if key in found:
+                    found[key].speakers.append(name)
+                    continue
+                found[key] = _Found(cno, row.ano, row.meeting, row.date, duration, [name])
+        clips = [IvodClip(
+            ivod_id=f"{SOURCE}-{f.ano}",
+            date=f.date,
+            speaker=SPEAKER_SEPARATOR.join(f.speakers),
+            meeting=f.meeting,
+            duration_seconds=f.duration_seconds,
+            ivod_url=f"{self._base}/index.asp?url=12&cno={f.cno}&ano={f.ano}",
+            has_transcript=True,
+            source=SOURCE,
+        ) for f in found.values()]
         return sorted(clips, key=lambda c: int(c.ivod_id.split("-")[1]))
 
     def _rows_for(self, cno: str, name: str) -> list[ClipRow]:
@@ -135,19 +163,23 @@ class TcccDailySource:
             return []
         rows = parse_clip_rows(page)
         if rows and not _SELECTED_ANO_RE.search(page):
-            # 沒有分頁就拿不到選中那一筆的 ano：改選另一筆，最新的就會變成有連結的列
+            # 沒有分頁就拿不到選中那一筆的 ano：改選另一筆，最新的就會變成有連結的列。
+            # 兩次的結果要合併——第二次換成 rows[0] 沒有連結，只拿第二次會把它弄丟。
             try:
                 page = self._fetch(
                     f"{self._base}/wb_region02.asp?url=12&cno={cno}&ano={rows[0].ano}&pageno=1")
-                rows = parse_clip_rows(page)
+                seen = {r.ano for r in rows}
+                rows += [r for r in parse_clip_rows(page) if r.ano not in seen]
+                rows.sort(key=lambda r: (r.date, int(r.ano)), reverse=True)
             except OSError:
                 pass
         return rows
 
-    def _duration(self, cno: str, ano: str) -> int:
+    def _clip_page(self, cno: str, ano: str) -> tuple[int, str]:
+        """片段頁上的長度與播放器網址；抓不到就 (0, "")，仍然登記。"""
         try:
             page = self._fetch(f"{self._base}/wb_region02.asp?url=12&cno={cno}&ano={ano}&pageno=1")
         except OSError as e:
-            logger.warning("臺中市議會片段 %s 的長度抓不到：%s", ano, e)
-            return 0
-        return parse_selected_duration(page)
+            logger.warning("臺中市議會片段 %s 的片段頁抓不到：%s", ano, e)
+            return 0, ""
+        return parse_selected_duration(page), parse_selected_player(page)
