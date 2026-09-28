@@ -89,7 +89,10 @@ def parse_clip_page(page: str, ref: TcccRef) -> TcccRecord:
 
 
 def parse_stream_url(page: str) -> str | None:
-    match = _STREAM_RE.search(page)
+    r"""播放器頁有兩種：`/player/ncm/vod/…` 把網址寫成 JS 字串，`/player/vod/…`
+    把它放在 JSON（`"src":"https:\/\/…m3u8?…"`）裡、斜線被跳脫。先還原斜線再找，
+    否則第二種整段影片都會被判成「找不到串流網址」。"""
+    match = _STREAM_RE.search(page.replace("\\/", "/"))
     return match.group(0) if match else None
 
 

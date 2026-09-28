@@ -112,3 +112,11 @@ def test_the_council_fetch_keeps_verification_but_drops_the_strict_flag():
     assert not (context.verify_flags & ssl.VERIFY_X509_STRICT)
     assert context.verify_mode == ssl.CERT_REQUIRED
     assert context.check_hostname
+
+
+def test_the_json_style_player_page_also_yields_the_hls_url():
+    r"""攔的 bug：`/player/vod/`（沒有 ncm）的播放器頁把串流放在 JSON 裡、斜線跳脫成
+    `\/`，舊的正規表示式找不到，這些片段在 GPU 端一律失敗。"""
+    assert parse_stream_url(_read("tccc_player_json.html")) == (
+        "https://streamak0128.akamaized.net/vod0128vh-67eb/_definst_/04A08/08_11509xx/"
+        "1150921_1300_8_03_05_2_1.mp4/playlist.m3u8?iMda_seq=153178")
