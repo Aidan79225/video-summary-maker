@@ -284,3 +284,20 @@ def test_the_initial_prompt_is_passed_to_faster_whisper():
     assert seen["prompt"] == "楊啓邦"
     t.transcribe("a.wav", 1.0, lambda f, s: None, lambda: False, initial_prompt="")
     assert seen["prompt"] is None
+
+
+# --- 簡體漂移 ---
+
+
+def test_chinese_output_that_drifted_to_simplified_is_converted():
+    model = FakeModel([Seg(0.0, 2.0, "請里長幫忙"), Seg(2.0, 4.0, "我们这样是不对的")], language="zh")
+    cues, language = _make(model).transcribe("a.wav", 4.0, _quiet, lambda: False)
+    assert language == "zh"
+    assert [c.text for c in cues] == ["請里長幫忙", "我們這樣是不對的"]
+
+
+def test_japanese_kanji_are_never_converted():
+    """日文的「国」「会」是正確的日文漢字，轉成「國」「會」就是錯字。"""
+    model = FakeModel([Seg(0.0, 2.0, "国会で話します")], language="ja")
+    cues, _ = _make(model).transcribe("a.wav", 2.0, _quiet, lambda: False)
+    assert [c.text for c in cues] == ["国会で話します"]

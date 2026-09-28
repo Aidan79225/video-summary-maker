@@ -13,8 +13,11 @@ from collections.abc import Callable
 from ..domain.entities import Cue
 from ..domain.errors import NoSubtitlesAvailable, OperationCancelled
 from ..domain.ports import CancelCheck, ProgressCallback
+from .chinese_script import to_traditional
 
 DEVICE_ENV = "SLIDEBOX_WHISPER_DEVICE"
+# Whisper 的語言代碼：普通話與粵語。這兩種的輸出一律轉成正體。
+_CHINESE = frozenset({"zh", "yue"})
 
 
 def resolve_device(requested: str | None, cuda_available: bool) -> tuple[str, str]:
@@ -103,12 +106,17 @@ class FasterWhisperTranscriber:
             # 上傳者標錯時，強制指定會產出整份錯誤語言的轉錄。
             segments, info = model.transcribe(audio_path, vad_filter=True,
                                               initial_prompt=initial_prompt or None)
+            # 中文長音訊會在中途漂成簡體，而且一漂就是一整段（實測 1 小時的議會
+            # 質詢從第 35 分鐘起全簡體）。只對中文做：日文的漢字轉了就是錯字。
+            chinese = (getattr(info, "language", "") or "") in _CHINESE
             # segments 是惰性 generator，辨識在迭代時才真正發生，所以取消要
             # 在每段之間檢查，錯誤也可能在迭代中途才冒出來。
             for seg in segments:
                 if is_cancelled():
                     raise OperationCancelled()
                 text = seg.text.strip()
+                if chinese:
+                    text = to_traditional(text)
                 # 略過空白段，以及緊接著的重複句：Whisper large 家族偶爾會卡在
                 # 同一句話上重複輸出（幻覺迴圈），而語音結果不走滾動去重，這些
                 # 重複會原封不動變成投影片內容。隔開出現的相同句子照常保留。
