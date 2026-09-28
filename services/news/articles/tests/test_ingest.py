@@ -608,3 +608,26 @@ class PartyLinkTests(TestCase):
         client = FakeClient()
         process_pending(client, limit=1, timeout=60)
         self.assertEqual(client.hints, ["臺中市議會 第4屆第8次定期會 市政總質詢。發言者：楊啓邦"])
+
+
+@override_settings(MEDIA_ROOT=MEDIA)
+class DiscoverWithTermDatesTests(TestCase):
+    """攔的 bug：LYAPI 的立委都有到職日，而剛登記的文章 date 是字串，
+    link_article 拿日期跟字串比就 TypeError——每一篇立法院片段的登記都會炸掉。"""
+
+    def test_discovery_works_when_the_speakers_term_has_a_start_date(self):
+        from articles.members_sync import MemberRecord, sync
+        sync([MemberRecord(source="ly", external_id="1", name="範例一", party="民主進步黨",
+                           start_date=date(2024, 2, 1))])
+        found, created = discover(date(2026, 8, 27), FakeSource())
+        self.assertEqual((found, created), (1, 1))
+        article = Article.objects.get(ivod_id="900001")
+        self.assertEqual(article.party, "民主進步黨")
+        self.assertEqual(article.date, date(2026, 8, 27))
+
+    def test_a_term_that_ended_before_the_clip_does_not_apply(self):
+        from articles.members_sync import MemberRecord, sync
+        sync([MemberRecord(source="ly", external_id="1", name="範例一", party="台灣民眾黨",
+                           start_date=date(2024, 2, 1), end_date=date(2026, 2, 1))])
+        discover(date(2026, 8, 27), FakeSource())
+        self.assertEqual(Article.objects.get(ivod_id="900001").party, "")

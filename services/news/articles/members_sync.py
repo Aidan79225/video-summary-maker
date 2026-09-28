@@ -294,7 +294,9 @@ def link_article(article: Article, save: bool = True) -> None:
     """依講者與日期填 party／membership。聯合質詢多人：黨去重、保留順序；
     membership 只在單一講者時填。"""
     names = [n.strip() for n in article.speaker.split(SPEAKER_SEPARATOR) if n.strip()]
-    found = [membership_for(article.source, n, article.date) for n in names]
+    # 保險：呼叫端若傳進 date 還是字串的 article（剛 create 還沒重讀），也能比較
+    on = article.date if isinstance(article.date, date) else date.fromisoformat(str(article.date))
+    found = [membership_for(article.source, n, on) for n in names]
     parties: list[str] = []
     for m in found:
         if m and m.party and m.party not in parties:
