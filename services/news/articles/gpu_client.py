@@ -102,12 +102,14 @@ class GpuApiClient:
             return None
 
     def submit(self, url: str, detailed: bool = True, min_slides: int | None = None,
-               max_slides: int | None = None) -> str:
+               max_slides: int | None = None, speech_hint: str | None = None) -> str:
         body: dict = {"url": url, "detailed": detailed}
         if min_slides:
             body["min_slides"] = min_slides
         if max_slides:
             body["max_slides"] = max_slides
+        if speech_hint:
+            body["speech_hint"] = speech_hint
         job = self._call("/jobs", "POST", body=body, timeout=_SUBMIT_TIMEOUT)
         job_id = job.get(JobField.ID)
         if not job_id:

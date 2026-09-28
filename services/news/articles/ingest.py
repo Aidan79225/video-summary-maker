@@ -23,6 +23,7 @@ from django.utils import timezone
 from .gpu_client import GpuApiClient, GpuApiError, JobField, JobFailed, JobStatus
 from .ivod_source import IvodClip, SourceUnavailable
 from .law_source import LawSource, LawUnavailable
+from .members_sync import link_article
 from .models import Article, ArticleStatus, Slide
 
 logger = logging.getLogger(__name__)
@@ -163,6 +164,9 @@ def _upsert(clip: IvodClip, day: date) -> tuple[Article, bool]:
             "status": ArticleStatus.PENDING,
         },
     )
+    if created:
+        # 講者「當時」的政黨：登記那一刻就依日期查任期填好，之後換黨不回溯
+        link_article(article)
     return article, created
 
 
@@ -350,6 +354,14 @@ def attach_citations(article: Article, source: LawSource) -> int:
     return attached
 
 
+def speech_hint_for(article: Article) -> str:
+    """給語音辨識的專有名詞提示：議會名、會議名、講者姓名。Whisper 會優先用這些
+    寫法（「楊啓邦」而不是同音的「楊啟邦」）。有逐字稿的來源 GPU 端用不到。"""
+    body = article.get_source_display()
+    text = f"{body} {article.meeting}。發言者：{article.speaker}"
+    return text[:200]
+
+
 def _resume_or_submit(article: Article, client: GpuApiClient, timeout: float) -> str:
     """有上一輪留下、而且還可能有成果的工作就接回去，否則送一個新的。
 
@@ -361,7 +373,7 @@ def _resume_or_submit(article: Article, client: GpuApiClient, timeout: float) ->
         logger.info("文章 %s 接回既有工作 %s", article.ivod_id, resumable)
         return resumable
 
-    job_id = client.submit(article.ivod_url, detailed=True)
+    job_id = client.submit(article.ivod_url, detailed=True, speech_hint=speech_hint_for(article))
     article.gpu_job_id = job_id
     article.save(update_fields=["gpu_job_id", "updated_at"])
     logger.info("文章 %s 已送出，工作 %s", article.ivod_id, job_id)
