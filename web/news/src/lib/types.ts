@@ -7,6 +7,8 @@ export type ArticleCard = {
   /** 來源給的識別碼；立法院是 IVOD 數字、臺中市議會是 tccc-<ano> */
   ivod_id: string;
   source: ArticleSource;
+  /** 講者「當時」的政黨全名；聯合質詢多黨用頓號分隔；查無資料是空字串 */
+  party: string;
   title: string;
   speaker: string;
   meeting: string;
@@ -84,7 +86,17 @@ export type Speaker = {
   source: ArticleSource;
   count: number;
   latest_date: string;
+  party?: string;
+  district?: string;
 };
+
+export type Party = {
+  name: string;
+  count: number;
+  latest_date: string | null;
+};
+
+export type PartyList = { items: Party[] };
 
 export type SpeakerList = { items: Speaker[] };
 
@@ -115,6 +127,7 @@ export type ArticleQuery = {
   date?: string;
   speaker?: string;
   source?: string;
+  party?: string;
   q?: string;
   page?: number;
   page_size?: number;

@@ -5,7 +5,7 @@ import Figure from '../components/Figure.astro';
 import Filters from '../components/Filters.astro';
 import Notice from '../components/Notice.astro';
 import Pagination from '../components/Pagination.astro';
-import { getArticles, getSpeakers, mediaUrl, statusFor } from '../lib/api';
+import { getArticles, getParties, getSpeakers, mediaUrl, statusFor } from '../lib/api';
 import { displayTitle, formatDateWithWeekday, humanDuration } from '../lib/format';
 import { isSource } from '../lib/sources';
 
@@ -18,11 +18,13 @@ const rawSource = url.searchParams.get('source')?.trim() ?? '';
 // 只認得兩個來源代碼；亂打的當成沒篩，不要把 422 傳染給整頁
 const source = isSource(rawSource) ? rawSource : '';
 const q = url.searchParams.get('q')?.trim() ?? '';
+const party = url.searchParams.get('party')?.trim() ?? '';
 const page = Math.max(1, Number(url.searchParams.get('page')) || 1);
 
-const [listRes, speakersRes] = await Promise.all([
-  getArticles({ date, speaker, source, q, page, page_size: PAGE_SIZE }),
+const [listRes, speakersRes, partiesRes] = await Promise.all([
+  getArticles({ date, speaker, source, party, q, page, page_size: PAGE_SIZE }),
   getSpeakers(source),
+  getParties(source),
 ]);
 
 // 後端掛掉時仍然 render 可讀的頁面，但回報 503 讓監控看得出來
@@ -31,12 +33,13 @@ if (!listRes.ok) {
 }
 
 const speakers = speakersRes.ok ? speakersRes.data.items : [];
+const parties = partiesRes.ok ? partiesRes.data.items : [];
 const list = listRes.ok ? listRes.data : null;
 const items = list?.items ?? [];
 // 分頁越界時說「資料庫裡還沒有文章」會誤導——那兩件事完全不同
 const beyondLastPage = !!list && list.count > 0 && items.length === 0;
 
-const hasFilter = Boolean(date || speaker || source || q);
+const hasFilter = Boolean(date || speaker || source || party || q);
 const showLead = !hasFilter && page === 1 && items.length > 1;
 const lead = showLead ? items[0] : null;
 const rest = showLead ? items.slice(1) : items;
@@ -47,6 +50,7 @@ const params = {
   date: date || undefined,
   speaker: speaker || undefined,
   source: source || undefined,
+  party: party || undefined,
   q: q || undefined,
 };
 
@@ -86,8 +90,10 @@ const latestDate = items[0]?.date ?? '';
       date={date}
       speaker={speaker}
       source={source}
+      party={party}
       q={q}
       speakers={speakers}
+      parties={parties}
       speakersFailed={!speakersRes.ok}
     />
 

@@ -1,14 +1,17 @@
 ---
-import type { Speaker } from '../lib/types';
+import type { Party, Speaker } from '../lib/types';
 import { buildQuery } from '../lib/format';
 import { SOURCES, SOURCE_LABEL, sourceLabel } from '../lib/sources';
+import { partyShort } from '../lib/parties';
 
 interface Props {
   date?: string;
   speaker?: string;
   source?: string;
+  party?: string;
   q?: string;
   speakers: Speaker[];
+  parties?: Party[];
   /** 讀不到委員清單時，改用純文字輸入 */
   speakersFailed?: boolean;
   action?: string;
@@ -18,16 +21,19 @@ const {
   date = '',
   speaker = '',
   source = '',
+  party = '',
   q = '',
   speakers,
+  parties = [],
   speakersFailed = false,
   action = '/',
 } = Astro.props;
 
-const current = { date, speaker, source, q };
-const hasAny = Boolean(date || speaker || source || q);
+const current = { date, speaker, source, party, q };
+const hasAny = Boolean(date || speaker || source || party || q);
 const chips = [
   source ? { key: 'source', label: `來源：${sourceLabel(source)}` } : null,
+  party ? { key: 'party', label: `政黨：${partyShort(party)}` } : null,
   date ? { key: 'date', label: `日期：${date}` } : null,
   speaker ? { key: 'speaker', label: `發言者：${speaker}` } : null,
   q ? { key: 'q', label: `關鍵字：${q}` } : null,
@@ -44,7 +50,7 @@ const label = 'mb-1.5 block text-[0.7rem] tracking-wider text-muted';
     action={action}
     class="rounded-[var(--radius-card)] border border-line bg-surface/70 p-4 sm:p-5"
   >
-    <div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-[9rem_11rem_13rem_minmax(0,1fr)_auto] lg:items-end">
+    <div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-[8rem_8rem_10rem_12rem_minmax(0,1fr)_auto] lg:items-end">
       <div>
         <label class={label} for="f-source">來源</label>
         <select id="f-source" name="source" class={field}>
@@ -52,6 +58,18 @@ const label = 'mb-1.5 block text-[0.7rem] tracking-wider text-muted';
           {SOURCES.map((s) => (
             <option value={s} selected={s === source}>
               {SOURCE_LABEL[s]}
+            </option>
+          ))}
+        </select>
+      </div>
+
+      <div>
+        <label class={label} for="f-party">政黨</label>
+        <select id="f-party" name="party" class={field}>
+          <option value="">全部</option>
+          {parties.map((p) => (
+            <option value={p.name} selected={p.name === party}>
+              {partyShort(p.name)}（{p.count}）
             </option>
           ))}
         </select>

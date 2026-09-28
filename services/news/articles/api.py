@@ -8,7 +8,7 @@ from django.db.models import Max, Q
 from django.shortcuts import get_object_or_404
 from ninja import NinjaAPI, Query, Schema
 
-from .models import Article, ArticleStatus
+from .models import Article, ArticleStatus, Membership
 
 api = NinjaAPI(title="議會質詢摘要 API", version="1.0", urls_namespace="news")
 
@@ -67,6 +67,8 @@ class ArticleCardOut(Schema):
     slug: str
     ivod_id: str
     source: str
+    # 講者「當時」的政黨全名；聯合質詢多黨用頓號分隔；查無任期就空字串
+    party: str
     title: str
     speaker: str
     meeting: str
@@ -100,6 +102,18 @@ class SpeakerOut(Schema):
     source: str
     count: int
     latest_date: date_type | None
+    party: str = ""
+    district: str = ""
+
+
+class PartyOut(Schema):
+    name: str
+    count: int
+    latest_date: date_type | None
+
+
+class PartyListOut(Schema):
+    items: list[PartyOut]
 
 
 class SpeakerListOut(Schema):
@@ -118,6 +132,7 @@ def _card(article: Article) -> dict:
         "slug": article.slug,
         "ivod_id": article.ivod_id,
         "source": article.source,
+        "party": article.party,
         "title": article.title,
         "speaker": article.speaker,
         "meeting": article.meeting,
@@ -145,6 +160,7 @@ def health(request) -> dict:
 @api.get("/articles", response=ArticleListOut)
 def list_articles(request, date: date_type | None = None, speaker: str | None = None,
                   q: str | None = None, source: SourceParam | None = None,
+                  party: str | None = None,
                   page: int = Query(1, ge=1, le=_MAX_PAGE),
                   page_size: int = 20) -> dict:
     """只回已完成的文章——處理中或失敗的是內部狀態，不是新聞。
@@ -164,6 +180,8 @@ def list_articles(request, date: date_type | None = None, speaker: str | None = 
         queryset = queryset.filter(_speaker_q(speaker))
     if source:
         queryset = queryset.filter(source=source)
+    if party:
+        queryset = queryset.filter(_joined_q("party", party))
     if q:
         queryset = queryset.filter(
             Q(title__icontains=q)
@@ -209,11 +227,16 @@ def article_detail(request, slug: str) -> dict:
 _SEP = "、"
 
 
+def _joined_q(field: str, value: str) -> Q:
+    """欄位是「甲、乙、丙」時，查其中一個要能命中，但不能用 contains（「王立」會誤中「王立任」）。"""
+    return (Q(**{field: value})
+            | Q(**{f"{field}__startswith": value + _SEP})
+            | Q(**{f"{field}__contains": _SEP + value + _SEP})
+            | Q(**{f"{field}__endswith": _SEP + value}))
+
+
 def _speaker_q(name: str) -> Q:
-    return (Q(speaker=name)
-            | Q(speaker__startswith=name + _SEP)
-            | Q(speaker__contains=_SEP + name + _SEP)
-            | Q(speaker__endswith=_SEP + name))
+    return _joined_q("speaker", name)
 
 
 @api.get("/speakers", response=SpeakerListOut)
@@ -232,4 +255,27 @@ def speakers(request, source: SourceParam | None = None) -> dict:
             if day > entry["latest_date"]:
                 entry["latest_date"] = day
     items = sorted(stats.values(), key=lambda e: (e["latest_date"], e["count"]), reverse=True)
+    # 現任的任期給政黨與選區；沒有任期資料就留空
+    current = {(m.name, m.source): m
+               for m in Membership.objects.filter(end_date__isnull=True).order_by("id")}
+    for item in items:
+        m = current.get((item["name"], item["source"]))
+        item["party"] = m.party if m else ""
+        item["district"] = m.district if m else ""
     return {"items": items}
+
+
+@api.get("/parties", response=PartyListOut)
+def parties(request, source: SourceParam | None = None) -> dict:
+    """READY 文章的政黨彙總（聯合質詢的多黨各算一篇），給篩選器用。"""
+    queryset = Article.objects.filter(status=ArticleStatus.READY).exclude(party="")
+    if source:
+        queryset = queryset.filter(source=source)
+    stats: dict[str, dict] = {}
+    for party, day in queryset.values_list("party", "date"):
+        for name in filter(None, (n.strip() for n in party.split(_SEP))):
+            entry = stats.setdefault(name, {"name": name, "count": 0, "latest_date": day})
+            entry["count"] += 1
+            if day > entry["latest_date"]:
+                entry["latest_date"] = day
+    return {"items": sorted(stats.values(), key=lambda e: e["count"], reverse=True)}

@@ -47,6 +47,17 @@ class Command(BaseCommand):
         # 沒有回補就再也不會被查到，而且沒有任何訊號。
         scheduler.add_job(job, "cron", hour=hour, minute=minute, id="ingest_ivod",
                           max_instances=1, coalesce=True, misfire_grace_time=3600)
+
+        def sync_members_job() -> None:
+            try:
+                call_command("sync_members")
+            except Exception:  # noqa: BLE001
+                logger.exception("議員名單同步失敗，排程繼續")
+
+        # 政黨、選區一週看一次就夠；排在匯入之前，當天新文章才標得到
+        scheduler.add_job(sync_members_job, "cron", day_of_week="sun", hour=3, minute=30,
+                          id="sync_members", max_instances=1, coalesce=True,
+                          misfire_grace_time=3600)
         def stop(*_) -> None:
             # 回補是在 scheduler.start() 之前同步跑的（可能一兩個小時）。
             # 那段期間呼叫 shutdown 會丟 SchedulerNotRunningError，而它會
@@ -65,6 +76,12 @@ class Command(BaseCommand):
         # 跨過排程時間，那天的質詢就永遠不會被發現，而且沒有任何地方會報出
         # 這個洞。啟動時回補幾天很便宜——discover 每天只是一次 HTTP，而且
         # 整條流程以 ivod_id 為準做 upsert，重跑不會產生重複。
+        # 名單表還是空的（第一次部署）就先同步一次，否則要等到週日文章才有政黨
+        from articles.models import Membership
+        if not Membership.objects.exists():
+            self.stdout.write("議員名單是空的，先同步一次…")
+            sync_members_job()
+
         backfill = options["backfill_days"]
         if backfill > 0:
             self.stdout.write(f"啟動回補最近 {backfill} 天…")

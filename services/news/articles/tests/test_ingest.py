@@ -126,8 +126,9 @@ class FakeClient:
         self.cancelled.append(job_id)
         self._known_jobs.pop(job_id, None)
 
-    def submit(self, url, detailed=True, min_slides=None, max_slides=None):
+    def submit(self, url, detailed=True, min_slides=None, max_slides=None, speech_hint=None):
         self.submitted.append((url, detailed))
+        self.hints = getattr(self, "hints", []) + [speech_hint]
         if isinstance(self._error, GpuApiError):
             raise self._error
         return "job-1"
@@ -588,3 +589,22 @@ class CleanBriefTests(SimpleTestCase):
             {"value": "3", "label": "罰鍰", "law": "醫療法", "article": "第106條",
              "sources": [SOURCE, "junk"]}]})
         self.assertEqual(out["key_numbers"][0]["sources"], [SOURCE])
+
+
+@override_settings(MEDIA_ROOT=MEDIA)
+class PartyLinkTests(TestCase):
+    """登記時就標政黨；送 GPU 時附講者提示。"""
+
+    def test_a_new_article_gets_the_speakers_party(self):
+        from articles.members_sync import MemberRecord, sync
+        sync([MemberRecord(source="ly", external_id="1", name="範例一", party="民主進步黨")])
+        discover(date(2026, 8, 27), FakeSource())
+        article = Article.objects.get(ivod_id="900001")
+        self.assertEqual(article.party, "民主進步黨")
+        self.assertEqual(article.membership.name, "範例一")
+
+    def test_the_gpu_job_carries_a_speech_hint(self):
+        discover(date(2026, 8, 27), FakeSource([_clip_tccc("14833")]))
+        client = FakeClient()
+        process_pending(client, limit=1, timeout=60)
+        self.assertEqual(client.hints, ["臺中市議會 第4屆第8次定期會 市政總質詢。發言者：楊啓邦"])

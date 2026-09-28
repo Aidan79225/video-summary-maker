@@ -18,6 +18,61 @@ class ArticleSource(models.TextChoices):
     TCCC = "tccc", "臺中市議會"
 
 
+class Person(models.Model):
+    """一個真人。同一個人先當議員、後當立委、再回議會，是同一個 Person 底下的
+    多筆 Membership。認人只靠姓名與別名，同名多人時標 needs_review 交給人。"""
+
+    name = models.CharField(max_length=100, db_index=True)
+    # 其他寫法（「楊啟邦」對「楊啓邦」），同步認人時一併比對
+    aliases = models.JSONField(default=list, blank=True)
+    note = models.TextField(blank=True)
+    needs_review = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["name"]
+
+    def __str__(self) -> str:
+        return self.name
+
+
+class Membership(models.Model):
+    """一段任期：哪個議會、哪個黨、哪個選區、從何時到何時。
+
+    文章存的是「當時」的政黨，所以換黨要開新的一段而不是改舊的。
+    start_date 為空視為無限早、end_date 為空視為現任。
+    """
+
+    person = models.ForeignKey(Person, related_name="memberships", on_delete=models.CASCADE)
+    source = models.CharField(max_length=16, choices=ArticleSource.choices, db_index=True)
+    # 來源給的編號：立法院是歷屆立法委員編號（跨屆穩定）、臺中是官網的 cno
+    external_id = models.CharField(max_length=64, blank=True, db_index=True)
+    # 來源上的寫法，可能與 Person.name 不同
+    name = models.CharField(max_length=100, db_index=True)
+    party = models.CharField(max_length=100, blank=True)
+    district = models.CharField(max_length=100, blank=True)
+    term = models.CharField(max_length=32, blank=True)
+    photo_url = models.URLField(max_length=500, blank=True)
+    start_date = models.DateField(null=True, blank=True)
+    end_date = models.DateField(null=True, blank=True)
+    # 換黨自動切段後日期待補
+    needs_review = models.BooleanField(default=False)
+    synced_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["-start_date", "-id"]
+        indexes = [models.Index(fields=["source", "name"]),
+                   models.Index(fields=["source", "external_id"])]
+
+    def __str__(self) -> str:
+        return f"{self.name}（{self.get_source_display()}，{self.party or '無資料'}）"
+
+    def covers(self, day) -> bool:
+        return ((self.start_date is None or self.start_date <= day)
+                and (self.end_date is None or day <= self.end_date))
+
+
 class Article(models.Model):
     """一段質詢發言的摘要。
 
@@ -30,6 +85,11 @@ class Article(models.Model):
     # 臺中片段寫成 tccc-<ano>；改欄位名要動 API、前端與既有資料，不值得。
     source = models.CharField(max_length=16, choices=ArticleSource.choices,
                               default=ArticleSource.LY, db_index=True)
+    # 講者「當時」的政黨（來源給的全名；聯合質詢多黨用頓號分隔）。之後換黨不回溯。
+    party = models.CharField(max_length=200, blank=True, db_index=True)
+    # 單一講者且對得到任期時才填；聯合質詢留空，只靠 party
+    membership = models.ForeignKey(Membership, null=True, blank=True,
+                                   on_delete=models.SET_NULL, related_name="articles")
     slug = models.SlugField(max_length=64, unique=True)
 
     title = models.CharField(max_length=300)

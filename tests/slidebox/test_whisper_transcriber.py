@@ -259,7 +259,7 @@ def test_the_loaded_device_is_reported_where_the_user_can_see_it():
     class Model:
         model = Inner()
 
-        def transcribe(self, path, vad_filter=True):
+        def transcribe(self, path, vad_filter=True, initial_prompt=None):
             return iter(()), type("Info", (), {"language": "zh", "duration": 1.0})()
 
     statuses = []
@@ -267,3 +267,20 @@ def test_the_loaded_device_is_reported_where_the_user_can_see_it():
     cues, _ = t.transcribe("a.wav", 1.0, lambda f, s: statuses.append(s), lambda: False)
     assert cues == ()
     assert any("cuda" in s for s in statuses)
+
+
+def test_the_initial_prompt_is_passed_to_faster_whisper():
+    seen = {}
+
+    class Model:
+        model = type("Inner", (), {"device": "cpu"})()
+
+        def transcribe(self, path, vad_filter=True, initial_prompt=None):
+            seen["prompt"] = initial_prompt
+            return iter(()), type("Info", (), {"language": "zh", "duration": 1.0})()
+
+    t = FasterWhisperTranscriber("large-v3-turbo", model_factory=lambda name: Model())
+    t.transcribe("a.wav", 1.0, lambda f, s: None, lambda: False, initial_prompt="楊啓邦")
+    assert seen["prompt"] == "楊啓邦"
+    t.transcribe("a.wav", 1.0, lambda f, s: None, lambda: False, initial_prompt="")
+    assert seen["prompt"] is None

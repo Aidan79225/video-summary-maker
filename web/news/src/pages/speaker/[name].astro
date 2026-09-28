@@ -6,6 +6,7 @@ import Pagination from '../../components/Pagination.astro';
 import { getArticles, getSpeakers, statusFor } from '../../lib/api';
 import { formatDateWithWeekday } from '../../lib/format';
 import { isSource, memberKicker, memberTitle, sourceLabel } from '../../lib/sources';
+import PartyBadge from '../../components/PartyBadge.astro';
 
 const PAGE_SIZE = 12;
 
@@ -56,6 +57,14 @@ const retryHref = `${url.pathname}${url.search}`;
         {memberKicker(effectiveSource)} · {sourceLabel(effectiveSource)}
       </p>
       <h1 class="headline mt-3 text-3xl font-semibold sm:text-4xl">{name}</h1>
+      {
+        (me?.party || me?.district) && (
+          <p class="mt-3 flex flex-wrap items-center gap-2 text-sm text-muted">
+            <PartyBadge party={me?.party} full={true} />
+            {me?.district && <span>{me.district}</span>}
+          </p>
+        )
+      }
       <p class="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted">
         {total > 0 && <span class="tabular">共 {total} 篇報導</span>}
         {

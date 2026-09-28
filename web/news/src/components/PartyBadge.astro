@@ -1,0 +1,29 @@
+---
+import { partyShort, partyTone, splitParties } from '../lib/parties';
+
+interface Props {
+  /** 後端的 party 欄位：全名，聯合質詢時多個用頓號 */
+  party: string | null | undefined;
+  class?: string;
+  /** 顯示全名而不是縮寫（文章頁的資料列用） */
+  full?: boolean;
+}
+
+const { party, class: extra = '', full = false } = Astro.props;
+const names = splitParties(party);
+---
+
+{
+  names.length > 0 && (
+    <span class={`inline-flex flex-wrap items-center gap-1 ${extra}`}>
+      {names.map((name) => (
+        <span
+          class={`inline-flex items-center rounded-full border px-2 py-0.5 text-[0.66rem] tracking-wide ${partyTone(name)}`}
+          title={name}
+        >
+          {full ? name : partyShort(name)}
+        </span>
+      ))}
+    </span>
+  )
+}

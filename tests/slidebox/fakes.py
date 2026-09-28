@@ -193,9 +193,11 @@ class FakeTranscriber:
         self._language = language
         self._error = error
         self.calls: list[tuple[str, float]] = []
+        self.prompts: list[str | None] = []
 
-    def transcribe(self, audio_path, duration, progress, is_cancelled):
+    def transcribe(self, audio_path, duration, progress, is_cancelled, initial_prompt=None):
         self.calls.append((audio_path, duration))
+        self.prompts.append(initial_prompt)
         progress(None, "語音辨識中… 0:30 / 2:00")
         if self._on_transcribe is not None:
             self._on_transcribe()

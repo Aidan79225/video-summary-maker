@@ -134,6 +134,9 @@ CITE_LAWS = _env_bool("CITE_LAWS", True)
 # 要在 GPU 主機跑語音辨識，一篇 10～20 分鐘。不想抓就關掉。
 TCCC_ENABLED = _env_bool("TCCC_ENABLED", True)
 TCCC_VOD_BASE = os.environ.get("TCCC_VOD_BASE", "https://vod.tccc.gov.tw")
+# 議員名單（政黨、選區）的來源：立法院看 LYAPI 的第幾屆，臺中抓官網的議員介紹
+LY_TERM = int(os.environ.get("LY_TERM", "11"))
+TCCC_WEB_BASE = os.environ.get("TCCC_WEB_BASE", "https://www.tccc.gov.tw")
 
 # 每天最多處理幾段發言。一段約 3～5 分鐘，預設 20 段約 1～2 小時。
 INGEST_DAILY_LIMIT = int(os.environ.get("INGEST_DAILY_LIMIT", "20"))

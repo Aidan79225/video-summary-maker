@@ -13,7 +13,7 @@ class FakeUseCase:
     def __init__(self):
         self.seen: list[Settings] = []
 
-    def execute(self, url, settings, progress=None, is_cancelled=None):
+    def execute(self, url, settings, progress=None, is_cancelled=None, speech_hint=None):
         from dataclasses import replace
         self.seen.append(replace(settings))
         deck = Deck(url, "標題", (Slide(1, "章", ("點",), 0.0),))

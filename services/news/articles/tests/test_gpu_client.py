@@ -136,3 +136,13 @@ class ErrorClassificationTests(SimpleTestCase):
         ——呼叫端要據此重送，而不是停下整批。"""
         client, _, _ = _client([self._http_error(404)])
         self.assertIsNone(client.job("nope"))
+
+
+class SpeechHintTests(SimpleTestCase):
+    def test_the_hint_is_sent_only_when_given(self):
+        client, transport, _ = _client([{"id": "job-1", "status": "queued"},
+                                        {"id": "job-2", "status": "queued"}])
+        client.submit("https://x", speech_hint="臺中市議會。發言者：楊啓邦")
+        client.submit("https://x")
+        self.assertEqual(transport.calls[0]["body"]["speech_hint"], "臺中市議會。發言者：楊啓邦")
+        self.assertNotIn("speech_hint", transport.calls[1]["body"])
