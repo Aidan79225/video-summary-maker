@@ -1,11 +1,14 @@
 ---
 import { isFixtureMode } from '../lib/api';
+import { SOURCES, SOURCE_LABEL } from '../lib/sources';
 
 interface Props {
   back?: boolean;
 }
 const { back = false } = Astro.props;
 const fixture = isFixtureMode();
+// 從來源表組出來：加來源時這行不必再手改，也不會漏掉
+const bodies = SOURCES.map((s) => SOURCE_LABEL[s]).join(' · ');
 ---
 
 {
@@ -43,7 +46,7 @@ const fixture = isFixtureMode();
       <span
         class="hidden shrink-0 text-[0.7rem] tracking-[0.22em] text-muted sm:inline"
       >
-        立法院 · 臺中市議會
+        {bodies}
       </span>
     </a>
 

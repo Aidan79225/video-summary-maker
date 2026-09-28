@@ -1,5 +1,5 @@
 ---
-import { sourceLabel } from '../lib/sources';
+import { sourceLabel, toSource, type ArticleSource } from '../lib/sources';
 
 interface Props {
   source: string | undefined;
@@ -8,11 +8,16 @@ interface Props {
 
 const { source, class: extra = '' } = Astro.props;
 const label = sourceLabel(source);
-// 臺中用強調色、立法院用中性色：兩種來源並列時一眼分得出來，單一來源時也不吵
-const tone =
-  source === 'tccc'
-    ? 'border-accent/40 bg-accent-soft text-accent-ink'
-    : 'border-line bg-bg-soft text-muted';
+// 立法院用中性色、臺中用強調色、新北用紫色：幾種來源並列時一眼分得出來，單一來源時也不吵。
+// 新北刻意避開強調色（已給臺中）與 lib/parties.ts 的黨色（綠、藍、青、黃）——
+// 來源標籤就貼在政黨標籤旁邊，同色系會被看成同一類資訊。
+// 用 Record 而不是三元運算：之後加來源時，少配一個顏色會直接編譯失敗。
+const TONE: Record<ArticleSource, string> = {
+  ly: 'border-line bg-bg-soft text-muted',
+  tccc: 'border-accent/40 bg-accent-soft text-accent-ink',
+  ntpc: 'border-violet-500/40 bg-violet-500/10 text-violet-700 dark:text-violet-300',
+};
+const tone = TONE[toSource(source)];
 ---
 
 <span class={`inline-flex items-center rounded-full border px-2 py-0.5 text-[0.66rem] tracking-wide ${tone} ${extra}`}>
