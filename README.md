@@ -293,7 +293,7 @@ curl http://localhost:8800/health   # ollama_reachable 要是 true
 
 `services/news/` — Django + django-ninja。每天凌晨抓前一天的質詢片段（立法院 IVOD 與臺中市議會）、送去 GPU 主機產生**詳細模式**的摘要、存成文章，並開出 news API。見 `services/news/README.md`。
 
-兩個來源的差別只在「怎麼找到當天的片段」：立法院查開放 API，臺中逐一翻 61 位議員的頁面（每天 61 次 HTTP）。臺中不想抓的話設 `TCCC_ENABLED=false`。臺中的片段長、要跑語音辨識，一篇 10～20 分鐘；`GPU_JOB_TIMEOUT_SECONDS` 預設 1800 對 60 分鐘的片段偏緊，建議設 2700。
+兩個來源的差別只在「怎麼找到當天的片段」：立法院查開放 API，臺中逐一翻 61 位議員的頁面（每天 61 次 HTTP）。臺中不想抓的話設 `TCCC_ENABLED=false`；只想補某一個來源用 `ingest_ivod --source tccc`（或 `ly`）。臺中的片段長、要跑語音辨識，一篇 10～20 分鐘；`GPU_JOB_TIMEOUT_SECONDS` 預設 1800 對 60 分鐘的片段偏緊，建議設 2700。
 
 ## 3. 前端（Pi）
 
