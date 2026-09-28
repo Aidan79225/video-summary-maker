@@ -565,6 +565,27 @@ class IngestCommandTests(TestCase):
             with override_settings(TCCC_ENABLED=tccc, NTPC_ENABLED=ntpc):
                 self.assertEqual([s.name for s in self._command()._sources(None)], expected)
 
+    def test_discover_only_registers_articles_with_their_parties(self):
+        from io import StringIO
+
+        from django.core.management import call_command
+
+        from articles.management.commands.ingest_ivod import Command
+        from articles.models import Article
+
+        sync([_ntpc(name, cid, caucus="民進黨團", party="民主進步黨")
+              for name, cid in (("林裔綺", "588"), ("許昭興", "554"))])
+        source = _source(FakeHttp([_read("ntpc_search_2026-09-16.html")]))
+        with mock.patch.object(Command, "_ntpc_source", return_value=source):
+            call_command("ingest_ivod", source="ntpc", date="2026-09-16", discover_only=True,
+                         stdout=StringIO())
+        self.assertEqual(Article.objects.filter(source="ntpc").count(), 2)
+        a = Article.objects.get(ivod_id="ntpc-0408R1150916030")
+        self.assertEqual((a.speaker, a.party, a.status, a.slug),
+                         ("林裔綺、許昭興", "民主進步黨", "pending", "2026-09-16-ntpc-0408R1150916030"))
+        self.assertEqual(a.title, "2026-09-16 林裔綺、許昭興－第4屆第8次定期會 市政總質詢")
+        self.assertEqual(a.ivod_url, f"{BASE}/VodCloudV2/VOD/ViewMetaData?assetID={AFTERNOON_0916}")
+
     @override_settings(NTPC_ENABLED=False)
     def test_the_flag_picks_ntpc_regardless_of_the_setting(self):
         sync([_ntpc("蔣根煌", "483", role="議長")])
