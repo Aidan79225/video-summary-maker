@@ -137,3 +137,25 @@ class SourceTests(SimpleTestCase):
         with self.assertLogs("articles.tccc_source", level="WARNING"):
             clips = source.clips_for(date(2026, 9, 2))
         self.assertEqual(clips[0].duration_seconds, 0)
+
+
+class CommandSourceTests(SimpleTestCase):
+    """--source 只查一個來源；沒給就看 TCCC_ENABLED。"""
+
+    def _names(self, only, tccc_enabled=True):
+        from django.test import override_settings
+
+        from articles.management.commands.ingest_ivod import Command
+
+        with override_settings(TCCC_ENABLED=tccc_enabled):
+            return [s.name for s in Command()._sources(only)]
+
+    def test_no_flag_queries_both_when_taichung_is_enabled(self):
+        self.assertEqual(self._names(None), ["立法院", "臺中市議會"])
+
+    def test_no_flag_skips_taichung_when_disabled(self):
+        self.assertEqual(self._names(None, tccc_enabled=False), ["立法院"])
+
+    def test_the_flag_picks_one_source_regardless_of_the_setting(self):
+        self.assertEqual(self._names("tccc", tccc_enabled=False), ["臺中市議會"])
+        self.assertEqual(self._names("ly"), ["立法院"])
