@@ -12,6 +12,7 @@
     SLIDEBOX_API_OUTPUT_DIR  成品落點，預設 ~/slidebox_api_output
     SLIDEBOX_MODEL           Ollama 模型，預設同桌面 app
     SLIDEBOX_OLLAMA_HOST     Ollama 位址，預設 http://localhost:11434
+    SLIDEBOX_WHISPER_DEVICE  語音辨識裝置：auto（預設）／cpu／cuda
 """
 import os
 import sys

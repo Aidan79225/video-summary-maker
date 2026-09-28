@@ -1,16 +1,37 @@
 """SpeechTranscriber 的 faster-whisper 實作：沒有字幕時從語音產生字幕。
 
-只用 CPU。本機沒有 CUDA DLL（cublas64_12.dll），而 ctranslate2 對 RTX 5060 Ti
-（Blackwell）的支援也不確定；Zen 5 CPU 上 large-v3-turbo 實測日韓 3.9～4.9 倍
-即時，已經夠用。
+裝置由 SLIDEBOX_WHISPER_DEVICE 決定：auto（預設）有 CUDA 就用顯示卡、否則
+CPU；cpu／cuda 則強制。桌面 app 在 Windows 上通常沒有 cuBLAS DLL，會落到
+CPU（Zen 5 上 large-v3-turbo 約片長的四分之一，夠用）；GPU 主機的容器裝了
+cuBLAS／cuDNN，臺中市議會 50 分鐘的片段在顯示卡上一兩分鐘就辨識完。
 """
 from __future__ import annotations
 
+import os
 from collections.abc import Callable
 
 from ..domain.entities import Cue
 from ..domain.errors import NoSubtitlesAvailable, OperationCancelled
 from ..domain.ports import CancelCheck, ProgressCallback
+
+DEVICE_ENV = "SLIDEBOX_WHISPER_DEVICE"
+
+
+def resolve_device(requested: str | None, cuda_available: bool) -> tuple[str, str]:
+    """回傳 (device, compute_type)。int8 是 CPU 上最快的；float16 是 GPU 上的預設。"""
+    choice = (requested or "auto").strip().lower()
+    if choice == "cuda" or (choice == "auto" and cuda_available):
+        return "cuda", "float16"
+    return "cpu", "int8"
+
+
+def _cuda_available() -> bool:
+    try:
+        import ctranslate2
+
+        return ctranslate2.get_cuda_device_count() > 0
+    except Exception:  # noqa: BLE001 沒裝或 DLL 載不起來都當成沒有
+        return False
 
 
 def _default_model_factory(name: str):
@@ -18,7 +39,21 @@ def _default_model_factory(name: str):
     # 放在模組頂端會拖慢整個 app 的啟動，而多數影片根本用不到語音辨識。
     from faster_whisper import WhisperModel
 
-    return WhisperModel(name, device="cpu", compute_type="int8")
+    requested = os.environ.get(DEVICE_ENV)
+    device, compute_type = resolve_device(requested, _cuda_available())
+    try:
+        return WhisperModel(name, device=device, compute_type=compute_type)
+    except Exception:
+        # auto 挑到 cuda 卻載不起來（少了 cuBLAS／cuDNN、驅動太舊）：退回 CPU，
+        # 慢一點總比一篇都做不了好。明確指定 cuda 的就照實報錯。
+        if device == "cuda" and (requested or "auto").strip().lower() == "auto":
+            return WhisperModel(name, device="cpu", compute_type="int8")
+        raise
+
+
+def model_device(model) -> str:
+    """給狀態列看的裝置名稱；faster-whisper 把 ctranslate2 的模型放在 .model。"""
+    return str(getattr(getattr(model, "model", None), "device", "cpu"))
 
 
 def _brief(error: Exception) -> str:
@@ -93,6 +128,7 @@ class FasterWhisperTranscriber:
         progress(None, f"載入語音辨識模型 {self._model_name}…（首次使用需下載）")
         try:
             self._model = self._model_factory(self._model_name)
+            progress(None, f"語音辨識模型已載入（{model_device(self._model)}）")
         except ImportError as e:
             # 不只「沒安裝」會走到這裡，ctranslate2 的 DLL 載入失敗也是 ImportError，
             # 所以帶上原因，不要一律叫使用者 uv sync。
