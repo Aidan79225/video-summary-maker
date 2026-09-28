@@ -532,6 +532,28 @@ class IngestCommandTests(TestCase):
 
         return Command(stdout=StringIO(), stderr=StringIO())
 
+    def test_a_truncated_roster_page_skips_new_taipei_but_not_the_other_councils(self):
+        """攔的 mutation：_http_get 不把 IncompleteRead 轉成 OSError 的話，名冊同步會把它
+        往外丟，整個 ingest_ivod 在查立法院、臺中之前就停掉。這裡走真正的 _http_get。"""
+        import http.client
+
+        class Truncated:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+            def read(self):
+                raise http.client.IncompleteRead(b"partial", 100)
+
+        with mock.patch("articles.members_sync.urllib.request.urlopen", return_value=Truncated()):
+            command = self._command()
+            names = [s.name for s in command._sources(None)]
+        self.assertIn("立法院", names)
+        self.assertNotIn("新北市議會", names)
+        self.assertIn("這次不查新北", command.stderr.getvalue())
+
     def test_an_empty_roster_is_synced_once_before_querying(self):
         records = [_ntpc("蔣根煌", "483", role="議長", caucus="國民黨團")]
         with mock.patch("articles.management.commands.ingest_ivod.NtpcMemberSource") as cls:
