@@ -39,6 +39,12 @@ const INFO = {
     siteName: '臺中市議會隨選視訊',
     kicker: 'City Councilor',
   },
+  ntpc: {
+    label: '新北市議會',
+    memberTitle: '議員',
+    siteName: '新北市議會議事影音',
+    kicker: 'City Councilor',
+  },
 } as const satisfies Record<string, SourceInfo>;
 
 export type ArticleSource = keyof typeof INFO;

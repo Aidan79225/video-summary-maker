@@ -15,7 +15,7 @@ const url = Astro.url;
 const date = url.searchParams.get('date')?.trim() ?? '';
 const speaker = url.searchParams.get('speaker')?.trim() ?? '';
 const rawSource = url.searchParams.get('source')?.trim() ?? '';
-// 只認得兩個來源代碼；亂打的當成沒篩，不要把 422 傳染給整頁
+// 只認得 lib/sources.ts 列出的來源代碼；亂打的當成沒篩，不要把 422 傳染給整頁
 const source = isSource(rawSource) ? rawSource : '';
 const q = url.searchParams.get('q')?.trim() ?? '';
 const party = url.searchParams.get('party')?.trim() ?? '';

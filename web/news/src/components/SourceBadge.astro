@@ -8,11 +8,14 @@ interface Props {
 
 const { source, class: extra = '' } = Astro.props;
 const label = sourceLabel(source);
-// 臺中用強調色、立法院用中性色：兩種來源並列時一眼分得出來，單一來源時也不吵。
+// 立法院用中性色、臺中用強調色、新北用紫色：幾種來源並列時一眼分得出來，單一來源時也不吵。
+// 新北刻意避開強調色（已給臺中）與 lib/parties.ts 的黨色（綠、藍、青、黃）——
+// 來源標籤就貼在政黨標籤旁邊，同色系會被看成同一類資訊。
 // 用 Record 而不是三元運算：之後加來源時，少配一個顏色會直接編譯失敗。
 const TONE: Record<ArticleSource, string> = {
   ly: 'border-line bg-bg-soft text-muted',
   tccc: 'border-accent/40 bg-accent-soft text-accent-ink',
+  ntpc: 'border-violet-500/40 bg-violet-500/10 text-violet-700 dark:text-violet-300',
 };
 const tone = TONE[toSource(source)];
 ---
