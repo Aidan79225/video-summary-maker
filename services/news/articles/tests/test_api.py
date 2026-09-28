@@ -34,10 +34,11 @@ BRIEF = {
 
 
 def _article(ivod_id="900001", speaker="範例一", day="2026-08-27", status=None,
-             slides=2, with_image=True, brief=None, source="ly"):
+             slides=2, with_image=True, brief=None, source="ly", party=""):
     article = Article.objects.create(
         ivod_id=ivod_id,
         source=source,
+        party=party,
         slug=f"{day}-{ivod_id}",
         title=f"{day} {speaker}－第11屆第5會期第23次會議",
         speaker=speaker,
@@ -326,3 +327,32 @@ class JointSpeakerTests(TestCase):
         items = {(i["name"], i["count"], i["latest_date"])
                  for i in self.client.get("/api/speakers").json()["items"]}
         self.assertEqual(items, {("謝志忠", 2, "2026-09-24"), ("黃守達", 1, "2026-09-24")})
+
+
+@override_settings(MEDIA_ROOT=MEDIA)
+class PartyApiTests(TestCase):
+    def test_cards_carry_the_party_and_can_be_filtered_by_it(self):
+        _article("1", speaker="甲", party="民主進步黨")
+        _article("2", speaker="乙", party="中國國民黨")
+        _article("tccc-3", speaker="丙、丁", source="tccc", party="中國國民黨、民主進步黨")
+        res = self.client.get("/api/articles?party=民主進步黨").json()
+        self.assertEqual({i["ivod_id"] for i in res["items"]}, {"1", "tccc-3"})
+        self.assertEqual(res["items"][0]["party"] in ("民主進步黨", "中國國民黨、民主進步黨"), True)
+
+    def test_parties_are_aggregated_per_party(self):
+        _article("1", speaker="甲", party="民主進步黨", day="2026-08-27")
+        _article("tccc-3", speaker="丙、丁", source="tccc", party="中國國民黨、民主進步黨", day="2026-09-24")
+        _article("4", speaker="無", party="")
+        items = {(i["name"], i["count"], i["latest_date"]) for i in self.client.get("/api/parties").json()["items"]}
+        self.assertEqual(items, {("民主進步黨", 2, "2026-09-24"), ("中國國民黨", 1, "2026-09-24")})
+        items = self.client.get("/api/parties?source=ly").json()["items"]
+        self.assertEqual([(i["name"], i["count"]) for i in items], [("民主進步黨", 1)])
+
+    def test_speakers_carry_their_current_party_and_district(self):
+        from articles.members_sync import MemberRecord, sync
+        sync([MemberRecord(source="ly", external_id="1", name="甲", party="民主進步黨", district="臺北市第一選舉區")])
+        _article("1", speaker="甲")
+        _article("2", speaker="乙")
+        items = {i["name"]: i for i in self.client.get("/api/speakers").json()["items"]}
+        self.assertEqual((items["甲"]["party"], items["甲"]["district"]), ("民主進步黨", "臺北市第一選舉區"))
+        self.assertEqual((items["乙"]["party"], items["乙"]["district"]), ("", ""))
