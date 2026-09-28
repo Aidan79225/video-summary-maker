@@ -1,10 +1,11 @@
-"""每日匯入：立法院與臺中市議會的清單 → GPU 摘要 → 文章。
+"""每日匯入：立法院、臺中市議會與新北市議會的清單 → GPU 摘要 → 文章。
 
     python manage.py ingest_ivod                # 預設抓昨天
     python manage.py ingest_ivod --date 2026-08-27
     python manage.py ingest_ivod --days 7       # 補跑最近七天
     python manage.py ingest_ivod --discover-only
     python manage.py ingest_ivod --source tccc --date 2026-09-24 --days 45 --discover-only
+    python manage.py ingest_ivod --source ntpc --date 2026-09-17 --days 400 --discover-only
 """
 from __future__ import annotations
 
@@ -18,11 +19,14 @@ from articles.gpu_client import GpuApiClient
 from articles.ingest import discover_days, process_pending, rerun_ready, retry_imageless
 from articles.ivod_source import IvodDailySource
 from articles.law_source import LawSource, LyApi
+from articles.members_sync import MembersUnavailable, NtpcMemberSource, sync
+from articles.models import ArticleSource, Membership
+from articles.ntpc_source import NtpcDailySource, NtpcRoster
 from articles.tccc_source import TcccDailySource
 
 
 class Command(BaseCommand):
-    help = "抓立法院與臺中市議會某一天的質詢片段，送去 GPU 主機產生詳細摘要"
+    help = "抓立法院、臺中市議會與新北市議會某一天的質詢片段，送去 GPU 主機產生詳細摘要"
 
     def add_arguments(self, parser) -> None:
         parser.add_argument("--date", help="YYYY-MM-DD，預設昨天")
@@ -30,9 +34,10 @@ class Command(BaseCommand):
         parser.add_argument("--limit", type=int, default=settings.INGEST_DAILY_LIMIT)
         parser.add_argument("--discover-only", action="store_true",
                             help="只登記，不送去產生摘要")
-        parser.add_argument("--source", choices=["ly", "tccc"],
-                            help="只查這個來源的清單（ly=立法院、tccc=臺中市議會）；"
-                                 "不給就兩個都查。只影響查清單，處理積壓不分來源。")
+        parser.add_argument("--source", choices=["ly", "tccc", "ntpc"],
+                            help="只查這個來源的清單（ly=立法院、tccc=臺中市議會、"
+                                 "ntpc=新北市議會）；不給就查所有啟用的來源。"
+                                 "只影響查清單，處理積壓不分來源。")
         parser.add_argument("--process-only", action="store_true",
                             help="不查立法院，只把待處理的送出去")
         parser.add_argument("--retry-imageless", action="store_true",
@@ -84,16 +89,34 @@ class Command(BaseCommand):
         self._report(report)
 
     def _sources(self, only: str | None) -> list:
-        """要查哪些來源。--source 明確指定時連 TCCC_ENABLED 都不看——
+        """要查哪些來源。--source 明確指定時連 TCCC_ENABLED／NTPC_ENABLED 都不看——
         使用者都指名要臺中了，再被環境變數擋掉只會讓人困惑。"""
         if only == "ly":
             return [IvodDailySource(settings.IVOD_API_BASE)]
         if only == "tccc":
             return [TcccDailySource(settings.TCCC_VOD_BASE)]
+        if only == "ntpc":
+            return [self._ntpc_source()]
         sources = [IvodDailySource(settings.IVOD_API_BASE)]
         if settings.TCCC_ENABLED:
             sources.append(TcccDailySource(settings.TCCC_VOD_BASE))
+        if settings.NTPC_ENABLED:
+            sources.append(self._ntpc_source())
         return sources
+
+    def _ntpc_source(self) -> NtpcDailySource:
+        """新北的講者規則要靠名冊（誰是議長、誰屬於哪個黨團）。名冊還是空的（第一次
+        部署、或排程還沒跑到週日的同步）就先同步一次；拿不到就用空名冊，只套用不需要
+        名冊的規則，下次再說。"""
+        if not Membership.objects.filter(source=ArticleSource.NTPC).exists():
+            self.stdout.write("新北市議會的名冊是空的，先同步一次…")
+            try:
+                report = sync(NtpcMemberSource(settings.NTPC_WEB_BASE).fetch())
+                self.stdout.write(f"新北市議會：{report}")
+            except MembersUnavailable as e:
+                self.stderr.write(f"  ! 新北市議會的名冊同步失敗，這次用空名冊：{e}")
+        return NtpcDailySource(settings.NTPC_VOD_BASE, roster=NtpcRoster.from_db(),
+                               include_mixed=settings.NTPC_INCLUDE_MIXED)
 
     def _days(self, options) -> list[date]:
         if options["date"]:

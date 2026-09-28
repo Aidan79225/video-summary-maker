@@ -53,8 +53,8 @@ class ArticleAdmin(admin.ModelAdmin):
 class MembershipInline(admin.TabularInline):
     model = Membership
     extra = 0
-    fields = ("source", "name", "party", "district", "term", "start_date", "end_date",
-              "needs_review")
+    fields = ("source", "name", "party", "district", "term", "role", "caucus", "start_date",
+              "end_date", "needs_review")
 
 
 @admin.register(Person)
@@ -93,8 +93,8 @@ class PersonAdmin(admin.ModelAdmin):
 
 @admin.register(Membership)
 class MembershipAdmin(admin.ModelAdmin):
-    list_display = ("name", "source", "party", "district", "term", "start_date", "end_date",
-                    "needs_review", "synced_at")
-    list_filter = ("source", "party", "needs_review", "term")
+    list_display = ("name", "source", "party", "district", "term", "role", "caucus",
+                    "start_date", "end_date", "needs_review", "synced_at")
+    list_filter = ("source", "party", "needs_review", "term", "role", "caucus")
     search_fields = ("name", "external_id", "person__name")
     autocomplete_fields = ("person",)

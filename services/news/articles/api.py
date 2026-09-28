@@ -14,7 +14,7 @@ api = NinjaAPI(title="議會質詢摘要 API", version="1.0", urls_namespace="ne
 
 # 來源代碼（Article.source）。宣告成 Literal，ninja 會把非法值擋成 422，
 # 而不是讓一個打錯的 ?source= 變成空清單或 500。
-SourceParam = Literal["ly", "tccc"]
+SourceParam = Literal["ly", "tccc", "ntpc"]
 
 _MAX_PAGE_SIZE = 50
 # 頁碼上限：SQLite 的 OFFSET 綁定超過 int64 會直接 500，而前端會把訪客

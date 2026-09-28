@@ -19,6 +19,25 @@ logger = logging.getLogger(__name__)
 DEFAULT_BACKFILL_DAYS = 3
 
 
+def sources_missing_members() -> list[str]:
+    """啟用中、但名單表裡還沒有任何一筆任期的來源。
+
+    原本只在整張表是空的時候才先同步：之後新加一個來源（例如新北）時，立法院與
+    臺中早就有資料，新來源的名冊就要等到週日才會有——新北的講者規則靠名冊判斷
+    議長與黨團，那一週的文章全都會用退化的規則登記。
+    """
+    from articles.models import ArticleSource, Membership
+
+    wanted = [ArticleSource.LY]
+    if settings.TCCC_ENABLED:
+        wanted.append(ArticleSource.TCCC)
+    if settings.NTPC_ENABLED:
+        wanted.append(ArticleSource.NTPC)
+    present = set(Membership.objects.filter(source__in=wanted)
+                  .values_list("source", flat=True).distinct())
+    return [str(source) for source in wanted if source not in present]
+
+
 class Command(BaseCommand):
     help = "每天固定時間自動匯入立法院當日的質詢摘要"
 
@@ -76,10 +95,13 @@ class Command(BaseCommand):
         # 跨過排程時間，那天的質詢就永遠不會被發現，而且沒有任何地方會報出
         # 這個洞。啟動時回補幾天很便宜——discover 每天只是一次 HTTP，而且
         # 整條流程以 ivod_id 為準做 upsert，重跑不會產生重複。
-        # 名單表還是空的（第一次部署）就先同步一次，否則要等到週日文章才有政黨
-        from articles.models import Membership
-        if not Membership.objects.exists():
-            self.stdout.write("議員名單是空的，先同步一次…")
+        # 任何一個啟用中的來源還沒有名單（第一次部署、或新開了一個來源）就先同步一次，
+        # 否則要等到週日文章才有政黨
+        from articles.models import ArticleSource
+        missing = sources_missing_members()
+        if missing:
+            labels = "、".join(ArticleSource(s).label for s in missing)
+            self.stdout.write(f"議員名單還沒有{labels}的資料，先同步一次…")
             sync_members_job()
 
         backfill = options["backfill_days"]

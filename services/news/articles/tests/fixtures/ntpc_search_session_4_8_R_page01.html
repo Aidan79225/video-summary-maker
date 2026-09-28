@@ -1,0 +1,893 @@
+
+<!DOCTYPE html>
+<html>
+<head>
+    <!-- meta tags -->
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <!-- keyword  -->
+    <meta name="robots" content="index, follow" />
+    <meta name="title" content='新北市議會 - 議事影音隨選視訊系統' />
+    <meta name="description" content='新北市議會 - 議事影音隨選視訊系統' />
+    <meta name="image" content='新北市議會 - 議事影音隨選視訊系統' />
+    <!-- Favicons -->
+    <link rel="icon" href="/VodCloudV2/images/favicon.ico">
+    <!-- fb  -->
+    <meta property="fb:app_id" content="" />
+    <meta property="og:title" content="新北市議會 - 議事影音隨選視訊系統" />
+    <meta property="og:description" content="新北市議會 - 議事影音隨選視訊系統" />
+    <meta property="og:url" content="" />
+    <meta property="og:type" content="website" />
+    <meta property="og:image" content="新北市議會 - 議事影音隨選視訊系統" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width" />
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <link href='https://fonts.googleapis.com/css?family=Titillium+Web' rel='stylesheet' type='text/css'>
+    <link href="/VodCloudV2/css/bootstrap.css" rel="stylesheet">
+    <link href="/VodCloudV2/css/bootstrap-theme.css" rel="stylesheet">
+    <link href="/VodCloudV2/css/bootstrap-table.css" rel="stylesheet">
+    <link href="/VodCloudV2/css/jquery-ui.css" rel="stylesheet" />
+    <link href="/VodCloudV2/css/fstdropdown.min.css" rel="stylesheet">
+    <!-- Latest compiled and minified JavaScript -->
+    <meta name="viewport" content="width=device-width" />
+    <title>新北市議會-大會、聯席會議及業務質詢</title>
+</head>
+<body>
+    <nav class="navbar navbar-default" style="background:url(/VodCloudV2/images/pic-title1.jpg) no-repeat; background-size cover; border-top 3px solid #9c2b2c;">
+        <div class="container-fluid">
+            <div class="navbar-header">
+                <!-- /Modal-top -->
+                <div style=" position:absolute; float:left; top:4px; left:4px;"><a href="#" data-toggle="modal" data-target="#myModal-top"><img src="/VodCloudV2/images/btn-menu-b.png"></a></div>
+                <!-- Modal -->
+                <div class="modal fade" id="myModal-top" tabindex="-1" role="dialog" aria-labelledby="myModalLabel">
+                    <div class="modal-dialog" role="document">
+                        <div class="modal-content">
+                            <div class="modal-body">
+                                <div class="container-fluid" style=" padding:0;">
+                                    <a href="/VodCloudV2/" class="list-group-item active" onclick="setQueryType('Index');">首頁-大會、聯席會議及業務質詢</a>
+                                    <a href="javascript: void(0)" data-toggle="modal" data-target="#myModal-search" class="list-group-item">影片檢索</a>
+                                    <a href="/VodCloudV2/VOD/Newest" class="list-group-item" onclick="setQueryType('Newest');">最新影片</a>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div><!-- /Modal -->
+                <!-- /Modal-top -->
+                <iframe src='/VodCloudV2/VOD/Dump' style="width:0px; height:0px;">
+                </iframe>
+                <a class="navbar-brand" href="#">
+                    <img alt="Brand" src="/VodCloudV2/images/logo_ttcc.png" class="pointer-events: none;" alt="新北市議會 - 議事影音隨選視訊系統" />
+                </a>
+                <span class="hidden-md-down" style="font-size:2rem; line-height: 1.1; display:inline-block; margin-top:26px; color:#9c2b2c; font-weight:bold;">
+                    議事影音隨選視訊系統
+                </span>
+                <h4 class=" hidden-md-down pull-right" style=" display:inline-block;margin-top:24px; color:#9c2b2c; font-weight:bold; padding-right:40px;">
+                    大會、聯席會議及業務質詢
+                    <div class="navadd" style="font-size:20px;font-weight:300;margin-top:5px">
+                        <a href="/VodCloudV2/" class="">大會、聯席會議及業務質詢</a>
+                        <a href="https://vod.ntp.gov.tw/ExamVOD/front/vod" class="ml-1">審查委員會議事影音</a>
+                    </div>
+                </h4>
+                <a href="/VodCloudV2/VOD/VodMenu?Application=NTP" style=" float:right; z-index:10; position:absolute; top:5px; right:70px; display:block; padding:2px 0px;"><img alt="Brand" src="/VodCloudV2/images/btn-portlink.png" alt="回首頁" /></a>
+                <!-- Modal-search -->
+                <a href="#" data-toggle="modal" data-target="#myModal-search" style=" float:right; z-index:10; position:absolute; top:32px; right:15px; display:block; padding:2px 0px; font-size:15px; line-height:16px;  " onclick="setQueryType('Search');">
+                    <img src="/VodCloudV2/images/btn-search.png" width="30" height="30">
+                </a>
+                <!-- Modal -->
+                <div class="modal fade" id="myModal-search" tabindex="-1" role="dialog" aria-labelledby="myModalLabel">
+                    <div class="modal-dialog" role="document">
+                        <div class="modal-content">
+                            <div class="modal-body">
+<form action="/VodCloudV2/VOD/Search" id="loginForm" method="post">                                    <input type="hidden" name="pageindex" value="1" />
+                                    <div class="panel panel-default">
+                                        <div class="page-header" style=" background:#E4EFFC; padding:10px; padding-bottom:5px; border-radius:5px; margin-bottom:10px;">
+                                            <h5>資料搜尋</h5>
+                                        </div>
+                                        <div class="panel-body">
+                                            <!-- 在Controller裡面把form生出來，但是QueryFrom又參照QueryRule.xml定義 -->
+                                            <!-- 在此簡化將現僅提供的欄位放入Action: QueryFrom-->
+<div class="panel-body">
+    <span>
+        <div class="form-group InputContainer " style="visibility :visible;" data-refencebame="">
+            <div class="" style=""></div>
+            <span class="" style="">
+                <input placeholder="屆" style="" type="text" data-alert="" data-validation="" name="MJ" class="form-control " value="04" data-refencevalidation="">
+                <span class="Label"></span>
+            </span>
+        </div>
+    </span>
+    <span>
+        <div class="form-group InputContainer " style="visibility :visible;" data-refencebame="">
+            <div class="" style=""></div>
+            <span class="" style="">
+                <input placeholder="次" style="" type="text" data-alert="" data-validation="" name="MP" class="form-control " value="08" data-refencevalidation="">
+                <span class="Label"></span>
+            </span>
+        </div>
+    </span>
+    <span>
+        <div class="form-group InputContainer " style="visibility :visible;font-size:21px;margin-top:7px" data-refencebame="">
+            <div class="" style=""></div>
+            <span class="" style="">
+                <select id="MType" name="MType" data-refencevalidation="" style="" class="form-control ">
+                    <option value="" >定期會及臨時會</option>
+                    <option value="R" selected=&quot;selected&quot;> 定期會</option>
+                    <option value="T" > 臨時會</option>
+                </select>
+                <h5></h5>
+                <span class="Label"></span>
+            </span>
+        </div>
+    </span>
+    <span>
+        <div class="form-group InputContainer " style="visibility :visible;" data-refencebame="">
+            <div class="" style=""></div>
+            <span class="" style="">
+                <div class="input-group">
+                    <input placeholder="開始日期" autocomplete="off" type="text" data-alert="" data-validation="" name="sMDate" style="z-index:9999" class="DatePicker form-control" value="" data-refencevalidation="" data-yearrange="2014:2034" data-inline="true" id="dp1706605799131">
+                    <span class="input-group-addon">~</span>
+                    <input placeholder="結束日期" autocomplete="off" type="text" data-alert="" data-validation="" name="eMDate" style="z-index:9999" class="DatePicker form-control" value="" data-refencevalidation="" data-yearrange="" data-inline="true" id="dp1706605799132">
+                </div>
+                <span class="Label"></span>
+            </span>
+        </div>
+    </span>
+    <span>
+        <div class="form-group InputContainer " style="visibility :visible;" data-refencebame="">
+            <div class="" style=""></div>
+            <span class="" style="">
+                <input placeholder="關鍵字" style="" type="text" data-alert="" data-validation="" name="Keyword" class="form-control " value="" data-refencevalidation="">
+                <span class="Label"></span>
+            </span>
+        </div>
+    </span>
+    <span>
+        <div class="form-group InputContainer " style="visibility :visible;margin-top:7px" data-refencebame="">
+            <div class="" style=""></div>
+            <span class="" style="">
+                <select name="cEPName" data-refencevalidation="" style="font-size:21px;" class="form-control fstdropdown-select">
+                    <option value="" selected=&quot;selected&quot;> 議員</option>
+</select>
+                <h5></h5>
+                <span class="Label"></span>
+            </span>
+        </div>
+    </span>
+    <span>
+        <div class="form-group InputContainer " style="visibility :visible;font-size:21px;margin-top:7px" data-refencebame="">
+            <div class="" style=""></div>
+            <span class="" style="">
+                <select name="Sort" data-refencevalidation="" style="" class="form-control ">
+                    <option value="MDate" selected=&quot;selected&quot;> 開會日期排序</option>
+                    <option value="cModifyTime" > 更新時間排序</option>
+                    <option value="TitleName" > 屆次會期排序</option>
+                </select>
+                <h5></h5>
+                <span class="Label"></span>
+            </span>
+        </div>
+    </span>
+</div>
+                                        </div>
+                                    </div>
+                                    <p>
+                                        <button id="assetQuery" type="button" form="loginForm" class="AssetSearch btn btn-default btn-lg btn-block">搜尋</button>
+                                    </p>
+</form>                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div><!-- /Modal -->
+            <!-- /Modal-search-->
+        </div>
+    </nav>
+    <!DOCTYPE html>
+<div style=" width:100%; display:block; overflow:hidden; padding:10px;  ">
+    <div class="row">
+        <div class="col-xs-12 ">
+            <div id="div_AssetList">
+                <div class="row" style="margin-top:10px;margin-left:10px;">
+                    <span class="fb24">第 04 屆;第 08 次;定期會;排序:開會日期;<span style="margin-left:70px;color:red">總筆數:146</span></span>
+                </div>
+                    <div class="row" style="margin-top:10px;">
+                            <div class="col-md-3 col-lg-2" style="display:block;">
+                                <a href=ViewDetailMetaData/a194d78a-b0c4-482b-9722-d62a4729e93d class="mov">
+                                    <div class="playicon" style=" padding:0px;">
+                                        <span style=" float:left; position:absolute;"><img src="/VodCloudV2/images/icon-play1.png" width="100%" height="auto" class="him"></span>
+                                        <img src='/VodCloudV2/VodStream/GetThumbnail?assetID=a194d78a-b0c4-482b-9722-d62a4729e93d' onerror="this.src='/VodCloudV2/images/default_thumb.jpg'" width="100%" height="auto" class="him">
+                                        <span class="timecode">00:02:43</span>
+                                    </div>
+                                </a>
+                                <h6 style="margin-top:-10px; margin-bottom:10px;">
+                                    <div class="">
+                                        <span class="f11" style="visibility :visible;" data-refencebame="">
+                                            <strong style="" class=""></strong>
+                                            <span class="" style="">
+                                                <span onclick="showTip(this,event)" type="button" class="control-label " data-tip="" style="">屆次會期：第4屆第8次定期會</span>
+                                                <span class="Label"></span>
+                                            </span>
+                                        </span>
+                                        <span class="f11_4 hovercard_in1" style="visibility :visible;" data-refencebame="">
+                                            <strong style="" class=""></strong>
+                                            <span class="" style="">
+                                                <span onclick="showTip(this,event)" type="button" class="control-label " data-tip="議　　程：報告事項" style="">議　　程：報告事項</span>
+                                                <span class="Label"></span>
+                                            </span>
+                                        </span>
+                                        <span class="f11_4 hovercard_in1" style="visibility :visible;" data-refencebame="">
+                                            <strong style="" class=""></strong>
+                                            <span class="" style="">
+                                                <span onclick="showTip(this,event)" type="button" class="control-label " data-tip="發言議員：李宇翔,陳鴻源,鄭宇恩" style="">發言議員：李宇翔,陳鴻源,鄭宇恩</span>
+                                                <span class="Label"></span>
+                                            </span>
+                                        </span>
+                                        <span class="f11" style="visibility :visible;" data-refencebame="">
+                                            <strong style="" class=""></strong>
+                                            <span class="" style="">
+                                                <span onclick="showTip(this,event)" type="button" class="control-label " data-tip="" style="">開會日期：115-09-17</span>
+                                                <span class="Label"></span>
+                                            </span>
+                                        </span>
+                                        <span class="f11" style="visibility :visible;" data-refencebame="">
+                                            <strong style="" class=""></strong>
+                                            <span class="" style="">
+                                                <span onclick="showTip(this,event)" type="button" class="control-label " data-tip="" style="font-size: 11px; line-height: 12px; display: block; width: 100%;" font-size:="" 11px;="" line-height:="" 12px;="" display:="" block;="" width:="" 100%;="">開始時間：15:06:35</span>
+                                                <span class="Label"></span>
+                                            </span>
+                                        </span>
+                                        <span class="f11" style="visibility :visible;" data-refencebame="">
+                                            <strong style="" class=""></strong>
+                                            <span class="" style="">
+                                                <span onclick="showTip(this,event)" type="button" class="control-label " data-tip="" style="font-size: 11px; line-height: 12px; display: block; width: 100%;" font-size:="" 11px;="" line-height:="" 12px;="" display:="" block;="" width:="" 100%;="">結束時間：15:09:19</span>
+                                                <span class="Label"></span>
+                                            </span>
+                                        </span>
+                                    </div>
+                                </h6>
+                            </div>
+                            <div class="col-md-3 col-lg-2" style="display:block;">
+                                <a href=ViewDetailMetaData/a8e416e9-c390-45eb-84d7-aa8a9c89fc6a class="mov">
+                                    <div class="playicon" style=" padding:0px;">
+                                        <span style=" float:left; position:absolute;"><img src="/VodCloudV2/images/icon-play1.png" width="100%" height="auto" class="him"></span>
+                                        <img src='/VodCloudV2/VodStream/GetThumbnail?assetID=a8e416e9-c390-45eb-84d7-aa8a9c89fc6a' onerror="this.src='/VodCloudV2/images/default_thumb.jpg'" width="100%" height="auto" class="him">
+                                        <span class="timecode">00:55:28</span>
+                                    </div>
+                                </a>
+                                <h6 style="margin-top:-10px; margin-bottom:10px;">
+                                    <div class="">
+                                        <span class="f11" style="visibility :visible;" data-refencebame="">
+                                            <strong style="" class=""></strong>
+                                            <span class="" style="">
+                                                <span onclick="showTip(this,event)" type="button" class="control-label " data-tip="" style="">屆次會期：第4屆第8次定期會</span>
+                                                <span class="Label"></span>
+                                            </span>
+                                        </span>
+                                        <span class="f11_4 hovercard_in1" style="visibility :visible;" data-refencebame="">
+                                            <strong style="" class=""></strong>
+                                            <span class="" style="">
+                                                <span onclick="showTip(this,event)" type="button" class="control-label " data-tip="議　　程：市長報告116年度總預算編製之經過" style="">議　　程：市長報告116年度總預算編製之經過</span>
+                                                <span class="Label"></span>
+                                            </span>
+                                        </span>
+                                        <span class="f11_4 hovercard_in1" style="visibility :visible;" data-refencebame="">
+                                            <strong style="" class=""></strong>
+                                            <span class="" style="">
+                                                <span onclick="showTip(this,event)" type="button" class="control-label " data-tip="發言議員：林國春,洪佳君,陳儀君,陳鴻源,黃心華,楊春妹" style="">發言議員：林國春,洪佳君,陳儀君,陳鴻源,黃心華,楊春妹</span>
+                                                <span class="Label"></span>
+                                            </span>
+                                        </span>
+                                        <span class="f11" style="visibility :visible;" data-refencebame="">
+                                            <strong style="" class=""></strong>
+                                            <span class="" style="">
+                                                <span onclick="showTip(this,event)" type="button" class="control-label " data-tip="" style="">開會日期：115-09-17</span>
+                                                <span class="Label"></span>
+                                            </span>
+                                        </span>
+                                        <span class="f11" style="visibility :visible;" data-refencebame="">
+                                            <strong style="" class=""></strong>
+                                            <span class="" style="">
+                                                <span onclick="showTip(this,event)" type="button" class="control-label " data-tip="" style="font-size: 11px; line-height: 12px; display: block; width: 100%;" font-size:="" 11px;="" line-height:="" 12px;="" display:="" block;="" width:="" 100%;="">開始時間：15:09:18</span>
+                                                <span class="Label"></span>
+                                            </span>
+                                        </span>
+                                        <span class="f11" style="visibility :visible;" data-refencebame="">
+                                            <strong style="" class=""></strong>
+                                            <span class="" style="">
+                                                <span onclick="showTip(this,event)" type="button" class="control-label " data-tip="" style="font-size: 11px; line-height: 12px; display: block; width: 100%;" font-size:="" 11px;="" line-height:="" 12px;="" display:="" block;="" width:="" 100%;="">結束時間：16:04:46</span>
+                                                <span class="Label"></span>
+                                            </span>
+                                        </span>
+                                    </div>
+                                </h6>
+                            </div>
+                            <div class="col-md-3 col-lg-2" style="display:block;">
+                                <a href=ViewDetailMetaData/84dc4706-2cf0-4735-8cd5-03a5ff0584a8 class="mov">
+                                    <div class="playicon" style=" padding:0px;">
+                                        <span style=" float:left; position:absolute;"><img src="/VodCloudV2/images/icon-play1.png" width="100%" height="auto" class="him"></span>
+                                        <img src='/VodCloudV2/VodStream/GetThumbnail?assetID=84dc4706-2cf0-4735-8cd5-03a5ff0584a8' onerror="this.src='/VodCloudV2/images/default_thumb.jpg'" width="100%" height="auto" class="him">
+                                        <span class="timecode">00:37:33</span>
+                                    </div>
+                                </a>
+                                <h6 style="margin-top:-10px; margin-bottom:10px;">
+                                    <div class="">
+                                        <span class="f11" style="visibility :visible;" data-refencebame="">
+                                            <strong style="" class=""></strong>
+                                            <span class="" style="">
+                                                <span onclick="showTip(this,event)" type="button" class="control-label " data-tip="" style="">屆次會期：第4屆第8次定期會</span>
+                                                <span class="Label"></span>
+                                            </span>
+                                        </span>
+                                        <span class="f11_4 hovercard_in1" style="visibility :visible;" data-refencebame="">
+                                            <strong style="" class=""></strong>
+                                            <span class="" style="">
+                                                <span onclick="showTip(this,event)" type="button" class="control-label " data-tip="議　　程：市長報告116年度總預算編製之經過" style="">議　　程：市長報告116年度總預算編製之經過</span>
+                                                <span class="Label"></span>
+                                            </span>
+                                        </span>
+                                        <span class="f11_4 hovercard_in1" style="visibility :visible;" data-refencebame="">
+                                            <strong style="" class=""></strong>
+                                            <span class="" style="">
+                                                <span onclick="showTip(this,event)" type="button" class="control-label " data-tip="發言議員：石一佑,李宇翔,李倩萍,李翁月娥,陳世軒,陳鴻源,黃淑君,鄭宇恩" style="">發言議員：石一佑,李宇翔,李倩萍,李翁月娥,陳世軒,陳鴻源,黃淑君,鄭宇恩</span>
+                                                <span class="Label"></span>
+                                            </span>
+                                        </span>
+                                        <span class="f11" style="visibility :visible;" data-refencebame="">
+                                            <strong style="" class=""></strong>
+                                            <span class="" style="">
+                                                <span onclick="showTip(this,event)" type="button" class="control-label " data-tip="" style="">開會日期：115-09-17</span>
+                                                <span class="Label"></span>
+                                            </span>
+                                        </span>
+                                        <span class="f11" style="visibility :visible;" data-refencebame="">
+                                            <strong style="" class=""></strong>
+                                            <span class="" style="">
+                                                <span onclick="showTip(this,event)" type="button" class="control-label " data-tip="" style="font-size: 11px; line-height: 12px; display: block; width: 100%;" font-size:="" 11px;="" line-height:="" 12px;="" display:="" block;="" width:="" 100%;="">開始時間：16:31:21</span>
+                                                <span class="Label"></span>
+                                            </span>
+                                        </span>
+                                        <span class="f11" style="visibility :visible;" data-refencebame="">
+                                            <strong style="" class=""></strong>
+                                            <span class="" style="">
+                                                <span onclick="showTip(this,event)" type="button" class="control-label " data-tip="" style="font-size: 11px; line-height: 12px; display: block; width: 100%;" font-size:="" 11px;="" line-height:="" 12px;="" display:="" block;="" width:="" 100%;="">結束時間：17:08:55</span>
+                                                <span class="Label"></span>
+                                            </span>
+                                        </span>
+                                    </div>
+                                </h6>
+                            </div>
+                            <div class="col-md-3 col-lg-2" style="display:block;">
+                                <a href=ViewDetailMetaData/733c957d-e910-48e4-a959-061863592dbe class="mov">
+                                    <div class="playicon" style=" padding:0px;">
+                                        <span style=" float:left; position:absolute;"><img src="/VodCloudV2/images/icon-play1.png" width="100%" height="auto" class="him"></span>
+                                        <img src='/VodCloudV2/VodStream/GetThumbnail?assetID=733c957d-e910-48e4-a959-061863592dbe' onerror="this.src='/VodCloudV2/images/default_thumb.jpg'" width="100%" height="auto" class="him">
+                                        <span class="timecode">00:01:53</span>
+                                    </div>
+                                </a>
+                                <h6 style="margin-top:-10px; margin-bottom:10px;">
+                                    <div class="">
+                                        <span class="f11" style="visibility :visible;" data-refencebame="">
+                                            <strong style="" class=""></strong>
+                                            <span class="" style="">
+                                                <span onclick="showTip(this,event)" type="button" class="control-label " data-tip="" style="">屆次會期：第4屆第8次定期會</span>
+                                                <span class="Label"></span>
+                                            </span>
+                                        </span>
+                                        <span class="f11_4 hovercard_in1" style="visibility :visible;" data-refencebame="">
+                                            <strong style="" class=""></strong>
+                                            <span class="" style="">
+                                                <span onclick="showTip(this,event)" type="button" class="control-label " data-tip="議　　程：三讀議案第一讀會" style="">議　　程：三讀議案第一讀會</span>
+                                                <span class="Label"></span>
+                                            </span>
+                                        </span>
+                                        <span class="f11_4 hovercard_in1" style="visibility :visible;" data-refencebame="">
+                                            <strong style="" class=""></strong>
+                                            <span class="" style="">
+                                                <span onclick="showTip(this,event)" type="button" class="control-label " data-tip="發言議員：陳鴻源" style="">發言議員：陳鴻源</span>
+                                                <span class="Label"></span>
+                                            </span>
+                                        </span>
+                                        <span class="f11" style="visibility :visible;" data-refencebame="">
+                                            <strong style="" class=""></strong>
+                                            <span class="" style="">
+                                                <span onclick="showTip(this,event)" type="button" class="control-label " data-tip="" style="">開會日期：115-09-17</span>
+                                                <span class="Label"></span>
+                                            </span>
+                                        </span>
+                                        <span class="f11" style="visibility :visible;" data-refencebame="">
+                                            <strong style="" class=""></strong>
+                                            <span class="" style="">
+                                                <span onclick="showTip(this,event)" type="button" class="control-label " data-tip="" style="font-size: 11px; line-height: 12px; display: block; width: 100%;" font-size:="" 11px;="" line-height:="" 12px;="" display:="" block;="" width:="" 100%;="">開始時間：17:12:02</span>
+                                                <span class="Label"></span>
+                                            </span>
+                                        </span>
+                                        <span class="f11" style="visibility :visible;" data-refencebame="">
+                                            <strong style="" class=""></strong>
+                                            <span class="" style="">
+                                                <span onclick="showTip(this,event)" type="button" class="control-label " data-tip="" style="font-size: 11px; line-height: 12px; display: block; width: 100%;" font-size:="" 11px;="" line-height:="" 12px;="" display:="" block;="" width:="" 100%;="">結束時間：17:13:56</span>
+                                                <span class="Label"></span>
+                                            </span>
+                                        </span>
+                                    </div>
+                                </h6>
+                            </div>
+                            <div class="col-md-3 col-lg-2" style="display:block;">
+                                <a href=ViewDetailMetaData/594f31a1-069b-4066-9c75-fbc125dd4603 class="mov">
+                                    <div class="playicon" style=" padding:0px;">
+                                        <span style=" float:left; position:absolute;"><img src="/VodCloudV2/images/icon-play1.png" width="100%" height="auto" class="him"></span>
+                                        <img src='/VodCloudV2/VodStream/GetThumbnail?assetID=594f31a1-069b-4066-9c75-fbc125dd4603' onerror="this.src='/VodCloudV2/images/default_thumb.jpg'" width="100%" height="auto" class="him">
+                                        <span class="timecode">00:00:21</span>
+                                    </div>
+                                </a>
+                                <h6 style="margin-top:-10px; margin-bottom:10px;">
+                                    <div class="">
+                                        <span class="f11" style="visibility :visible;" data-refencebame="">
+                                            <strong style="" class=""></strong>
+                                            <span class="" style="">
+                                                <span onclick="showTip(this,event)" type="button" class="control-label " data-tip="" style="">屆次會期：第4屆第8次定期會</span>
+                                                <span class="Label"></span>
+                                            </span>
+                                        </span>
+                                        <span class="f11_4 hovercard_in1" style="visibility :visible;" data-refencebame="">
+                                            <strong style="" class=""></strong>
+                                            <span class="" style="">
+                                                <span onclick="showTip(this,event)" type="button" class="control-label " data-tip="議　　程：市政總質詢-報告事項" style="">議　　程：市政總質詢-報告事項</span>
+                                                <span class="Label"></span>
+                                            </span>
+                                        </span>
+                                        <span class="f11_4 hovercard_in1" style="visibility :visible;" data-refencebame="">
+                                            <strong style="" class=""></strong>
+                                            <span class="" style="">
+                                                <span onclick="showTip(this,event)" type="button" class="control-label " data-tip="發言議員：陳鴻源" style="">發言議員：陳鴻源</span>
+                                                <span class="Label"></span>
+                                            </span>
+                                        </span>
+                                        <span class="f11" style="visibility :visible;" data-refencebame="">
+                                            <strong style="" class=""></strong>
+                                            <span class="" style="">
+                                                <span onclick="showTip(this,event)" type="button" class="control-label " data-tip="" style="">開會日期：115-09-16</span>
+                                                <span class="Label"></span>
+                                            </span>
+                                        </span>
+                                        <span class="f11" style="visibility :visible;" data-refencebame="">
+                                            <strong style="" class=""></strong>
+                                            <span class="" style="">
+                                                <span onclick="showTip(this,event)" type="button" class="control-label " data-tip="" style="font-size: 11px; line-height: 12px; display: block; width: 100%;" font-size:="" 11px;="" line-height:="" 12px;="" display:="" block;="" width:="" 100%;="">開始時間：09:59:51</span>
+                                                <span class="Label"></span>
+                                            </span>
+                                        </span>
+                                        <span class="f11" style="visibility :visible;" data-refencebame="">
+                                            <strong style="" class=""></strong>
+                                            <span class="" style="">
+                                                <span onclick="showTip(this,event)" type="button" class="control-label " data-tip="" style="font-size: 11px; line-height: 12px; display: block; width: 100%;" font-size:="" 11px;="" line-height:="" 12px;="" display:="" block;="" width:="" 100%;="">結束時間：10:00:13</span>
+                                                <span class="Label"></span>
+                                            </span>
+                                        </span>
+                                    </div>
+                                </h6>
+                            </div>
+                            <div class="col-md-3 col-lg-2" style="display:block;">
+                                <a href=ViewDetailMetaData/ebc80ece-7491-4288-be73-7c59f6b4815c class="mov">
+                                    <div class="playicon" style=" padding:0px;">
+                                        <span style=" float:left; position:absolute;"><img src="/VodCloudV2/images/icon-play1.png" width="100%" height="auto" class="him"></span>
+                                        <img src='/VodCloudV2/VodStream/GetThumbnail?assetID=ebc80ece-7491-4288-be73-7c59f6b4815c' onerror="this.src='/VodCloudV2/images/default_thumb.jpg'" width="100%" height="auto" class="him">
+                                        <span class="timecode">01:59:26</span>
+                                    </div>
+                                </a>
+                                <h6 style="margin-top:-10px; margin-bottom:10px;">
+                                    <div class="">
+                                        <span class="f11" style="visibility :visible;" data-refencebame="">
+                                            <strong style="" class=""></strong>
+                                            <span class="" style="">
+                                                <span onclick="showTip(this,event)" type="button" class="control-label " data-tip="" style="">屆次會期：第4屆第8次定期會</span>
+                                                <span class="Label"></span>
+                                            </span>
+                                        </span>
+                                        <span class="f11_4 hovercard_in1" style="visibility :visible;" data-refencebame="">
+                                            <strong style="" class=""></strong>
+                                            <span class="" style="">
+                                                <span onclick="showTip(this,event)" type="button" class="control-label " data-tip="議　　程：市政總質詢" style="">議　　程：市政總質詢</span>
+                                                <span class="Label"></span>
+                                            </span>
+                                        </span>
+                                        <span class="f11_4 hovercard_in1" style="visibility :visible;" data-refencebame="">
+                                            <strong style="" class=""></strong>
+                                            <span class="" style="">
+                                                <span onclick="showTip(this,event)" type="button" class="control-label " data-tip="發言議員：周雅玲,林裔綺,張嘉玲,許昭興,陳鴻源,彭佳芸,廖宜琨,鄭宇恩,鍾宏仁" style="">發言議員：周雅玲,林裔綺,張嘉玲,許昭興,陳鴻源,彭佳芸,廖宜琨,鄭宇恩,鍾宏仁</span>
+                                                <span class="Label"></span>
+                                            </span>
+                                        </span>
+                                        <span class="f11" style="visibility :visible;" data-refencebame="">
+                                            <strong style="" class=""></strong>
+                                            <span class="" style="">
+                                                <span onclick="showTip(this,event)" type="button" class="control-label " data-tip="" style="">開會日期：115-09-16</span>
+                                                <span class="Label"></span>
+                                            </span>
+                                        </span>
+                                        <span class="f11" style="visibility :visible;" data-refencebame="">
+                                            <strong style="" class=""></strong>
+                                            <span class="" style="">
+                                                <span onclick="showTip(this,event)" type="button" class="control-label " data-tip="" style="font-size: 11px; line-height: 12px; display: block; width: 100%;" font-size:="" 11px;="" line-height:="" 12px;="" display:="" block;="" width:="" 100%;="">開始時間：10:00:12</span>
+                                                <span class="Label"></span>
+                                            </span>
+                                        </span>
+                                        <span class="f11" style="visibility :visible;" data-refencebame="">
+                                            <strong style="" class=""></strong>
+                                            <span class="" style="">
+                                                <span onclick="showTip(this,event)" type="button" class="control-label " data-tip="" style="font-size: 11px; line-height: 12px; display: block; width: 100%;" font-size:="" 11px;="" line-height:="" 12px;="" display:="" block;="" width:="" 100%;="">結束時間：11:59:39</span>
+                                                <span class="Label"></span>
+                                            </span>
+                                        </span>
+                                    </div>
+                                </h6>
+                            </div>
+                            <div class="col-md-3 col-lg-2" style="display:block;">
+                                <a href=ViewDetailMetaData/4d143c92-f66b-46eb-bd52-6cbf7657165b class="mov">
+                                    <div class="playicon" style=" padding:0px;">
+                                        <span style=" float:left; position:absolute;"><img src="/VodCloudV2/images/icon-play1.png" width="100%" height="auto" class="him"></span>
+                                        <img src='/VodCloudV2/VodStream/GetThumbnail?assetID=4d143c92-f66b-46eb-bd52-6cbf7657165b' onerror="this.src='/VodCloudV2/images/default_thumb.jpg'" width="100%" height="auto" class="him">
+                                        <span class="timecode">01:00:10</span>
+                                    </div>
+                                </a>
+                                <h6 style="margin-top:-10px; margin-bottom:10px;">
+                                    <div class="">
+                                        <span class="f11" style="visibility :visible;" data-refencebame="">
+                                            <strong style="" class=""></strong>
+                                            <span class="" style="">
+                                                <span onclick="showTip(this,event)" type="button" class="control-label " data-tip="" style="">屆次會期：第4屆第8次定期會</span>
+                                                <span class="Label"></span>
+                                            </span>
+                                        </span>
+                                        <span class="f11_4 hovercard_in1" style="visibility :visible;" data-refencebame="">
+                                            <strong style="" class=""></strong>
+                                            <span class="" style="">
+                                                <span onclick="showTip(this,event)" type="button" class="control-label " data-tip="議　　程：市政總質詢" style="">議　　程：市政總質詢</span>
+                                                <span class="Label"></span>
+                                            </span>
+                                        </span>
+                                        <span class="f11_4 hovercard_in1" style="visibility :visible;" data-refencebame="">
+                                            <strong style="" class=""></strong>
+                                            <span class="" style="">
+                                                <span onclick="showTip(this,event)" type="button" class="control-label " data-tip="發言議員：林裔綺,許昭興,陳鴻源" style="">發言議員：林裔綺,許昭興,陳鴻源</span>
+                                                <span class="Label"></span>
+                                            </span>
+                                        </span>
+                                        <span class="f11" style="visibility :visible;" data-refencebame="">
+                                            <strong style="" class=""></strong>
+                                            <span class="" style="">
+                                                <span onclick="showTip(this,event)" type="button" class="control-label " data-tip="" style="">開會日期：115-09-16</span>
+                                                <span class="Label"></span>
+                                            </span>
+                                        </span>
+                                        <span class="f11" style="visibility :visible;" data-refencebame="">
+                                            <strong style="" class=""></strong>
+                                            <span class="" style="">
+                                                <span onclick="showTip(this,event)" type="button" class="control-label " data-tip="" style="font-size: 11px; line-height: 12px; display: block; width: 100%;" font-size:="" 11px;="" line-height:="" 12px;="" display:="" block;="" width:="" 100%;="">開始時間：13:58:11</span>
+                                                <span class="Label"></span>
+                                            </span>
+                                        </span>
+                                        <span class="f11" style="visibility :visible;" data-refencebame="">
+                                            <strong style="" class=""></strong>
+                                            <span class="" style="">
+                                                <span onclick="showTip(this,event)" type="button" class="control-label " data-tip="" style="font-size: 11px; line-height: 12px; display: block; width: 100%;" font-size:="" 11px;="" line-height:="" 12px;="" display:="" block;="" width:="" 100%;="">結束時間：14:58:21</span>
+                                                <span class="Label"></span>
+                                            </span>
+                                        </span>
+                                    </div>
+                                </h6>
+                            </div>
+                            <div class="col-md-3 col-lg-2" style="display:block;">
+                                <a href=ViewDetailMetaData/d34599bb-bb71-46fa-9829-3959ce58b7c6 class="mov">
+                                    <div class="playicon" style=" padding:0px;">
+                                        <span style=" float:left; position:absolute;"><img src="/VodCloudV2/images/icon-play1.png" width="100%" height="auto" class="him"></span>
+                                        <img src='/VodCloudV2/VodStream/GetThumbnail?assetID=d34599bb-bb71-46fa-9829-3959ce58b7c6' onerror="this.src='/VodCloudV2/images/default_thumb.jpg'" width="100%" height="auto" class="him">
+                                        <span class="timecode">00:00:34</span>
+                                    </div>
+                                </a>
+                                <h6 style="margin-top:-10px; margin-bottom:10px;">
+                                    <div class="">
+                                        <span class="f11" style="visibility :visible;" data-refencebame="">
+                                            <strong style="" class=""></strong>
+                                            <span class="" style="">
+                                                <span onclick="showTip(this,event)" type="button" class="control-label " data-tip="" style="">屆次會期：第4屆第8次定期會</span>
+                                                <span class="Label"></span>
+                                            </span>
+                                        </span>
+                                        <span class="f11_4 hovercard_in1" style="visibility :visible;" data-refencebame="">
+                                            <strong style="" class=""></strong>
+                                            <span class="" style="">
+                                                <span onclick="showTip(this,event)" type="button" class="control-label " data-tip="議　　程：市政總質詢-報告事項" style="">議　　程：市政總質詢-報告事項</span>
+                                                <span class="Label"></span>
+                                            </span>
+                                        </span>
+                                        <span class="f11_4 hovercard_in1" style="visibility :visible;" data-refencebame="">
+                                            <strong style="" class=""></strong>
+                                            <span class="" style="">
+                                                <span onclick="showTip(this,event)" type="button" class="control-label " data-tip="發言議員：陳鴻源" style="">發言議員：陳鴻源</span>
+                                                <span class="Label"></span>
+                                            </span>
+                                        </span>
+                                        <span class="f11" style="visibility :visible;" data-refencebame="">
+                                            <strong style="" class=""></strong>
+                                            <span class="" style="">
+                                                <span onclick="showTip(this,event)" type="button" class="control-label " data-tip="" style="">開會日期：115-09-15</span>
+                                                <span class="Label"></span>
+                                            </span>
+                                        </span>
+                                        <span class="f11" style="visibility :visible;" data-refencebame="">
+                                            <strong style="" class=""></strong>
+                                            <span class="" style="">
+                                                <span onclick="showTip(this,event)" type="button" class="control-label " data-tip="" style="font-size: 11px; line-height: 12px; display: block; width: 100%;" font-size:="" 11px;="" line-height:="" 12px;="" display:="" block;="" width:="" 100%;="">開始時間：09:48:59</span>
+                                                <span class="Label"></span>
+                                            </span>
+                                        </span>
+                                        <span class="f11" style="visibility :visible;" data-refencebame="">
+                                            <strong style="" class=""></strong>
+                                            <span class="" style="">
+                                                <span onclick="showTip(this,event)" type="button" class="control-label " data-tip="" style="font-size: 11px; line-height: 12px; display: block; width: 100%;" font-size:="" 11px;="" line-height:="" 12px;="" display:="" block;="" width:="" 100%;="">結束時間：09:49:34</span>
+                                                <span class="Label"></span>
+                                            </span>
+                                        </span>
+                                    </div>
+                                </h6>
+                            </div>
+                            <div class="col-md-3 col-lg-2" style="display:block;">
+                                <a href=ViewDetailMetaData/00926153-64c5-4a25-a411-57e8d2b49ec3 class="mov">
+                                    <div class="playicon" style=" padding:0px;">
+                                        <span style=" float:left; position:absolute;"><img src="/VodCloudV2/images/icon-play1.png" width="100%" height="auto" class="him"></span>
+                                        <img src='/VodCloudV2/VodStream/GetThumbnail?assetID=00926153-64c5-4a25-a411-57e8d2b49ec3' onerror="this.src='/VodCloudV2/images/default_thumb.jpg'" width="100%" height="auto" class="him">
+                                        <span class="timecode">02:20:37</span>
+                                    </div>
+                                </a>
+                                <h6 style="margin-top:-10px; margin-bottom:10px;">
+                                    <div class="">
+                                        <span class="f11" style="visibility :visible;" data-refencebame="">
+                                            <strong style="" class=""></strong>
+                                            <span class="" style="">
+                                                <span onclick="showTip(this,event)" type="button" class="control-label " data-tip="" style="">屆次會期：第4屆第8次定期會</span>
+                                                <span class="Label"></span>
+                                            </span>
+                                        </span>
+                                        <span class="f11_4 hovercard_in1" style="visibility :visible;" data-refencebame="">
+                                            <strong style="" class=""></strong>
+                                            <span class="" style="">
+                                                <span onclick="showTip(this,event)" type="button" class="control-label " data-tip="議　　程：市政總質詢" style="">議　　程：市政總質詢</span>
+                                                <span class="Label"></span>
+                                            </span>
+                                        </span>
+                                        <span class="f11_4 hovercard_in1" style="visibility :visible;" data-refencebame="">
+                                            <strong style="" class=""></strong>
+                                            <span class="" style="">
+                                                <span onclick="showTip(this,event)" type="button" class="control-label " data-tip="發言議員：周雅玲,張嘉玲,陳鴻源,彭佳芸,廖宜琨,鄭宇恩,鍾宏仁" style="">發言議員：周雅玲,張嘉玲,陳鴻源,彭佳芸,廖宜琨,鄭宇恩,鍾宏仁</span>
+                                                <span class="Label"></span>
+                                            </span>
+                                        </span>
+                                        <span class="f11" style="visibility :visible;" data-refencebame="">
+                                            <strong style="" class=""></strong>
+                                            <span class="" style="">
+                                                <span onclick="showTip(this,event)" type="button" class="control-label " data-tip="" style="">開會日期：115-09-15</span>
+                                                <span class="Label"></span>
+                                            </span>
+                                        </span>
+                                        <span class="f11" style="visibility :visible;" data-refencebame="">
+                                            <strong style="" class=""></strong>
+                                            <span class="" style="">
+                                                <span onclick="showTip(this,event)" type="button" class="control-label " data-tip="" style="font-size: 11px; line-height: 12px; display: block; width: 100%;" font-size:="" 11px;="" line-height:="" 12px;="" display:="" block;="" width:="" 100%;="">開始時間：09:49:32</span>
+                                                <span class="Label"></span>
+                                            </span>
+                                        </span>
+                                        <span class="f11" style="visibility :visible;" data-refencebame="">
+                                            <strong style="" class=""></strong>
+                                            <span class="" style="">
+                                                <span onclick="showTip(this,event)" type="button" class="control-label " data-tip="" style="font-size: 11px; line-height: 12px; display: block; width: 100%;" font-size:="" 11px;="" line-height:="" 12px;="" display:="" block;="" width:="" 100%;="">結束時間：12:10:10</span>
+                                                <span class="Label"></span>
+                                            </span>
+                                        </span>
+                                    </div>
+                                </h6>
+                            </div>
+                            <div class="col-md-3 col-lg-2" style="display:block;">
+                                <a href=ViewDetailMetaData/afee22d7-03ae-41fd-93b0-13356d722d47 class="mov">
+                                    <div class="playicon" style=" padding:0px;">
+                                        <span style=" float:left; position:absolute;"><img src="/VodCloudV2/images/icon-play1.png" width="100%" height="auto" class="him"></span>
+                                        <img src='/VodCloudV2/VodStream/GetThumbnail?assetID=afee22d7-03ae-41fd-93b0-13356d722d47' onerror="this.src='/VodCloudV2/images/default_thumb.jpg'" width="100%" height="auto" class="him">
+                                        <span class="timecode">02:00:37</span>
+                                    </div>
+                                </a>
+                                <h6 style="margin-top:-10px; margin-bottom:10px;">
+                                    <div class="">
+                                        <span class="f11" style="visibility :visible;" data-refencebame="">
+                                            <strong style="" class=""></strong>
+                                            <span class="" style="">
+                                                <span onclick="showTip(this,event)" type="button" class="control-label " data-tip="" style="">屆次會期：第4屆第8次定期會</span>
+                                                <span class="Label"></span>
+                                            </span>
+                                        </span>
+                                        <span class="f11_4 hovercard_in1" style="visibility :visible;" data-refencebame="">
+                                            <strong style="" class=""></strong>
+                                            <span class="" style="">
+                                                <span onclick="showTip(this,event)" type="button" class="control-label " data-tip="議　　程：市政總質詢" style="">議　　程：市政總質詢</span>
+                                                <span class="Label"></span>
+                                            </span>
+                                        </span>
+                                        <span class="f11_4 hovercard_in1" style="visibility :visible;" data-refencebame="">
+                                            <strong style="" class=""></strong>
+                                            <span class="" style="">
+                                                <span onclick="showTip(this,event)" type="button" class="control-label " data-tip="發言議員：周雅玲,張嘉玲,陳鴻源,鍾宏仁" style="">發言議員：周雅玲,張嘉玲,陳鴻源,鍾宏仁</span>
+                                                <span class="Label"></span>
+                                            </span>
+                                        </span>
+                                        <span class="f11" style="visibility :visible;" data-refencebame="">
+                                            <strong style="" class=""></strong>
+                                            <span class="" style="">
+                                                <span onclick="showTip(this,event)" type="button" class="control-label " data-tip="" style="">開會日期：115-09-15</span>
+                                                <span class="Label"></span>
+                                            </span>
+                                        </span>
+                                        <span class="f11" style="visibility :visible;" data-refencebame="">
+                                            <strong style="" class=""></strong>
+                                            <span class="" style="">
+                                                <span onclick="showTip(this,event)" type="button" class="control-label " data-tip="" style="font-size: 11px; line-height: 12px; display: block; width: 100%;" font-size:="" 11px;="" line-height:="" 12px;="" display:="" block;="" width:="" 100%;="">開始時間：13:59:54</span>
+                                                <span class="Label"></span>
+                                            </span>
+                                        </span>
+                                        <span class="f11" style="visibility :visible;" data-refencebame="">
+                                            <strong style="" class=""></strong>
+                                            <span class="" style="">
+                                                <span onclick="showTip(this,event)" type="button" class="control-label " data-tip="" style="font-size: 11px; line-height: 12px; display: block; width: 100%;" font-size:="" 11px;="" line-height:="" 12px;="" display:="" block;="" width:="" 100%;="">結束時間：16:00:31</span>
+                                                <span class="Label"></span>
+                                            </span>
+                                        </span>
+                                    </div>
+                                </h6>
+                            </div>
+                            <div class="col-md-3 col-lg-2" style="display:block;">
+                                <a href=ViewDetailMetaData/0f8dd758-b053-4a7f-bb65-9c221b4d14da class="mov">
+                                    <div class="playicon" style=" padding:0px;">
+                                        <span style=" float:left; position:absolute;"><img src="/VodCloudV2/images/icon-play1.png" width="100%" height="auto" class="him"></span>
+                                        <img src='/VodCloudV2/VodStream/GetThumbnail?assetID=0f8dd758-b053-4a7f-bb65-9c221b4d14da' onerror="this.src='/VodCloudV2/images/default_thumb.jpg'" width="100%" height="auto" class="him">
+                                        <span class="timecode">00:40:21</span>
+                                    </div>
+                                </a>
+                                <h6 style="margin-top:-10px; margin-bottom:10px;">
+                                    <div class="">
+                                        <span class="f11" style="visibility :visible;" data-refencebame="">
+                                            <strong style="" class=""></strong>
+                                            <span class="" style="">
+                                                <span onclick="showTip(this,event)" type="button" class="control-label " data-tip="" style="">屆次會期：第4屆第8次定期會</span>
+                                                <span class="Label"></span>
+                                            </span>
+                                        </span>
+                                        <span class="f11_4 hovercard_in1" style="visibility :visible;" data-refencebame="">
+                                            <strong style="" class=""></strong>
+                                            <span class="" style="">
+                                                <span onclick="showTip(this,event)" type="button" class="control-label " data-tip="議　　程：市政總質詢" style="">議　　程：市政總質詢</span>
+                                                <span class="Label"></span>
+                                            </span>
+                                        </span>
+                                        <span class="f11_4 hovercard_in1" style="visibility :visible;" data-refencebame="">
+                                            <strong style="" class=""></strong>
+                                            <span class="" style="">
+                                                <span onclick="showTip(this,event)" type="button" class="control-label " data-tip="發言議員：陳鴻源,鄭宇恩" style="">發言議員：陳鴻源,鄭宇恩</span>
+                                                <span class="Label"></span>
+                                            </span>
+                                        </span>
+                                        <span class="f11" style="visibility :visible;" data-refencebame="">
+                                            <strong style="" class=""></strong>
+                                            <span class="" style="">
+                                                <span onclick="showTip(this,event)" type="button" class="control-label " data-tip="" style="">開會日期：115-09-15</span>
+                                                <span class="Label"></span>
+                                            </span>
+                                        </span>
+                                        <span class="f11" style="visibility :visible;" data-refencebame="">
+                                            <strong style="" class=""></strong>
+                                            <span class="" style="">
+                                                <span onclick="showTip(this,event)" type="button" class="control-label " data-tip="" style="font-size: 11px; line-height: 12px; display: block; width: 100%;" font-size:="" 11px;="" line-height:="" 12px;="" display:="" block;="" width:="" 100%;="">開始時間：16:28:22</span>
+                                                <span class="Label"></span>
+                                            </span>
+                                        </span>
+                                        <span class="f11" style="visibility :visible;" data-refencebame="">
+                                            <strong style="" class=""></strong>
+                                            <span class="" style="">
+                                                <span onclick="showTip(this,event)" type="button" class="control-label " data-tip="" style="font-size: 11px; line-height: 12px; display: block; width: 100%;" font-size:="" 11px;="" line-height:="" 12px;="" display:="" block;="" width:="" 100%;="">結束時間：17:08:43</span>
+                                                <span class="Label"></span>
+                                            </span>
+                                        </span>
+                                    </div>
+                                </h6>
+                            </div>
+                            <div class="col-md-3 col-lg-2" style="display:block;">
+                                <a href=ViewDetailMetaData/b037fcc3-122e-4f2b-8cfe-de6261e8f37e class="mov">
+                                    <div class="playicon" style=" padding:0px;">
+                                        <span style=" float:left; position:absolute;"><img src="/VodCloudV2/images/icon-play1.png" width="100%" height="auto" class="him"></span>
+                                        <img src='/VodCloudV2/VodStream/GetThumbnail?assetID=b037fcc3-122e-4f2b-8cfe-de6261e8f37e' onerror="this.src='/VodCloudV2/images/default_thumb.jpg'" width="100%" height="auto" class="him">
+                                        <span class="timecode">00:00:17</span>
+                                    </div>
+                                </a>
+                                <h6 style="margin-top:-10px; margin-bottom:10px;">
+                                    <div class="">
+                                        <span class="f11" style="visibility :visible;" data-refencebame="">
+                                            <strong style="" class=""></strong>
+                                            <span class="" style="">
+                                                <span onclick="showTip(this,event)" type="button" class="control-label " data-tip="" style="">屆次會期：第4屆第8次定期會</span>
+                                                <span class="Label"></span>
+                                            </span>
+                                        </span>
+                                        <span class="f11_4 hovercard_in1" style="visibility :visible;" data-refencebame="">
+                                            <strong style="" class=""></strong>
+                                            <span class="" style="">
+                                                <span onclick="showTip(this,event)" type="button" class="control-label " data-tip="議　　程：市政總質詢-報告事項" style="">議　　程：市政總質詢-報告事項</span>
+                                                <span class="Label"></span>
+                                            </span>
+                                        </span>
+                                        <span class="f11_4 hovercard_in1" style="visibility :visible;" data-refencebame="">
+                                            <strong style="" class=""></strong>
+                                            <span class="" style="">
+                                                <span onclick="showTip(this,event)" type="button" class="control-label " data-tip="發言議員：陳鴻源" style="">發言議員：陳鴻源</span>
+                                                <span class="Label"></span>
+                                            </span>
+                                        </span>
+                                        <span class="f11" style="visibility :visible;" data-refencebame="">
+                                            <strong style="" class=""></strong>
+                                            <span class="" style="">
+                                                <span onclick="showTip(this,event)" type="button" class="control-label " data-tip="" style="">開會日期：115-09-14</span>
+                                                <span class="Label"></span>
+                                            </span>
+                                        </span>
+                                        <span class="f11" style="visibility :visible;" data-refencebame="">
+                                            <strong style="" class=""></strong>
+                                            <span class="" style="">
+                                                <span onclick="showTip(this,event)" type="button" class="control-label " data-tip="" style="font-size: 11px; line-height: 12px; display: block; width: 100%;" font-size:="" 11px;="" line-height:="" 12px;="" display:="" block;="" width:="" 100%;="">開始時間：09:50:12</span>
+                                                <span class="Label"></span>
+                                            </span>
+                                        </span>
+                                        <span class="f11" style="visibility :visible;" data-refencebame="">
+                                            <strong style="" class=""></strong>
+                                            <span class="" style="">
+                                                <span onclick="showTip(this,event)" type="button" class="control-label " data-tip="" style="font-size: 11px; line-height: 12px; display: block; width: 100%;" font-size:="" 11px;="" line-height:="" 12px;="" display:="" block;="" width:="" 100%;="">結束時間：09:50:29</span>
+                                                <span class="Label"></span>
+                                            </span>
+                                        </span>
+                                    </div>
+                                </h6>
+                            </div>
+                    </div>
+            </div>
+        </div>
+    </div>
+</div>
+<div class="row" style="margin-right:0rem;margin-right:0rem">
+        <div class="col-sm-12 col-md-10 nav">
+            <ul class="pagination" style="padding-left:20px">
+                            <li class="active"><button disabled="disabled" class="btn btn-default Page" data-type="Page" onclick="SendToPage(this);">1</button></li>
+                            <li><button class="btn btn-default Page" data-type="Page" onclick="SendToPage(this);">2</button></li>
+                            <li><button class="btn btn-default Page" data-type="Page" onclick="SendToPage(this);">3</button></li>
+                            <li><button class="btn btn-default Page" data-type="Page" onclick="SendToPage(this);">4</button></li>
+                            <li><button class="btn btn-default Page" data-type="Page" onclick="SendToPage(this);">5</button></li>
+                            <li><button class="btn btn-default Page" data-type="Page" onclick="SendToPage(this);">6</button></li>
+                        <li>
+                            <button class="btn btn-default Page" data-type="NextPage" type="button" data-pg=2
+                                    onclick="SendToPage(this);">
+                                <span aria-hidden="true">→</span>
+                            </button>
+                        </li>
+                    <li style="font-size:16px; line-height:40px; color:#zzz; padding-left:10px;"><strong style=" color:blue;">1 </strong>/13</li>
+            </ul>
+        </div>
+        <div class="col-sm-12 col-md-2" style="padding-top:15px">
+            <div class="input-group">
+<form action="/VodCloudV2/VOD/ToPage" id="pagingForm" method="post">                    <input type="hidden" value='{"pageindex":"1","MJ":"04","MP":"08","MType":"R","sMDate":"","eMDate":"","Keyword":"","cEPName":"","Sort":"MDate","isCouncilorOpen":false}' name="filter" id="hidfj"/>
+                    <input type="number" value="1" name="pageindex" style="width:53px;padding:6px 6px" class="form-control" placeholder="請輸入頁碼">
+                    <span class="input-group-btn">
+                        <button class="btn btn-default Page" style="padding:6px 6px" data-type="ToPage" type="submit" form="pagingForm">跳頁</button>
+                    </span>
+</form>            </div>
+        </div>
+</div>
+    <footer class="footer clearfix navbar-bottom" style="background-color: #f5f5f5; padding:10px;  border-bottom: 3px solid #9c2b2c; padding-top:20px; display:block; width: 100%; font-size:15px; ">
+    <p style="word-break:break-all; display:block;">
+        新北市議會版權所有，機關地址： 22044新北市板橋區文化路二段166號  電話： 886-2-22521212
+    </p>
+    </footer>
+</body>
+</html>
