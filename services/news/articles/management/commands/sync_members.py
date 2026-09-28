@@ -1,7 +1,8 @@
 """同步議員名單（政黨、選區、任期）。
 
-    python manage.py sync_members                 # 立法院 + 臺中市議會
+    python manage.py sync_members                 # 立法院 + 臺中市議會 + 新北市議會
     python manage.py sync_members --source tccc
+    python manage.py sync_members --source ntpc   # 新北：政黨、議長／副議長、黨團
     python manage.py sync_members --relink        # 同步後把所有文章重新標政黨
 """
 from __future__ import annotations
@@ -9,15 +10,15 @@ from __future__ import annotations
 from django.conf import settings
 from django.core.management.base import BaseCommand
 
-from articles.members_sync import (LyMemberSource, MembersUnavailable, TcccMemberSource,
-                                   relink_all, sync)
+from articles.members_sync import (LyMemberSource, MembersUnavailable, NtpcMemberSource,
+                                   TcccMemberSource, relink_all, sync)
 
 
 class Command(BaseCommand):
-    help = "從 LYAPI 與臺中市議會官網同步議員名單，維護人物／任期／政黨"
+    help = "從 LYAPI 與臺中、新北市議會官網同步議員名單，維護人物／任期／政黨"
 
     def add_arguments(self, parser) -> None:
-        parser.add_argument("--source", choices=["ly", "tccc"],
+        parser.add_argument("--source", choices=["ly", "tccc", "ntpc"],
                             help="只同步這個來源；不給就全部")
         parser.add_argument("--relink", action="store_true",
                             help="同步後把所有文章依任期重新填政黨（回填既有文章用）")
@@ -40,4 +41,6 @@ class Command(BaseCommand):
             sources.append(LyMemberSource(settings.LYAPI_BASE, settings.LY_TERM))
         if only in (None, "tccc"):
             sources.append(TcccMemberSource(settings.TCCC_WEB_BASE))
+        if only in (None, "ntpc"):
+            sources.append(NtpcMemberSource(settings.NTPC_WEB_BASE))
         return sources
