@@ -205,3 +205,37 @@ class FakeTranscriber:
         if self._error is not None:
             raise self._error
         return tuple(self._cues), self._language
+
+
+def first_person_slides(n: int, bad: tuple[int, ...] = (1,), detail: bool = False) -> tuple[Slide, ...]:
+    """bad 裡的頁碼用第一人稱寫（其餘第三人稱）。"""
+    body = "講者指出這一段講的是" + "內容" * 30 if detail else ""
+    out = []
+    for i in range(1, n + 1):
+        if i in bad:
+            bullets = (f"我們要求部會在一個月內回覆 {i}",)
+            text = ("我們對於滋擾醫院秩序之人把罰鍰提高到五萬元。" * 8) if detail else ""
+        else:
+            bullets = (f"講者要求部會在一個月內回覆 {i}",)
+            text = body
+        out.append(Slide(index=i, title=f"第 {i} 段", bullets=bullets,
+                         timestamp=float(i * 30), detail=text))
+    return tuple(out)
+
+
+class FakeSlideRewriter:
+    """把「我們」換成「講者」。stubborn=True 時原樣退回，模擬模型改不好。"""
+
+    def __init__(self, stubborn: bool = False):
+        self._stubborn = stubborn
+        self.calls: list[tuple[int, str]] = []
+
+    def rewrite(self, slide, problem, progress, is_cancelled=None):
+        self.calls.append((slide.index, problem))
+        progress(None, "改寫中")
+        if self._stubborn:
+            return slide
+        fix = lambda t: t.replace("我們", "講者")  # noqa: E731
+        return Slide(index=slide.index, title=slide.title,
+                     bullets=tuple(fix(b) for b in slide.bullets),
+                     timestamp=slide.timestamp, detail=fix(slide.detail))

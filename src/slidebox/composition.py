@@ -11,6 +11,7 @@ from .infrastructure.html_renderer import HtmlDeckRenderer
 from .infrastructure.ivod_api import IvodClient, IvodSubtitleGateway
 from .infrastructure.ivod_sections import IvodSectionGateway
 from .infrastructure.ollama_summarizer import (
+    OllamaSlideRewriter,
     OllamaBriefWriter,
     OllamaModelCatalog,
     OllamaSummarizer,
@@ -87,6 +88,25 @@ class CurrentSettingsBriefWriter:
             slides, progress, is_cancelled, hint)
 
 
+class CurrentSettingsSlideRewriter:
+    """同 CurrentSettingsSummarizer：每次都用當下的 model／host。"""
+
+    def __init__(self, settings: Settings, factory=OllamaSlideRewriter):
+        self._settings = settings
+        self._factory = factory
+
+    def rewrite(
+        self,
+        slide: Slide,
+        problem: str,
+        progress: ProgressCallback,
+        is_cancelled: CancelCheck | None = None,
+    ) -> Slide:
+        s = self._settings
+        return self._factory(s.ollama_host, s.model, s.num_ctx).rewrite(
+            slide, problem, progress, is_cancelled)
+
+
 def build_usecase(settings: Settings) -> BuildDeckUseCase:
     """組好一條完整的 pipeline。
 
@@ -110,6 +130,8 @@ def build_usecase(settings: Settings) -> BuildDeckUseCase:
         transcriber=FasterWhisperTranscriber(settings.whisper_model),
         # 詳細模式下多寫一張摘要卡（一句話、關鍵數字、要求與回應）
         brief_writer=CurrentSettingsBriefWriter(settings),
+        # 摘要有第一人稱時只把那幾頁送回去改，不整份重產
+        rewriter=CurrentSettingsSlideRewriter(settings),
     )
 
 

@@ -279,9 +279,13 @@ def first_person_problems(slide: Slide) -> list[str]:
     45 段中招，所以除了提示詞，這裡再擋一道讓模型重試。
     """
     for text in (*slide.bullets, slide.detail):
-        match = _FIRST_PERSON_RE.search(_QUOTED_RE.sub("", text))
+        stripped = _QUOTED_RE.sub("", text)
+        match = _FIRST_PERSON_RE.search(stripped)
         if match:
-            return [f"第 {slide.index} 頁用了第一人稱「{match.group(0)}」，請改用第三人稱、"
+            # 帶前後文：失敗訊息才看得出是真的第一人稱還是誤判（「你我」之類）
+            start, end = max(0, match.start() - 12), min(len(stripped), match.end() + 12)
+            return [f"第 {slide.index} 頁用了第一人稱「{match.group(0)}」"
+                    f"（…{stripped[start:end]}…），請改用第三人稱、"
                     f"稱發言者為「講者」；要引述原話請放在「」裡"]
     return []
 

@@ -25,12 +25,14 @@ from ..domain.ports import (
     ProgressCallback,
     SpeechTranscriber,
     SubtitleGateway,
+    SlideRewriter,
     Summarizer,
     VideoSectionGateway,
 )
 from .brief import ground_brief, validate_brief
 from .chapters import (
     clamp_timestamps,
+    first_person_problems,
     compress_cues,
     full_transcript,
     validate_slides,
@@ -76,10 +78,12 @@ class BuildDeckUseCase:
         audio: AudioGateway | None = None,
         transcriber: SpeechTranscriber | None = None,
         brief_writer: BriefWriter | None = None,
+        rewriter: SlideRewriter | None = None,
     ):
         self._audio = audio
         self._transcriber = transcriber
         self._brief_writer = brief_writer
+        self._rewriter = rewriter
         self._subtitles = subtitles
         self._summarizer = summarizer
         self._sections = sections
@@ -262,12 +266,46 @@ class BuildDeckUseCase:
             slides = clamp_timestamps(slides, transcript.duration)
             problems = validate_slides(
                 slides, settings.min_slides, settings.max_slides, settings.detailed)
+            if problems and self._rewriter is not None and _only_first_person(slides, problems):
+                # 只有第一人稱的問題：整份重產修不好（修好這頁別頁又中），
+                # 改成只把有問題的頁送回去改寫。實測整份重產的失敗率兩成。
+                slides, problems = self._repair_first_person(
+                    slides, settings, cb, check, cancelled)
             if not problems:
                 return slides
             hint = "上一次的輸出有這些問題，請修正後重新產出：" + "；".join(problems)
         raise SummarizerOutputInvalid(
             "模型輸出重試後仍不符合要求（" + "；".join(problems) + "）。可以試試換一個模型。"
         )
+
+    def _repair_first_person(
+        self,
+        slides: tuple[Slide, ...],
+        settings: Settings,
+        cb: ProgressCallback,
+        check,
+        cancelled: CancelCheck,
+    ) -> tuple[tuple[Slide, ...], list[str]]:
+        """逐頁改寫第一人稱，最多兩輪。回傳 (slides, 剩下的問題)。
+
+        每一輪只碰還有問題的頁；改寫後重跑完整驗證，改寫若弄壞了別的規則
+        （例如 detail 變太短），那些問題會留在回傳值裡，交給外層決定重產。
+        """
+        problems: list[str] = []
+        for round_no in (1, 2):
+            fixed = list(slides)
+            offenders = [(i, s, first_person_problems(s)) for i, s in enumerate(slides)
+                         if first_person_problems(s)]
+            for n, (i, slide, found) in enumerate(offenders, start=1):
+                check()
+                cb(None, f"第 {slide.index} 頁改寫成第三人稱…（{n}/{len(offenders)}）")
+                fixed[i] = self._rewriter.rewrite(slide, found[0], cb, cancelled)
+            slides = tuple(fixed)
+            problems = validate_slides(
+                slides, settings.min_slides, settings.max_slides, settings.detailed)
+            if not problems or not _only_first_person(slides, problems):
+                break
+        return slides, problems
 
     def _brief(
         self,
@@ -339,3 +377,9 @@ class BuildDeckUseCase:
         def inner(frac: float | None, status: str) -> None:
             cb(None if frac is None else lo + (hi - lo) * frac, status)
         return inner
+
+
+def _only_first_person(slides, problems: list[str]) -> bool:
+    """驗證失敗是否全是第一人稱。其他問題（頁數、空白、太短）要整份重產才修得好。"""
+    first_person = {p for s in slides for p in first_person_problems(s)}
+    return bool(problems) and all(p in first_person for p in problems)

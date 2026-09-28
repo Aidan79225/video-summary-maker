@@ -19,10 +19,12 @@ from .fakes import (
     FakeFrameExtractor,
     FakeRenderer,
     FakeSectionGateway,
+    FakeSlideRewriter,
     FakeSubtitleGateway,
     FakeSummarizer,
     FakeTranscriber,
     RaisingThenSucceedingSummarizer,
+    first_person_slides,
     make_slides,
 )
 
@@ -33,13 +35,14 @@ def _settings(**kw) -> Settings:
     return Settings(**base)
 
 
-def _build(subs=None, summ=None, secs=None, frames=None, rend=None):
+def _build(subs=None, summ=None, secs=None, frames=None, rend=None, rewriter=None):
     return BuildDeckUseCase(
         subs or FakeSubtitleGateway(),
         summ or FakeSummarizer([make_slides(3)]),
         secs or FakeSectionGateway(),
         frames or FakeFrameExtractor(),
         rend or FakeRenderer(),
+        rewriter=rewriter,
     )
 
 
@@ -598,3 +601,59 @@ def test_cancelling_during_the_brief_stops_the_pipeline():
     with pytest.raises(OperationCancelled):
         usecase.execute("URL", _settings(detailed=True), is_cancelled=lambda: flag["on"])
     assert secs.timestamps == []
+
+
+# --- 第一人稱：逐頁改寫而不是整份重產 ---
+
+
+def test_first_person_pages_are_rewritten_instead_of_regenerating_the_deck():
+    """攔的 bug：整份重產修不好第一人稱（修好這頁別頁又中），8 月批次兩成
+    文章因此失敗。只把有問題的頁送回去改。"""
+    summ = FakeSummarizer([first_person_slides(4, bad=(2, 4))])
+    rewriter = FakeSlideRewriter()
+    result = _build(summ=summ, rewriter=rewriter).execute("URL", _settings())
+    assert len(summ.hints) == 1                       # 沒有整份重產
+    assert [i for i, _ in rewriter.calls] == [2, 4]   # 只改有問題的兩頁
+    assert all("我們" not in b for s in result.deck.slides for b in s.bullets)
+    assert "第 2 頁" in rewriter.calls[0][1] and "我們" in rewriter.calls[0][1]
+
+
+def test_a_stubborn_rewrite_falls_back_to_a_full_retry_then_fails():
+    summ = FakeSummarizer([first_person_slides(3), first_person_slides(3)])
+    rewriter = FakeSlideRewriter(stubborn=True)
+    with pytest.raises(SummarizerOutputInvalid, match="第一人稱"):
+        _build(summ=summ, rewriter=rewriter).execute("URL", _settings())
+    assert len(summ.hints) == 2                       # 改寫沒用才整份重產
+    assert "第一人稱" in summ.hints[1]
+    # 每次產出後最多兩輪改寫：2 次產出 × 2 輪 × 1 頁
+    assert len(rewriter.calls) == 4
+
+
+def test_without_a_rewriter_first_person_still_triggers_the_old_full_retry():
+    summ = FakeSummarizer([first_person_slides(3), make_slides(3)])
+    result = _build(summ=summ).execute("URL", _settings())
+    assert len(result.deck.slides) == 3
+    assert len(summ.hints) == 2
+
+
+def test_other_validation_problems_do_not_go_to_the_rewriter():
+    """頁數不足要整份重產；改寫器修不了這種問題，叫它只是浪費一次呼叫。"""
+    summ = FakeSummarizer([first_person_slides(1), make_slides(3)])
+    rewriter = FakeSlideRewriter()
+    _build(summ=summ, rewriter=rewriter).execute("URL", _settings())
+    assert rewriter.calls == []
+    assert len(summ.hints) == 2
+
+
+def test_rewriting_that_breaks_another_rule_falls_back_to_a_full_retry():
+    """改寫把 detail 弄短了（詳細模式的規則）：那不是第一人稱的問題，要整份重產。"""
+    class Shortener:
+        def rewrite(self, slide, problem, progress, is_cancelled=None):
+            return Slide(index=slide.index, title=slide.title, bullets=("講者指出",),
+                         timestamp=slide.timestamp, detail="講者指出太短")
+
+    summ = FakeSummarizer([first_person_slides(3, detail=True), make_slides(3, detail=True)])
+    result = _build(summ=summ, rewriter=Shortener()).execute("URL", _settings(detailed=True))
+    assert len(summ.hints) == 2
+    assert "太短" in summ.hints[1]
+    assert len(result.deck.slides) == 3
