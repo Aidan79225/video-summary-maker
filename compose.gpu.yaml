@@ -29,16 +29,20 @@ services:
     build: .
     image: ly-summary-api
     restart: unless-stopped
+    # 語音辨識（臺中市議會的片段）用顯示卡跑；和 Ollama 一起約 8 GB VRAM
+    gpus: all
     ports:
       - "${API_PORT:-8800}:8800"
     environment:
       SLIDEBOX_API_KEY: ${SLIDEBOX_API_KEY:?請設定 SLIDEBOX_API_KEY（Pi 那邊的 GPU_API_KEY 要填同一把）}
       SLIDEBOX_OLLAMA_HOST: http://ollama:11434
       SLIDEBOX_MODEL: ${SLIDEBOX_MODEL:-qwen3.5:9b}
+      # auto：有 CUDA 就用顯示卡，載不起來退回 CPU；cpu／cuda 強制
+      SLIDEBOX_WHISPER_DEVICE: ${SLIDEBOX_WHISPER_DEVICE:-auto}
     volumes:
       - summary-output:/data/output
       # faster-whisper 第一次用會下載 1.6 GB 的模型，放 volume 才不會每次重建都重抓。
-      # 臺中市議會的片段沒有逐字稿，全靠它（CPU 跑，約片長的四分之一）。
+      # 臺中市議會的片段沒有逐字稿，全靠它。
       - whisper-cache:/root/.cache/huggingface
     depends_on:
       ollama:

@@ -18,6 +18,12 @@ api = [
     "fastapi>=0.141.1",
     "uvicorn[standard]>=0.52.4",
 ]
+# GPU 主機的容器用顯示卡跑 faster-whisper 要的 CUDA 函式庫（ctranslate2 4.x 要 cuDNN 9）。
+# 只在 Linux 裝：Windows 桌面 app 走 CPU。
+whisper-gpu = [
+    "nvidia-cublas-cu12 ; sys_platform == 'linux'",
+    "nvidia-cudnn-cu12>=9,<10 ; sys_platform == 'linux'",
+]
 dev = [
     "httpx>=0.28.1",
     "pytest>=9.1.1",

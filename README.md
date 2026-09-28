@@ -127,8 +127,8 @@ ollama pull qwen3.5:9b
 
 貼「議員個人質詢隨選視訊系統」的片段網址：`https://vod.tccc.gov.tw/index.asp?url=12&cno=<議員>&ano=<片段>`（進到某位議員的頁面、點某一段，網址列就是這個）。
 
-- **沒有逐字稿可抓**：議事錄系統（yishi.tccc.gov.tw）有依發言人拆的正式紀錄，但沒有時間戳，對不上影片。所以這條路走語音辨識——用 ffmpeg 把 HLS 串流的音訊抓成 16 kHz wav，交給 faster-whisper（`large-v3-turbo`，CPU int8）
-- **片段長**：市政總質詢一段約 50 分鐘、業務質詢約 15 分鐘（頁面上的「影片長度 00:50」是 HH:MM）。實測 CPU 語音辨識約為片長的四分之一，50 分鐘的片段要 12 分鐘，加上摘要約 17 分鐘一篇
+- **沒有逐字稿可抓**：議事錄系統（yishi.tccc.gov.tw）有依發言人拆的正式紀錄，但沒有時間戳，對不上影片。所以這條路走語音辨識——用 ffmpeg 把 HLS 串流的音訊抓成 16 kHz wav，交給 faster-whisper（`large-v3-turbo`）
+- **片段長**：市政總質詢一段約 50 分鐘、業務質詢約 15 分鐘（頁面上的「影片長度 00:50」是 HH:MM）。GPU 主機的容器用顯示卡跑語音辨識（`SLIDEBOX_WHISPER_DEVICE=auto`，映像裝了 cuBLAS／cuDNN）；退回 CPU 時約為片長的四分之一，50 分鐘的片段要 12 分鐘
 - 截圖與 IVOD 同一套：ffmpeg 直接切 m3u8，串流網址從播放器頁（rds.ginnet.cloud）解析出來
 - 成品會標明「由語音辨識產生，可能有辨識錯誤」；人名偶有同音錯字（「楊啟邦」應為「楊啓邦」），標題裡的姓名以網站為準
 - 網站的憑證鏈在 Python 3.13 預設的嚴格驗證下會被拒絕（CA 憑證缺 Subject Key Identifier），程式只關掉 strict 旗標，主機名與信任鏈照常驗證

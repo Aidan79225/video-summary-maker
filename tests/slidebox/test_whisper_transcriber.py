@@ -232,3 +232,38 @@ def test_a_huge_error_message_is_truncated():
     with pytest.raises(NoSubtitlesAvailable) as exc:
         _make(model).transcribe("a.webm", 1.0, _quiet, lambda: False)
     assert len(str(exc.value)) < 300
+
+
+# --- 裝置選擇 ---
+
+
+def test_auto_picks_cuda_only_when_it_is_available():
+    from slidebox.infrastructure.whisper_transcriber import resolve_device
+
+    assert resolve_device("auto", cuda_available=True) == ("cuda", "float16")
+    assert resolve_device("auto", cuda_available=False) == ("cpu", "int8")
+    assert resolve_device(None, cuda_available=True) == ("cuda", "float16")
+
+
+def test_an_explicit_device_wins_over_detection():
+    from slidebox.infrastructure.whisper_transcriber import resolve_device
+
+    assert resolve_device("cpu", cuda_available=True) == ("cpu", "int8")
+    assert resolve_device(" CUDA ", cuda_available=False) == ("cuda", "float16")
+
+
+def test_the_loaded_device_is_reported_where_the_user_can_see_it():
+    class Inner:
+        device = "cuda"
+
+    class Model:
+        model = Inner()
+
+        def transcribe(self, path, vad_filter=True):
+            return iter(()), type("Info", (), {"language": "zh", "duration": 1.0})()
+
+    statuses = []
+    t = FasterWhisperTranscriber("large-v3-turbo", model_factory=lambda name: Model())
+    cues, _ = t.transcribe("a.wav", 1.0, lambda f, s: statuses.append(s), lambda: False)
+    assert cues == ()
+    assert any("cuda" in s for s in statuses)

@@ -1,6 +1,7 @@
 # 摘要 API（serve_api.py），跑在 GPU 主機上。
 # 模型不在這個映像裡：Ollama 是另一個容器（見 compose.gpu.yaml），這裡只透過 HTTP 連它。
-# 語音辨識（faster-whisper）走 CPU，模型檔快取在 /root/.cache/huggingface 這個 volume。
+# 語音辨識（faster-whisper）用顯示卡（compose 給了 gpus: all；沒有 GPU 會自動退回 CPU），
+# 模型檔快取在 /root/.cache/huggingface 這個 volume。
 FROM ghcr.io/astral-sh/uv:python3.13-bookworm-slim
 
 WORKDIR /app
@@ -17,7 +18,9 @@ ENV IMAGEIO_FFMPEG_EXE=/usr/bin/ffmpeg
 
 COPY pyproject.toml uv.lock ./
 # pyside6 是桌面 app 才需要的；API 走的是不碰 Qt 的 build_usecase，跳過它省下幾百 MB
-RUN uv sync --frozen --no-dev --group api --no-install-package pyside6
+RUN uv sync --frozen --no-dev --group api --group whisper-gpu --no-install-package pyside6
+# ctranslate2 在執行時動態載入 cuBLAS／cuDNN；pip 版的函式庫不在系統路徑上，要指給它
+ENV LD_LIBRARY_PATH=/app/.venv/lib/python3.13/site-packages/nvidia/cublas/lib:/app/.venv/lib/python3.13/site-packages/nvidia/cudnn/lib
 
 COPY serve_api.py ./
 COPY src ./src
