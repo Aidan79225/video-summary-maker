@@ -1,0 +1,152 @@
+
+
+
+
+<!DOCTYPE html>
+
+<html>
+<head>
+    <meta name="viewport" content="width=device-width" />
+    <title>VideoPlayer</title>
+    <link href="/VodCloudV2/css/bootstrap.css" rel="stylesheet">
+    <link href="/VodCloudV2/css/bootstrap-theme.css" rel="stylesheet">
+    <link href="/VodCloudV2/css/bootstrap-table.css" rel="stylesheet">
+    <link href="https://vjs.zencdn.net/7.20.3/video-js.css" rel="stylesheet" />
+    <script defer src="https://vjs.zencdn.net/7.20.3/video.min.js"></script>
+    
+
+    
+
+    <style>
+
+        .fill {
+            width: 100% !important;
+            height: 100% !important;
+        }
+        /*tag*/
+        .chtag {
+            display: inline-block;
+            background: #ccc;
+            color: #777;
+            width: 71px;
+            height: 25px;
+            font: Arial, Helvetica, sans-serif;
+            font-size: 14px;
+            text-align: center;
+            line-height: 25px;
+            font-weight: bold;
+            border-left: 1px solid #fff;
+        }
+
+            .chtag a {
+                text-decoration: none;
+            }
+
+            .chtag:hover {
+                background: #cb60b3; /* Old browsers */
+                background: -moz-linear-gradient(top, #cb60b3 0%, #c146a1 50%, #a80077 51%, #db36a4 100%); /* FF3.6-15 */
+                background: -webkit-linear-gradient(top, #cb60b3 0%,#c146a1 50%,#a80077 51%,#db36a4 100%); /* Chrome10-25,Safari5.1-6 */
+                background: linear-gradient(to bottom, #cb60b3 0%,#c146a1 50%,#a80077 51%,#db36a4 100%); /* W3C, IE10+, FF16+, Chrome26+, Opera12+, Safari7+ */
+                filter: progid:DXImageTransform.Microsoft.gradient( startColorstr='#cb60b3', endColorstr='#db36a4',GradientType=0 ); /* IE6-9 */
+                color: #fff;
+            }
+
+        .chtag_active {
+            display: inline-block;
+            background: #cb60b3; /* Old browsers */
+            background: -moz-linear-gradient(top, #cb60b3 0%, #c146a1 50%, #a80077 51%, #db36a4 100%); /* FF3.6-15 */
+            background: -webkit-linear-gradient(top, #cb60b3 0%,#c146a1 50%,#a80077 51%,#db36a4 100%); /* Chrome10-25,Safari5.1-6 */
+            background: linear-gradient(to bottom, #cb60b3 0%,#c146a1 50%,#a80077 51%,#db36a4 100%); /* W3C, IE10+, FF16+, Chrome26+, Opera12+, Safari7+ */
+            filter: progid:DXImageTransform.Microsoft.gradient( startColorstr='#cb60b3', endColorstr='#db36a4',GradientType=0 ); /* IE6-9 */
+            color: #fff;
+            width: 71px;
+            height: 25px;
+            font: Arial, Helvetica, sans-serif;
+            font-size: 14px;
+            text-align: center;
+            line-height: 25px;
+            font-weight: bold;
+            border-left: 1px solid #fff;
+        }
+    </style>
+    <script src="/VodCloudV2/js/jquery-1.11.1.min.js"></script>
+    <script src="/VodCloudV2/js/bootstrap.min.js"></script>
+
+
+    <script>
+
+
+        $(window).unload(function () {
+            $.ajax({
+                    type: "get",
+                    async: false,
+                    url: "/VodCloudV2/VodStream/UpdatePlayEndTime?assetID=00926153-64c5-4a25-a411-57e8d2b49ec3",
+                    data: { playerLogID : 'd54028a6-ead5-4c0c-aeb7-f0a92f344764' },
+                    beforeSend: function () {
+                    },
+                    success: function (result) {
+                    },
+                    error: function (e) {
+                    },
+                    complete: function (message) {
+                    }
+                })
+        });
+    </script>
+
+    
+</head>
+<body style="overflow:hidden">
+    
+    
+
+    
+
+
+    
+
+
+
+    
+
+
+    <div class="embed-responsive embed-responsive-16by9  fill">
+        <video id="player_Video" poster='/VodCloudV2/VodStream/GetThumbnail?assetID=00926153-64c5-4a25-a411-57e8d2b49ec3'
+               controls="controls" data-setup='{"techOrder": ["flash","html5"]}'
+               class="embed-responsive-item video-js vjs-default-skin vjs-big-play-centered fill">
+            <source src="https://vodwms.ntp.gov.tw:443/NTP/_definst_/mp4:PlayAgenda/Book_SD/0408R1150915/0408R1150915020.mp4/playlist.m3u8?device=PC&amp;kind=Guest" type="application/x-mpegURL" />
+        </video>
+    </div>
+
+    <script>
+        var player;
+        $(document).ready(function () {
+            //sourceButtonInit();
+        });
+
+        function isIE() {
+            if (!!window.ActiveXObject || 'ActiveXObject' in window) {
+                return true;
+            } else {
+                return false;
+            }
+        }
+
+        if (isIE()) {
+            videojs.options.flash.swf = "/VodCloudV2/Videojs/videojs.swf";
+             player = videojs('#player_Video', {
+            sources: [{ src: 'https://vodwms.ntp.gov.tw:443/NTP/_definst_/mp4:PlayAgenda/Book_SD/0408R1150915/0408R1150915020.mp4/playlist.m3u8?device=PC&amp;kind=Guest', type: 'video/mp4' }],
+        });
+        }
+        else {
+              player = videojs('#player_Video', {
+             sources: [{ src: 'https://vodwms.ntp.gov.tw:443/NTP/_definst_/mp4:PlayAgenda/Book_SD/0408R1150915/0408R1150915020.mp4/playlist.m3u8?device=PC&amp;kind=Guest', type: 'application/x-mpegURL' }],
+        });
+        }
+
+
+         
+
+    </script>
+</body>
+</html>
