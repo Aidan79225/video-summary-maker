@@ -4,8 +4,9 @@ BuildDeckUseCase 持有一組 gateway。要支援第二、第三個來源，最�
 分層的作法就是讓 gateway 自己分派——摘要、渲染、設定、取消、佇列全部維持
 單一條 pipeline，只有「去哪裡拿字幕／片段／音訊」這件事分岔。
 
-三個分支：立法院 IVOD、臺中市議會、其餘（yt-dlp）。臺中分支是選配——
-桌面 app 沒接它時退回 default，不必知道這個來源存在。
+四個分支，依序比對：立法院 IVOD、臺中市議會、新北市議會、其餘（yt-dlp）。
+三個來源的網址判別彼此互斥，順序只是讓行為固定。兩個市議會分支是選配——
+桌面 app 沒接它們時退回 default，不必知道這些來源存在。
 """
 from __future__ import annotations
 
@@ -19,14 +20,16 @@ from ..domain.ports import (
     SubtitleGateway,
     VideoSectionGateway,
 )
-from ..usecases.sources import ivod_id, tccc_clip
+from ..usecases.sources import ivod_id, ntpc_clip, tccc_clip
 
 
-def _pick(url: str, default, ivod, tccc):
-    if ivod_id(url):
+def _pick(url: str, default, ivod, tccc, ntpc):
+    if ivod is not None and ivod_id(url):
         return ivod
     if tccc is not None and tccc_clip(url):
         return tccc
+    if ntpc is not None and ntpc_clip(url):
+        return ntpc
     return default
 
 
@@ -52,21 +55,25 @@ def _cleanup_all(gateways, dest_dir: str) -> None:
 
 class BySourceSubtitleGateway:
     def __init__(self, default: SubtitleGateway, ivod: SubtitleGateway,
-                 tccc: SubtitleGateway | None = None):
+                 tccc: SubtitleGateway | None = None,
+                 ntpc: SubtitleGateway | None = None):
         self._default = default
         self._ivod = ivod
         self._tccc = tccc
+        self._ntpc = ntpc
 
     def fetch(self, url: str, langs: Sequence[str]) -> Transcript:
-        return _pick(url, self._default, self._ivod, self._tccc).fetch(url, langs)
+        return _pick(url, self._default, self._ivod, self._tccc, self._ntpc).fetch(url, langs)
 
 
 class BySourceSectionGateway:
     def __init__(self, default: VideoSectionGateway, ivod: VideoSectionGateway,
-                 tccc: VideoSectionGateway | None = None):
+                 tccc: VideoSectionGateway | None = None,
+                 ntpc: VideoSectionGateway | None = None):
         self._default = default
         self._ivod = ivod
         self._tccc = tccc
+        self._ntpc = ntpc
 
     def download_sections(
         self,
@@ -77,21 +84,23 @@ class BySourceSectionGateway:
         progress: ProgressCallback,
         is_cancelled: CancelCheck,
     ) -> list[str | None]:
-        chosen = _pick(url, self._default, self._ivod, self._tccc)
+        chosen = _pick(url, self._default, self._ivod, self._tccc, self._ntpc)
         return chosen.download_sections(
             url, timestamps, max_height, dest_dir, progress, is_cancelled)
 
     def cleanup(self, dest_dir: str) -> None:
-        _cleanup_all((self._default, self._ivod, self._tccc), dest_dir)
+        _cleanup_all((self._default, self._ivod, self._tccc, self._ntpc), dest_dir)
 
 
 class BySourceAudioGateway:
-    """音訊只有兩條路：臺中用 ffmpeg 抓 HLS，其餘交給 yt-dlp。IVOD 不會走到
-    這裡（它有逐字稿，不會觸發語音備援）。"""
+    """音訊只有這幾條路：兩個市議會用 ffmpeg 抓 HLS，其餘交給 yt-dlp。IVOD
+    不會走到這裡（它有逐字稿，不會觸發語音備援）。"""
 
-    def __init__(self, default: AudioGateway, tccc: AudioGateway | None = None):
+    def __init__(self, default: AudioGateway, tccc: AudioGateway | None = None,
+                 ntpc: AudioGateway | None = None):
         self._default = default
         self._tccc = tccc
+        self._ntpc = ntpc
 
     def download_audio(
         self,
@@ -100,8 +109,8 @@ class BySourceAudioGateway:
         progress: ProgressCallback,
         is_cancelled: CancelCheck,
     ) -> AudioClip:
-        chosen = self._tccc if (self._tccc is not None and tccc_clip(url)) else self._default
+        chosen = _pick(url, self._default, None, self._tccc, self._ntpc)
         return chosen.download_audio(url, dest_dir, progress, is_cancelled)
 
     def cleanup(self, dest_dir: str) -> None:
-        _cleanup_all((self._default, self._tccc), dest_dir)
+        _cleanup_all((self._default, self._tccc, self._ntpc), dest_dir)

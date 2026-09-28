@@ -68,3 +68,12 @@ def test_a_youtube_url_still_gets_a_stable_key():
 
 def test_a_taichung_clip_is_keyed_by_its_prefixed_ano():
     assert video_id_of("https://vod.tccc.gov.tw/index.asp?url=12&cno=85&ano=14833") == "tccc-14833"
+
+
+def test_a_new_taipei_clip_is_keyed_by_its_prefixed_lowercase_guid():
+    guid = "ebc80ece-7491-4288-be73-7c59f6b4815c"
+    assert video_id_of(
+        f"https://vod.ntp.gov.tw/VodCloudV2/VOD/ViewMetaData?assetID={guid.upper()}"
+    ) == f"ntpc-{guid}"
+    assert video_id_of(
+        f"https://vod.ntp.gov.tw/VodCloudV2/VOD/ViewDetailMetaData/{guid}") == f"ntpc-{guid}"
