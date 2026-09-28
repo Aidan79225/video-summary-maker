@@ -608,3 +608,27 @@ class PartyLinkTests(TestCase):
         client = FakeClient()
         process_pending(client, limit=1, timeout=60)
         self.assertEqual(client.hints, ["臺中市議會 第4屆第8次定期會 市政總質詢。發言者：楊啓邦"])
+
+
+
+@override_settings(MEDIA_ROOT=MEDIA)
+class NtpcTitleTests(TestCase):
+    """攔的 bug：GPU 的標題用網站的原始名單（含主席），蓋掉 Pi 過濾過的標題之後，
+    新北的頭條會把副議長列成講者。"""
+
+    def test_the_pi_title_is_kept_for_new_taipei(self):
+        article = Article.objects.create(
+            ivod_id="ntpc-0408R1150916030", slug="2026-09-16-ntpc-0408R1150916030", source="ntpc",
+            title="2026-09-16 林裔綺、許昭興－第4屆第8次定期會 市政總質詢", speaker="林裔綺、許昭興",
+            date=date(2026, 9, 16), ivod_url="https://vod.ntp.gov.tw/x")
+        save_result(article, _payload() | {"title": "2026-09-16 林裔綺、許昭興、陳鴻源－第4屆第8次定期會 市政總質詢"})
+        article.refresh_from_db()
+        self.assertNotIn("陳鴻源", article.title)
+
+    def test_other_sources_still_take_the_gpu_title(self):
+        article = Article.objects.create(
+            ivod_id="900009", slug="2026-08-27-900009", title="舊標題", speaker="範例一",
+            date=date(2026, 8, 27), ivod_url="https://ivod.ly.gov.tw/Play/Clip/1M/900009")
+        save_result(article, _payload() | {"title": "2026-08-27 範例一－第11屆第5會期第23次會議"})
+        article.refresh_from_db()
+        self.assertEqual(article.title, "2026-08-27 範例一－第11屆第5會期第23次會議")

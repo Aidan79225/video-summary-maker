@@ -231,3 +231,23 @@ def test_the_council_fetch_keeps_verification_but_drops_the_strict_flag():
     assert not (context.verify_flags & ssl.VERIFY_X509_STRICT)
     assert context.verify_mode == ssl.CERT_REQUIRED
     assert context.check_hostname
+
+
+def test_a_truncated_response_degrades_instead_of_failing_the_job():
+    """攔的 bug：IncompleteRead 不是 OSError，截圖階段（整篇最後一步）遇到它會讓
+    已經跑完語音辨識與摘要的工作整個失敗；應該跟連線錯誤一樣退回「沒有截圖」。"""
+    import http.client
+
+    from slidebox.infrastructure.ivod_sections import HlsSectionGateway
+    from slidebox.usecases.sources import ntpc_clip
+
+    def truncated(url):
+        raise http.client.IncompleteRead(b"partial")
+
+    client = NtpcClient(fetch=truncated)
+    url = "https://vod.ntp.gov.tw/VodCloudV2/VOD/ViewMetaData?assetID=ebc80ece-7491-4288-be73-7c59f6b4815c"
+    with pytest.raises(NoSubtitlesAvailable):
+        client.video_url(ntpc_clip(url))
+    gateway = HlsSectionGateway(lambda u: client.video_url(ntpc_clip(u)), ffmpeg_exe="ffmpeg")
+    assert gateway.download_sections(url, [3.0, 60.0], None, "unused", lambda f, s: None,
+                                     lambda: False) == [None, None]

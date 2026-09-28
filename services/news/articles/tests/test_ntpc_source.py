@@ -360,14 +360,18 @@ class SourceTests(SimpleTestCase):
                              expected)
 
     def test_a_clip_with_nobody_left_is_not_registered(self):
-        roster = NtpcRoster(chairs=frozenset(), caucus_of={"江怡臻": "國民黨團"})
-        http = FakeHttp([_read("ntpc_search_2026-08-18.html")])
+        page = _read("ntpc_search_2026-08-18.html")
+        dpp = next(c for c in parse_cards(page) if c.guid == DPP1_0818)
+        # 這段名單上的人全都在對立黨團：過濾完沒有人
+        roster = NtpcRoster(chairs=frozenset(),
+                            caucus_of={"江怡臻": "國民黨團", **{n: "國民黨團" for n in dpp.speakers}})
+        http = FakeHttp([page])
         with self.assertLogs("articles.ntpc_source", level="INFO"):
             clips = _source(http, roster=roster).clips_for(date(2026, 8, 18))
         # 民進黨團兩段在這份名冊上沒有任何成員：不登記，也不查播放器頁
         self.assertNotIn("ntpc-0408R1150818030", [c.ivod_id for c in clips])
         self.assertNotIn(DPP1_0818, http.player_guids())
-        self.assertEqual(clips[0].speaker, "江怡臻")
+        self.assertEqual(clips[0].ivod_id, "ntpc-0408R1150818020")   # 國民黨團那段照常登記
 
     def test_mixed_sessions_are_optional(self):
         cards = [c for c in _split_cards(_read("ntpc_search_session_4_8_R_page01.html"))[1][:4]]
@@ -418,13 +422,12 @@ class PagingTests(SimpleTestCase):
         self.assertEqual(len(clips), 5)
         self.assertEqual([p for p in http.gets if "ToPage" in p], ["/VodCloudV2/VOD/ToPage?ToPage=2"])
 
-    def test_a_page_without_new_cards_stops_the_paging(self):
+    def test_paging_that_stops_short_is_unavailable(self):
+        """網站說有 7 筆、翻頁卻拿不到新的：當成失敗，不要當成「那天只有 4 段」。"""
         first, _ = self._pages()
         http = FakeHttp([first], pages={"ToPage=2": first})
-        with self.assertLogs("articles.ntpc_source", level="WARNING") as logs:
-            clips = _source(http).clips_for(date(2026, 8, 18))
-        self.assertTrue(any("只拿到 4 筆" in line for line in logs.output))
-        self.assertEqual(len(clips), 3)          # 前四張：報告事項不收，其餘三段
+        with self.assertRaises(SourceUnavailable):
+            _source(http).clips_for(date(2026, 8, 18))
 
     def test_a_lost_session_while_paging_is_unavailable(self):
         first, _ = self._pages()
@@ -543,6 +546,17 @@ class IngestCommandTests(TestCase):
             command._sources("ntpc")
             self.assertEqual(cls.return_value.fetch.call_count, 1)
 
+    def test_the_ntpc_roster_is_synced_even_when_other_bodies_already_have_rows(self):
+        """攔的 mutation：條件寫成「整張表是空的」的話，部署上已經有立法院、臺中的名冊，
+        新北就永遠不同步，回補的 290 段全部沒有主席與黨團過濾。"""
+        sync([MemberRecord(source="ly", external_id="1", name="某立委", party="民主進步黨")])
+        records = [_ntpc("蔣根煌", "483", role="議長", caucus="國民黨團")]
+        with mock.patch("articles.management.commands.ingest_ivod.NtpcMemberSource") as cls:
+            cls.return_value.fetch.return_value = records
+            [source] = self._command()._sources("ntpc")
+            self.assertEqual(cls.return_value.fetch.call_count, 1)
+        self.assertEqual(source._roster.chairs, frozenset({"蔣根煌"}))
+
     def test_a_failed_sync_continues_with_an_empty_roster(self):
         with mock.patch("articles.management.commands.ingest_ivod.NtpcMemberSource") as cls:
             cls.return_value.fetch.side_effect = MembersUnavailable("連不上")
@@ -622,3 +636,43 @@ class SchedulerStartupTests(TestCase):
     def test_disabled_sources_are_not_waited_for(self):
         sync([MemberRecord(source="ly", external_id="1", name="甲", party="民主進步黨")])
         self.assertEqual(self._missing(), [])
+
+
+
+class CaucusHistoryTests(SimpleTestCase):
+    """回補舊會期時名冊只有現況：換過黨團的人不能因此被拿掉。"""
+
+    def test_a_member_who_since_changed_caucus_is_kept_in_the_old_caucus_slot(self):
+        card = Card(guid="g", session="第4屆第6次定期會", agenda="一至六審各機關聯合業務報告及質詢-國民黨團發言",
+                    speakers=("王威元", "宋雨蓁Nikar．Falong", "鍾宏仁", "蔣根煌"), date="2025-10-07",
+                    start="14:12:49", duration_seconds=3600)
+        roster = NtpcRoster(chairs=frozenset({"蔣根煌"}),
+                            caucus_of={"王威元": "國民黨團", "宋雨蓁Nikar．Falong": "無黨團結聯盟",
+                                       "鍾宏仁": "民進黨團", "蔣根煌": "國民黨團"})
+        # 鍾宏仁是當天主持的召集人（對立黨團）：拿掉；宋雨蓁當時在國民黨團質詢：保留
+        self.assertEqual(speakers_for(card, classify(card.agenda), roster, chair="鍾宏仁"),
+                         ["王威元", "宋雨蓁Nikar．Falong"])
+
+    def test_a_chair_from_a_minor_caucus_is_removed_from_a_major_caucus_slot(self):
+        card = Card(guid="g", session="s", agenda="一至六審各機關聯合業務報告及質詢-民進黨團聯合發言",
+                    speakers=("馬見Lahuy．Ipin", "卓冠廷"), date="2026-07-31", start="15:27:11",
+                    duration_seconds=2000)
+        roster = NtpcRoster(chairs=frozenset(),
+                            caucus_of={"馬見Lahuy．Ipin": "無黨團結聯盟", "卓冠廷": "民進黨團"})
+        self.assertEqual(speakers_for(card, classify(card.agenda), roster, chair="馬見Lahuy．Ipin"),
+                         ["卓冠廷"])
+
+
+class LayoutChangeTests(SimpleTestCase):
+    """版面一改就解析不出東西，看起來跟「那天沒開會」一模一樣：要大聲失敗。"""
+
+    def test_cards_that_cannot_be_parsed_are_unavailable(self):
+        page = _read("ntpc_search_2026-09-16.html").replace("col-md-3 col-lg-2", "col-md-4")
+        with self.assertRaises(SourceUnavailable):
+            _source(FakeHttp([page])).clips_for(date(2026, 9, 16))
+
+    def test_a_renamed_label_is_unavailable(self):
+        for old, new in (("議　　程", "議　　題"), ("開會日期", "會議日期")):
+            page = _read("ntpc_search_2026-09-16.html").replace(old, new)
+            with self.assertRaises(SourceUnavailable, msg=old):
+                _source(FakeHttp([page])).clips_for(date(2026, 9, 16))

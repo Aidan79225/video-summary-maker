@@ -24,7 +24,7 @@ from .gpu_client import GpuApiClient, GpuApiError, JobField, JobFailed, JobStatu
 from .ivod_source import IvodClip, SourceUnavailable
 from .law_source import LawSource, LawUnavailable
 from .members_sync import link_article
-from .models import Article, ArticleStatus, Slide
+from .models import Article, ArticleSource, ArticleStatus, Slide
 
 logger = logging.getLogger(__name__)
 
@@ -439,7 +439,10 @@ def save_result(article: Article, payload: dict) -> Article:
     article.slides.all().delete()
     folder = f"{article.ivod_id}/{uuid4().hex[:8]}"
 
-    article.title = payload.get(DeckField.TITLE) or article.title
+    # 新北的講者是 Pi 依名冊過濾過的（拿掉議長、副議長與別黨團的召集人）；GPU 那邊沒有
+    # 名冊，標題用的是網站的原始名單。蓋過去的話，標題又會把主席列成講者。
+    if article.source != ArticleSource.NTPC or not article.title:
+        article.title = payload.get(DeckField.TITLE) or article.title
     article.source_note = payload.get(DeckField.SOURCE_NOTE) or ""
     article.transcript_text = payload.get(DeckField.TRANSCRIPT) or ""
     article.brief = clean_brief(payload.get(DeckField.BRIEF))

@@ -306,19 +306,25 @@ class NtpcMemberSource:
             try:
                 page = self._get(f"councilor-detail?program=37&A={area}&C={cid}")
             except OSError as e:
-                logger.warning("新北市議會 %s（C=%s）的個人頁抓不到：%s", name, cid, e)
-                continue
+                # 不能略過這個人：少了議長或副議長，總質詢就會把主席當成講者，而且表不是
+                # 空的就不會再同步。整次失敗，下次排程再來。
+                raise MembersUnavailable(f"新北市議會 {name}（C={cid}）的個人頁抓不到：{e}") from e
             party, role, term = parse_ntpc_profile(page)
             if not party and not term:
                 # 錯誤頁也可能回 200。當成抓不到：寫進去會把議長的職位洗成空的
-                logger.warning("新北市議會 %s（C=%s）的個人頁解析不出政黨與屆次，略過", name, cid)
-                continue
+                raise MembersUnavailable(
+                    f"新北市議會 {name}（C={cid}）的個人頁解析不出政黨與屆次，頁面可能出錯")
             records.append(MemberRecord(
                 source=ArticleSource.NTPC, external_id=cid, name=name, party=party,
                 district=f"第{area}選區", term=term, role=role,
                 caucus=caucus_of.get(cid, "")))
         # 有人的「現任」只列社團職務、沒寫「新北市第4屆議員」（2026-09 的洪佳君）。
         # 總覽頁列的都是本屆議員，屆次就用其他人頁面上的那一屆補。
+        roles = Counter(r.role for r in records if r.role)
+        if roles.get("議長") != 1 or roles.get("副議長") != 1:
+            raise MembersUnavailable(
+                f"新北市議會的名冊找到議長 {roles.get('議長', 0)} 位、副議長 {roles.get('副議長', 0)} 位，"
+                "不是各一位；名冊不完整就不寫入")
         terms = Counter(r.term for r in records if r.term)
         if terms:
             current = terms.most_common(1)[0][0]

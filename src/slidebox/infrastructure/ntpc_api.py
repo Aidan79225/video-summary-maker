@@ -9,6 +9,7 @@ Wowza 的串流網址加 `wowzaaudioonly=true` 就只給音訊，語音辨識不
 from __future__ import annotations
 
 import html
+import http.client
 import re
 import ssl
 import urllib.request
@@ -154,7 +155,8 @@ class NtpcClient:
             return self._cached[1]
         try:
             page = self._fetch(self.metadata_url(ref))
-        except OSError as e:
+        # IncompleteRead（連線中途斷掉）不是 OSError，要一起接
+        except (OSError, http.client.HTTPException) as e:
             raise NoSubtitlesAvailable(f"新北市議會的影片資訊頁抓不到：{e}") from e
         record = parse_metadata_page(page, ref)
         self._cached = (ref, record)
@@ -164,7 +166,8 @@ class NtpcClient:
         ref = _require(ref)
         try:
             page = self._fetch(self.player_url(ref))
-        except OSError as e:
+        # IncompleteRead（連線中途斷掉）不是 OSError，要一起接
+        except (OSError, http.client.HTTPException) as e:
             raise NoSubtitlesAvailable(f"新北市議會的播放器頁抓不到：{e}") from e
         stream = parse_stream_url(page)
         if not stream:

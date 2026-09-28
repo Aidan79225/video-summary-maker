@@ -149,10 +149,9 @@ class NtpcSourceTests(SimpleTestCase):
 
     def test_every_councilor_gets_party_role_caucus_and_district(self):
         sleeps = []
-        fetch = self._fetch(error_for=["C=590"])
-        with self.assertLogs("articles.members_sync", level="WARNING"):
-            records = NtpcMemberSource(self.BASE, fetch=fetch, sleep=sleeps.append).fetch()
-        self.assertEqual(len(records), 63)           # 64 位，C=590 那頁抓不到就跳過
+        fetch = self._fetch()
+        records = NtpcMemberSource(self.BASE, fetch=fetch, sleep=sleeps.append).fetch()
+        self.assertEqual(len(records), 64)
         by_name = {r.name: r for r in records}
         chiang = by_name["蔣根煌"]
         self.assertEqual((chiang.source, chiang.external_id, chiang.party, chiang.role,
@@ -179,13 +178,25 @@ class NtpcSourceTests(SimpleTestCase):
         records = NtpcMemberSource(self.BASE, fetch=fetch, sleep=lambda s: None).fetch()
         self.assertEqual(next(r for r in records if r.external_id == "532").term, "第4屆")
 
-    def test_an_error_page_is_skipped_rather_than_recorded_blank(self):
-        """錯誤頁也回 200：寫進去會把議長的職位洗成空的。"""
+    def test_an_error_page_fails_the_whole_sync(self):
+        """錯誤頁也回 200：寫進去會把議長的職位洗成空的；略過又會讓名冊少了議長。"""
         fetch = self._fetch(**{"&C=483": "<html>系統忙碌中，請稍後再試</html>"})
-        with self.assertLogs("articles.members_sync", level="WARNING"):
-            records = NtpcMemberSource(self.BASE, fetch=fetch, sleep=lambda s: None).fetch()
-        self.assertNotIn("蔣根煌", [r.name for r in records])
-        self.assertEqual(len(records), 63)
+        with self.assertRaises(MembersUnavailable):
+            NtpcMemberSource(self.BASE, fetch=fetch, sleep=lambda s: None).fetch()
+
+    def test_one_unreachable_profile_fails_the_whole_sync(self):
+        """攔的 bug：略過抓不到的那一位，剛好是副議長的話，名冊就少了主席，而且表不是空的
+        就不會再同步——之後每段總質詢都把副議長當成講者。"""
+        with self.assertRaises(MembersUnavailable):
+            NtpcMemberSource(self.BASE, fetch=self._fetch(error_for=["C=482"]),
+                             sleep=lambda s: None).fetch()
+
+    def test_a_roster_without_exactly_one_speaker_and_deputy_is_rejected(self):
+        normal = _read("ntpc_councilor_C520.html")
+        for page in ("&C=483", "&C=482"):
+            with self.assertRaises(MembersUnavailable):
+                NtpcMemberSource(self.BASE, fetch=self._fetch(**{page: normal}),
+                                 sleep=lambda s: None).fetch()
 
     def test_a_broken_list_is_unavailable(self):
         for fetch in (self._fetch(error_for=["councilor-all?program=37"]),
@@ -348,3 +359,14 @@ class LinkTests(TestCase):
         sync([_rec("甲", "無黨籍")], today=date(2026, 9, 1))
         self.assertEqual(membership_for("ly", "甲", date(2026, 9, 1)).party, "無黨籍")
         self.assertEqual(membership_for("ly", "甲", date(2026, 8, 31)).party, "民主進步黨")
+
+
+
+class NtpcCaucusClearingTests(TestCase):
+    def test_leaving_a_caucus_clears_it(self):
+        """攔的 mutation：caucus 若寫成「新值 or 舊值」，退出黨團的人會一直留在原黨團，
+        黨團時段的過濾就會錯。"""
+        from articles.models import Membership
+        sync([_rec("甲", "民主進步黨", source="ntpc", caucus="民進黨團")])
+        sync([_rec("甲", "民主進步黨", source="ntpc", caucus="")])
+        self.assertEqual(Membership.objects.get(name="甲").caucus, "")

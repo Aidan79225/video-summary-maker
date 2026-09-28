@@ -272,6 +272,10 @@ class NtpcRoster:
         return cls.from_rows(current.values_list("name", "role", "caucus"))
 
 
+# 兩個大黨團互為對立：出現在對方時段的只可能是主持的召集人
+_RIVAL_CAUCUS = {"國民黨團": "民進黨團", "民進黨團": "國民黨團"}
+
+
 def speakers_for(card: Card, slot: Slot, roster: NtpcRoster, chair: str = "") -> list[str]:
     """決策 3：這段影片要掛誰的名字。
 
@@ -291,7 +295,13 @@ def speakers_for(card: Card, slot: Slot, roster: NtpcRoster, chair: str = "") ->
         names = [n for n in names if n != chair]
     if slot is Slot.CAUCUS and roster.caucus_of:
         caucus = _CAUCUS_RE.search(compact).group(1)
-        names = [n for n in names if roster.caucus_of.get(n) == caucus]
+        # 只拿掉「對立大黨團」的人與別黨團的當天主席，不是只留「現在」同黨團的人：
+        # 名冊只有現況，回補舊會期時換過黨團的議員（宋雨蓁 4-6、4-7 在國民黨團質詢，
+        # 4-8 才改到無黨團結聯盟）會被錯拿掉。
+        rival = _RIVAL_CAUCUS.get(caucus)
+        names = [n for n in names
+                 if roster.caucus_of.get(n) != rival
+                 and not (n == chair and roster.caucus_of.get(n) != caucus)]
     return names
 
 
@@ -397,6 +407,10 @@ class NtpcDailySource:
         found: dict[str, Card] = {}
         for card in parse_cards(page):
             found.setdefault(card.guid, card)
+        if total and not found:
+            # 第一頁就一張都解析不出來：版面改了，不用再翻頁
+            raise SourceUnavailable(
+                f"新北市議會 {wanted}：網站說有 {total} 筆，第一頁一張卡片都解析不出來，頁面格式可能改了")
         page_no = 1
         # 每頁 12 筆；只有一頁時沒有分頁列。翻到湊滿總筆數、或某一頁沒有新卡片為止
         while len(found) < total:
@@ -411,10 +425,19 @@ class NtpcDailySource:
                 break
             for card in new:
                 found[card.guid] = card
+        # 版面或標籤一改，解析出來的就會是 0 張卡片或缺欄位的卡片，看起來跟「那天沒開會」
+        # 一模一樣。回顯的總筆數是網站自己說的，拿它當基準，對不上就大聲失敗。
         if len(found) < total:
-            logger.warning("新北市議會 %s：總筆數 %d，只拿到 %d 筆", wanted, total, len(found))
+            raise SourceUnavailable(
+                f"新北市議會 {wanted}：網站說有 {total} 筆，只解析出 {len(found)} 筆，頁面格式可能改了")
+        broken = [c.guid for c in found.values() if not c.agenda or not c.date]
+        if broken:
+            raise SourceUnavailable(
+                f"新北市議會 {wanted}：{len(broken)} 張卡片缺議程或開會日期，頁面格式可能改了")
         iso = day.isoformat()
         cards = [c for c in found.values() if c.date == iso]
+        if found and not cards:
+            raise SourceUnavailable(f"新北市議會 {wanted}：清單上沒有一張是這天的，日期篩選可能失效")
         if len(cards) < len(found):
             logger.warning("新北市議會 %s：%d 張卡片的開會日期不是這天，略過",
                            wanted, len(found) - len(cards))
