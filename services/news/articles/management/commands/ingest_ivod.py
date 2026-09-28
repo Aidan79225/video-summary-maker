@@ -4,6 +4,7 @@
     python manage.py ingest_ivod --date 2026-08-27
     python manage.py ingest_ivod --days 7       # 補跑最近七天
     python manage.py ingest_ivod --discover-only
+    python manage.py ingest_ivod --source tccc --date 2026-09-24 --days 45 --discover-only
 """
 from __future__ import annotations
 
@@ -29,6 +30,9 @@ class Command(BaseCommand):
         parser.add_argument("--limit", type=int, default=settings.INGEST_DAILY_LIMIT)
         parser.add_argument("--discover-only", action="store_true",
                             help="只登記，不送去產生摘要")
+        parser.add_argument("--source", choices=["ly", "tccc"],
+                            help="只查這個來源的清單（ly=立法院、tccc=臺中市議會）；"
+                                 "不給就兩個都查。只影響查清單，處理積壓不分來源。")
         parser.add_argument("--process-only", action="store_true",
                             help="不查立法院，只把待處理的送出去")
         parser.add_argument("--retry-imageless", action="store_true",
@@ -59,9 +63,7 @@ class Command(BaseCommand):
             return
 
         days = self._days(options)
-        sources = [IvodDailySource(settings.IVOD_API_BASE)]
-        if settings.TCCC_ENABLED:
-            sources.append(TcccDailySource(settings.TCCC_VOD_BASE))
+        sources = self._sources(options.get("source"))
         names = "、".join(s.name for s in sources)
         self.stdout.write(f"=== {days[-1]} ～ {days[0]}（{names}）===")
 
@@ -80,6 +82,18 @@ class Command(BaseCommand):
         report.pending = processed.pending
         report.errors.extend(processed.errors)
         self._report(report)
+
+    def _sources(self, only: str | None) -> list:
+        """要查哪些來源。--source 明確指定時連 TCCC_ENABLED 都不看——
+        使用者都指名要臺中了，再被環境變數擋掉只會讓人困惑。"""
+        if only == "ly":
+            return [IvodDailySource(settings.IVOD_API_BASE)]
+        if only == "tccc":
+            return [TcccDailySource(settings.TCCC_VOD_BASE)]
+        sources = [IvodDailySource(settings.IVOD_API_BASE)]
+        if settings.TCCC_ENABLED:
+            sources.append(TcccDailySource(settings.TCCC_VOD_BASE))
+        return sources
 
     def _days(self, options) -> list[date]:
         if options["date"]:
