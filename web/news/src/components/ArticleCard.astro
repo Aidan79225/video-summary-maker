@@ -4,6 +4,7 @@ import { mediaUrl } from '../lib/api';
 import { displayTitle, formatDateWithWeekday, humanDuration } from '../lib/format';
 import Figure from './Figure.astro';
 import SourceBadge from './SourceBadge.astro';
+import PartyBadge from './PartyBadge.astro';
 
 interface Props {
   article: ArticleCard;
@@ -39,6 +40,7 @@ const title = displayTitle(article.title);
       >
         {article.speaker}
       </a>
+      <PartyBadge party={article.party} />
       <SourceBadge source={article.source} class="ml-auto" />
     </div>
 

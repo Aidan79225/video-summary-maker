@@ -295,6 +295,16 @@ curl http://localhost:8800/health   # ollama_reachable 要是 true
 
 兩個來源的差別只在「怎麼找到當天的片段」：立法院查開放 API，臺中逐一翻 61 位議員的頁面（每天 61 次 HTTP）。臺中不想抓的話設 `TCCC_ENABLED=false`；只想補某一個來源用 `ingest_ivod --source tccc`（或 `ly`）。臺中的片段長、要跑語音辨識，一篇 10～20 分鐘；`GPU_JOB_TIMEOUT_SECONDS` 預設 1800 對 60 分鐘的片段偏緊，建議設 2700。
 
+### 人物、任期與政黨
+
+文章會標上講者**當時**的政黨，可依政黨篩選。資料分成 `Person`（真人）與 `Membership`（一段任期：哪個議會、哪個黨、選區、屆次、起訖），同一個人先當議員後當立委是同一個 Person 底下的兩筆任期。
+
+- `sync_members` 每週日 03:30 自動跑（第一次啟動時名單是空的也會先跑一次）：立法院從 LYAPI `/legislators?屆=LY_TERM` 拿黨籍、選區、到職與離職日；臺中抓官網 `wb_introduction02.asp` 的「黨藉」與選區（官網與影音系統的議員編號不同，用姓名對）。
+- 認人只靠姓名與別名：同名恰一個就連上、沒有就建、同名多個就另建一個並標 `needs_review`，到 admin 的「人物」用「合併」處理。
+- 換黨：來源只給目前黨籍，同步偵測到不同就把舊任期結束在當天、新開一筆，兩筆都標 `needs_review`，日期要人到 admin 補。
+- 合併後第一次部署要回填既有文章：`python manage.py sync_members --relink`。
+- 送去 GPU 的工作會附 `speech_hint`（議會名、會議名、講者姓名），走語音辨識的來源用它當 Whisper 的 `initial_prompt`，人名的同音錯字會少很多。
+
 ## 3. 前端（Pi）
 
 `web/news/` — Astro。讀 news API，呈現新聞頁。見 `web/news/README.md`。

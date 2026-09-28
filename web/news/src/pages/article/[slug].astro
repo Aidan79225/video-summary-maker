@@ -8,6 +8,7 @@ import { getArticle, safeExternalUrl, statusFor } from '../../lib/api';
 import { displayTitle, formatDateWithWeekday, humanDuration, mmss } from '../../lib/format';
 import { sourceSiteName } from '../../lib/sources';
 import SourceBadge from '../../components/SourceBadge.astro';
+import PartyBadge from '../../components/PartyBadge.astro';
 
 const slug = String(Astro.params.slug ?? '');
 const res = slug ? await getArticle(slug) : null;
@@ -48,6 +49,7 @@ const retryHref = Astro.url.pathname;
             >
               {article.speaker}
             </a>
+            <PartyBadge party={article.party} />
             <SourceBadge source={article.source} />
             <time datetime={article.date} class="tabular text-muted">
               {formatDateWithWeekday(article.date)}
@@ -68,6 +70,12 @@ const retryHref = Astro.url.pathname;
           )}
 
           <dl class="mt-6 flex flex-wrap items-center gap-x-5 gap-y-2 border-y border-line-soft py-3 text-[0.8rem] text-muted">
+            {article.party && (
+              <div class="flex items-center gap-1.5">
+                <dt class="text-muted/60">政黨</dt>
+                <dd><PartyBadge party={article.party} full={true} /></dd>
+              </div>
+            )}
             <div class="flex items-center gap-1.5">
               <dt class="text-muted/60">會議</dt>
               <dd class="text-ink-2">{article.meeting}</dd>

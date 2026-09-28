@@ -9,6 +9,8 @@ import type {
   Result,
   SpeakerList,
   Speaker,
+  Party,
+  PartyList,
 } from './types';
 import fixture from '../fixtures/sample.json';
 
@@ -244,6 +246,7 @@ function fixtureList(query: ArticleQuery): ArticleList {
     if (query.date && a.date !== query.date) return false;
     if (query.speaker && a.speaker !== query.speaker) return false;
     if (query.source && a.source !== query.source) return false;
+    if (query.party && !(a.party ?? '').split('、').includes(query.party)) return false;
     if (q) {
       const hay = `${a.title} ${a.teaser} ${a.meeting} ${a.speaker} ${a.transcript_text}`;
       if (!hay.includes(q)) return false;
@@ -278,6 +281,7 @@ export async function getArticles(query: ArticleQuery = {}): Promise<Result<Arti
   if (query.date) params.set('date', query.date);
   if (query.speaker) params.set('speaker', query.speaker);
   if (query.source) params.set('source', query.source);
+  if (query.party) params.set('party', query.party);
   if (query.q) params.set('q', query.q);
   params.set('page', String(Math.max(1, Number(query.page) || 1)));
   params.set('page_size', String(Math.max(1, Number(query.page_size) || 12)));
@@ -327,6 +331,28 @@ export async function getArticle(slug: string): Promise<Result<ArticleDetail>> {
       brief: normalizeBrief(d.brief),
     },
   };
+}
+
+export async function getParties(source?: string): Promise<Result<PartyList>> {
+  if (isFixtureMode()) {
+    const map = new Map<string, Party>();
+    for (const a of fixtureArticles()) {
+      if (source && a.source !== source) continue;
+      for (const name of (a.party ?? '').split('、').map((s) => s.trim()).filter(Boolean)) {
+        const cur = map.get(name);
+        if (cur) {
+          cur.count += 1;
+          if (!cur.latest_date || a.date > cur.latest_date) cur.latest_date = a.date;
+        } else {
+          map.set(name, { name, count: 1, latest_date: a.date });
+        }
+      }
+    }
+    return { ok: true, data: { items: [...map.values()].sort((a, b) => b.count - a.count) } };
+  }
+  const res = await getJson<PartyList>(source ? `/api/parties?source=${source}` : '/api/parties');
+  if (!res.ok) return res;
+  return { ok: true, data: { items: Array.isArray(res.data?.items) ? res.data.items : [] } };
 }
 
 export async function getSpeakers(source?: string): Promise<Result<SpeakerList>> {
