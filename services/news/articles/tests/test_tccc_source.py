@@ -209,14 +209,14 @@ class NoPagerTests(SimpleTestCase):
 
 
 class CommandSourceTests(SimpleTestCase):
-    """--source 只查一個來源；沒給就看 TCCC_ENABLED。"""
+    """--source 只查一個來源；沒給就看 TCCC_ENABLED。新北另有測試（它要查名冊，要資料庫）。"""
 
     def _names(self, only, tccc_enabled=True):
         from django.test import override_settings
 
         from articles.management.commands.ingest_ivod import Command
 
-        with override_settings(TCCC_ENABLED=tccc_enabled):
+        with override_settings(TCCC_ENABLED=tccc_enabled, NTPC_ENABLED=False):
             return [s.name for s in Command()._sources(only)]
 
     def test_no_flag_queries_both_when_taichung_is_enabled(self):
