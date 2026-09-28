@@ -51,6 +51,10 @@ python -c "import secrets; print(secrets.token_urlsafe(64))"
 | `GPU_JOB_TIMEOUT_SECONDS` | `1800` | 等單一支影片的上限 |
 | `INGEST_DAILY_LIMIT` | `20` | **每次執行**最多處理幾段（一段約 3～5 分鐘）。回補多天只是多查幾天的清單，處理上限不變。 |
 | `INGEST_HOUR` | `4` | 常駐排程每天幾點跑 |
+| `NTPC_ENABLED` | `True` | 每天也查新北市議會的質詢片段（`ingest_ivod --source ntpc` 不看這個設定） |
+| `NTPC_INCLUDE_MIXED` | `True` | 新北的多黨混合時段（市長施政報告、總預算報告、專案報告）也收 |
+| `NTPC_VOD_BASE` | `https://vod.ntp.gov.tw` | 新北市議會議事影音系統 |
+| `NTPC_WEB_BASE` | `https://www.ntp.gov.tw` | 新北市議會官網（名冊：政黨、議長／副議長、黨團） |
 
 ## 每日匯入
 
@@ -63,7 +67,12 @@ uv run python manage.py ingest_ivod --days 7        # 多查七天的清單（�
 uv run python manage.py ingest_ivod --discover-only # 只登記，不送去產生摘要
 uv run python manage.py ingest_ivod --process-only  # 不查立法院，只把待處理的送出去
 uv run python manage.py ingest_ivod --retry-imageless  # 重跑「一張截圖都沒有」的文章
+
+# 新北市議會：回補第 4 屆第 6～8 次定期會（質詢在 2026-09-17 結束）
+uv run python manage.py ingest_ivod --source ntpc --date 2026-09-17 --days 400 --discover-only
 ```
+
+新北怎麼挑片段、講者怎麼認，見根目錄 README 的「新北市議會」一節與 `articles/ntpc_source.py`。
 
 ### 關於截圖
 

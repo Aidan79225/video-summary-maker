@@ -291,15 +291,36 @@ curl http://localhost:8800/health   # ollama_reachable 要是 true
 
 ## 2. 後端（Pi）
 
-`services/news/` — Django + django-ninja。每天凌晨抓前一天的質詢片段（立法院 IVOD 與臺中市議會）、送去 GPU 主機產生**詳細模式**的摘要、存成文章，並開出 news API。見 `services/news/README.md`。
+`services/news/` — Django + django-ninja。每天凌晨抓前一天的質詢片段（立法院 IVOD、臺中市議會與新北市議會）、送去 GPU 主機產生**詳細模式**的摘要、存成文章，並開出 news API。見 `services/news/README.md`。
 
-兩個來源的差別只在「怎麼找到當天的片段」：立法院查開放 API，臺中逐一翻 61 位議員的頁面（每天 61 次 HTTP）。臺中不想抓的話設 `TCCC_ENABLED=false`；只想補某一個來源用 `ingest_ivod --source tccc`（或 `ly`）。臺中的片段長、要跑語音辨識，一篇 10～20 分鐘；`GPU_JOB_TIMEOUT_SECONDS` 預設 1800 對 60 分鐘的片段偏緊，建議設 2700。
+三個來源的差別只在「怎麼找到當天的片段」：立法院查開放 API，臺中逐一翻 61 位議員的頁面（每天 61 次 HTTP），新北查影音系統的日期查詢（見下）。臺中不想抓的話設 `TCCC_ENABLED=false`、新北設 `NTPC_ENABLED=false`；只想補某一個來源用 `ingest_ivod --source tccc`（或 `ly`、`ntpc`）。臺中的片段長、要跑語音辨識，一篇 10～20 分鐘；`GPU_JOB_TIMEOUT_SECONDS` 預設 1800 對 60 分鐘的片段偏緊，建議設 2700。
+
+### 新北市議會
+
+來源代碼 `ntpc`，查的是「議事影音隨選視訊系統」（`vod.ntp.gov.tw/VodCloudV2`）：每天一次日期查詢，再為每段要收的片段看一次播放器頁，全部循序、間隔一秒。**一個媒體檔登記一篇**，`ivod_id` 是 `ntpc-<檔案 key>`（例：`ntpc-0408R1150916020`）；同一個檔案被上架兩次（兩個 GUID）也只登記一次。沒有逐字稿，一律在 GPU 主機跑語音辨識；市政總質詢一段最長兩個多小時，`GPU_JOB_TIMEOUT_SECONDS` 可能要比臺中再調大。
+
+怎麼挑片段：
+
+- **只收質詢**：議程是「市政總質詢」、含「各機關聯合業務報告及質詢-」（業務質詢），或多黨混合的「市長施政報告」「市長報告…總預算」「…專案報告」（`NTPC_INCLUDE_MIXED=false` 就不收這類）；而且長度至少 3 分鐘。報告事項、三讀、討論議案、預備會議都略過。
+- **講者**：影音系統的「發言議員」連主席都列進去，而且依筆畫排序、不是發言順序。議長、副議長從不質詢，一律移除；業務質詢的個人時段（`…-李翁議員月娥`）只掛那一位，黨團時段（`…-國民黨團發言`、`…-民進黨團聯合發言`）只留該黨團的成員（主持的審查會召集人不一定同黨團）；多黨混合時段另外移除當天開場「報告事項」只列的那一位（當天主席）；市政總質詢不再過濾——一段是一個黨團聯合質詢的一個時間切片。多位講者用「、」串起；過濾後沒有人就先不登記。
+- **名冊**：政黨、議長／副議長、黨團都來自官網 `www.ntp.gov.tw`，併在 `sync_members`（`--source ntpc`）裡，一次 68 個請求。`ingest_ivod` 查新北之前若名冊是空的，會先同步一次；同步失敗就只套用個人時段與「移除當天主席」，並印一次警告。姓名去空白、間隔號統一成「．」，官網的「宋雨蓁 Nikar‧Falong」才對得上影音系統的「宋雨蓁Nikar．Falong」。
+- 文章標的是**政黨**（官網的「無政黨」統一成「無黨籍」）；黨團只拿來判斷時段裡誰不屬於該黨團——有 4 位議員政黨與黨團不同。
+
+回補：第 4 屆第 8 次定期會的質詢在 **2026-09-17** 結束，之後到第 4 屆結束（2026-12-24）是委員會審查與三讀，每日排程近期多半查不到東西。價值在回補過去三個定期會（第 6～8 次，約 290 段）：
+
+```bash
+python manage.py ingest_ivod --source ntpc --date 2026-09-17 --days 400 --discover-only
+```
+
+大約 400 次查詢加上每段一次播放器頁，一秒一個請求，十幾分鐘。登記好的文章交給每天的處理上限（`INGEST_DAILY_LIMIT`）慢慢消化。
+
+設定：`NTPC_ENABLED`（預設 `true`）、`NTPC_INCLUDE_MIXED`（預設 `true`）、`NTPC_VOD_BASE`（`https://vod.ntp.gov.tw`）、`NTPC_WEB_BASE`（`https://www.ntp.gov.tw`）。
 
 ### 人物、任期與政黨
 
 文章會標上講者**當時**的政黨，可依政黨篩選。資料分成 `Person`（真人）與 `Membership`（一段任期：哪個議會、哪個黨、選區、屆次、起訖），同一個人先當議員後當立委是同一個 Person 底下的兩筆任期。
 
-- `sync_members` 每週日 03:30 自動跑（第一次啟動時名單是空的也會先跑一次）：立法院從 LYAPI `/legislators?屆=LY_TERM` 拿黨籍、選區、到職與離職日；臺中抓官網 `wb_introduction02.asp` 的「黨藉」與選區（官網與影音系統的議員編號不同，用姓名對）。
+- `sync_members` 每週日 03:30 自動跑（啟動時任何一個啟用中的來源還沒有名單，也會先跑一次）：立法院從 LYAPI `/legislators?屆=LY_TERM` 拿黨籍、選區、到職與離職日；臺中抓官網 `wb_introduction02.asp` 的「黨藉」與選區（官網與影音系統的議員編號不同，用姓名對）；新北抓官網的議員總覽、個人頁與三個黨團頁，另外記下議長／副議長與黨團（`Membership.role`、`Membership.caucus`，其他來源留空）。
 - 認人只靠姓名與別名：同名恰一個就連上、沒有就建、同名多個就另建一個並標 `needs_review`，到 admin 的「人物」用「合併」處理。
 - 換黨：來源只給目前黨籍，同步偵測到不同就把舊任期結束在當天、新開一筆，兩筆都標 `needs_review`，日期要人到 admin 補。
 - 合併後第一次部署要回填既有文章：`python manage.py sync_members --relink`。
