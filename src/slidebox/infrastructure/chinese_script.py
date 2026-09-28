@@ -65,18 +65,33 @@ _ZHI_ADVERB_BEFORE = frozenset("是这這那就也都不还還才只")
 # 後面接這些字的「只」是副詞（唯一只有、最多只能、別只看）；量詞「隻」後面接的是名詞
 _ZHI_ADVERB_NEXT = frozenset("是有能要会會好针針限剩需看顾顧想靠做讲講说說在对對给給为為差求花拿怕管用")
 _COUNTED = frozenset("狗猫貓鸡雞鸟鳥鴨鸭鱼魚手脚腳眼船车車牛羊猪豬犬兔虫蟲熊猴马馬鹿鼠蚊")
+# 前面是這些字的「只」是量詞「隻」（幾隻、每隻、兩隻、一千多隻、哪隻、整隻）……
+_ZHI_CLASSIFIER_BEFORE = frozenset("一二三四五六七八九十百千万萬两兩几幾少每哪某整半多大"
+                                   "0123456789０１２３４５６７８９")
+# ……除非那個字是另一個詞的結尾：唯一只有、統一只要、第一只是、不一只是、最多只能、很多只是、最大只能
+_ZHI_WORD_BEFORE = frozenset({"唯一", "统一", "統一", "单一", "單一", "第一", "不一", "同一", "划一",
+                              "劃一", "最多", "很多", "太多", "更多", "不多", "最大", "最少", "至少",
+                              "很少", "太少", "更少"})
 _ZHUN_WORD_AFTER = frozenset("确確备備时時则則绳繩点點")  # 不準確、不準備、準則…才是「準」
 # 「不准」只有後面接動作（不准停、不准進）才是禁止；句尾、語助詞前、「准不准」「說不准」是「不準」
 _ZHUN_PARTICLES = frozenset("了的啦啊耶吗嗎嘛呢喔哦吧欸呀")
-_ZHUN_JUDGE_BEFORE = frozenset("说說看抓猜测測")
+_ZHUN_JUDGE_BEFORE = frozenset("看抓猜测測瞄")                  # 看不準、抓不準：不管後面接什麼
+_ZHUN_SAY_BEFORE = frozenset("说說")                         # 說不準（句尾）／說不准停車（接動作）
+_ZHUN_MEASURED = ("预报", "預報", "数据", "數據", "数字", "數字", "民调", "民調", "测速", "測速",
+                  "照相", "测量", "測量", "统计", "統計", "时间", "時間", "估计", "估計", "预测",
+                  "預測", "预估", "預估", "仪器", "儀器", "计算", "計算", "温度", "溫度", "时钟",
+                  "時鐘", "手表", "手錶", "秤", "量尺", "准度", "準度", "天气", "天氣")
 _TUO_KEEP_BEFORE = frozenset("育婴嬰儿兒盘盤")          # 托育、托嬰、托兒、托盤
 _TUO_COMPOUND_AFTER = frozenset("委拜请請信寄嘱囑推")     # 委託、拜託…的「托」照 OpenCC
 _QIAN_LOT_BEFORE = frozenset("抽求竹牙号號")              # 抽籤、求籤、竹籤、號碼籤
 _QIAN_LOT_AFTER = frozenset("诗詩筒王")
 _QIAN_LABEL_BEFORE = frozenset("书書标標")                  # 書籤、標籤——除非後面是簽署的動作
-_QIAN_SIGN_AFTER = frozenset("约約名署发發核收呈字")         # 目標簽約、證書簽發、文書簽核
+_QIAN_SIGN_AFTER = frozenset("约約名署发發核收呈字订訂")       # 證書簽發、文書簽核、會議中簽署
 _QIAN_SIGN_AFTER_BOOK = frozenset("了下到")                  # 契約書簽了、協議書簽下去
-_QIAN_NOT_LOTTERY = frozenset("其之当當")                    # 其中簽了三份 不是 中籤
+_QIAN_BOOK_BEFORE = frozenset("书書")
+_QIAN_TARGET_BEFORE = frozenset("目指")                      # 目標簽約、指標簽約：「標」屬於前一個詞
+# 「X中签」的 X 讓「中」變成「…之中」：過程中簽了、任期中簽訂、其中簽了三份
+_QIAN_NOT_LOTTERY = frozenset("其之当當程议議会會期动動年集院间間")
 # 「里」：後面接 面／頭／邊 是「裡」；前面是這些字、或後面是 長／民／辦… 是行政區的「里」
 _LI_INSIDE_AFTER = frozenset("面头頭边邊")
 _LI_INSIDE_SIMPLIFIED = frozenset("头边")                    # 正體段落裡的「里头」「里边」
@@ -86,15 +101,35 @@ _LI_VILLAGE_AFTER = frozenset("長长民辦办幹干鄰邻")
 # 「園區里辦公」「公司里幹了十年」「社區里長大」：後面這兩個字表示「在…裡」，不是里辦、里幹、里長
 _LI_LOCATIVE_NEXT = frozenset({"民众", "民眾", "办公", "辦公", "长大", "長大", "长期", "長期",
                                "长久", "長久", "干了", "幹了"})
-# 口語的「那」後面接「里民」「里長」，多半是「那，里民也…」；「那裡民宿」「那裡長出」例外
+# 只有「容器」名詞後面才可能是「在…裡」：公園里、園區里、公司里、學校里、議會里、社區里
+_LI_CONTAINER = frozenset("园園区區司校会會院场場室厂廠店楼樓馆館所家屋")
+# 第三個字跟第二個字成詞，就不是「長大／長期／民眾」：里長大家、里長大概、里長期待、里民眾多
+_LI_LOCATIVE_BLOCK = frozenset({
+    "长大家", "長大家", "长大概", "長大概", "长大多", "長大多", "长大部", "長大部", "长大力",
+    "長大力", "长大约", "長大約", "长大致", "長大致", "长大哥", "長大哥", "长大姐", "長大姐",
+    "长期待", "長期待", "长期盼", "長期盼", "长期望", "長期望", "长期间", "長期間", "长期满",
+    "長期滿", "民众多", "民眾多",
+})
+# 口語的「那」後面接「里民」「里長」再接這些字，才是「那，里長也…」；那裡長照、那裡民宅 照舊
 _LI_NA_VILLAGE = frozenset("民长長")
-_LI_NA_THERE = frozenset({"民宿", "民生", "民间", "民間", "民风", "民風", "民俗", "民意", "民族",
-                          "长出", "長出", "长满", "長滿", "长得", "長得"})
+_LI_NA_VILLAGE_NEXT = frozenset("也都就会會说說跟们們要讲講来來还還又反他她对對提")
 _LI_OFFICES = frozenset({"办公处", "辦公處", "办公室", "辦公室"})   # 里辦公處、里辦公室 是行政區
 _NUMERALS = frozenset("零一二三四五六七八九十百千两兩几幾")
-# 「三千万里面」「108万里面」「上万里面」：萬前面是數量，「萬里」就不是地名
-_AMOUNT = _NUMERALS | frozenset("0123456789０１２３４５６７８９上数數多")
-_ZHENG = frozenset("争爭")                                   # 系爭（OpenCC 詞庫把「系争」排成「係爭」）
+# 「三千万里面」「108万里面」：前面是數量，「萬里」「八里」就不是地名；上萬、數萬、多萬 只看「萬」
+_AMOUNT = _NUMERALS | frozenset("0123456789０１２３４５６７８９")
+_AMOUNT_BEFORE_WAN = frozenset("上数數多")
+_ZHENG = frozenset("争爭")
+_GUAN = frozenset("关關")                                    # 關係爭取 的「係」不動
+# 提示句姓名的第一個字跟前一個字組成這些詞時，姓名其實是別的詞的一部分（規範雲端、其餘天數）。
+# 不用 OpenCC 詞庫：裡面有「的钟」「同游」「年余」這類只為了消歧義的片段，不是詞。
+_NAME_WORD_BEFORE = {
+    "于": frozenset("关關对對由至属屬等基位用处處在终終鉴鑒过過"),
+    "余": frozenset("其剩多业業盈结結残殘"),
+    "范": frozenset("规規示模防典师師风風"),
+    "游": frozenset("旅导導漫周郊"),
+    "郁": frozenset("忧憂浓濃抑"),
+    "涂": frozenset("糊"),
+}                                   # 系爭（OpenCC 詞庫把「系争」排成「係爭」）
 _JUE = frozenset("决決")                                     # 表決（OpenCC 的「名表→名錶」）
 # 保護詞的詞界
 _LI_TERM_AFTER = frozenset("这這那哪家心城屋村夜手眼嘴")       # 这里长期 不是 里長
@@ -304,15 +339,20 @@ def _qian(text: str, i: int, prev: str, nxt: str) -> str:
     """「签」：抽籤、中籤、書籤、標籤是「籤」，其他（簽約、簽名、簽了）是「簽」。"""
     if text[max(0, i - 2):i] in ("上上", "下下"):
         return "籤"
-    if prev == "中" and (i < 2 or text[i - 2] not in _QIAN_NOT_LOTTERY):
-        return "籤"           # 中籤率；其中簽了三份 不是
+    if prev == "中":
+        if nxt in _QIAN_SIGN_AFTER or (i >= 2 and text[i - 2] in _QIAN_NOT_LOTTERY):
+            return "簽"       # 會議中簽署、過程中簽了、其中簽了三份
+        return "籤"           # 中籤、中籤率
     if prev in _QIAN_LOT_BEFORE or nxt in _QIAN_LOT_AFTER:
         return "籤"
     if nxt == "一" and text[i + 2:i + 3] == "签":
         return "簽"           # 簽一簽
+    if prev in _QIAN_BOOK_BEFORE:
+        signing = nxt in _QIAN_SIGN_AFTER or nxt in _QIAN_SIGN_AFTER_BOOK
+        return "簽" if signing else "籤"   # 契約書簽了、證書簽發；書籤
     if prev in _QIAN_LABEL_BEFORE:
-        signing = nxt in _QIAN_SIGN_AFTER or (prev in "书書" and nxt in _QIAN_SIGN_AFTER_BOOK)
-        return "簽" if signing else "籤"
+        target = i >= 2 and text[i - 2] in _QIAN_TARGET_BEFORE
+        return "簽" if target and nxt in _QIAN_SIGN_AFTER else "籤"   # 目標簽約；標籤名稱
     return "簽"
 
 
@@ -323,15 +363,15 @@ def _shared(text: str, norm: str, i: int, o: str, c: str, prev: str, nxt: str) -
     if o in "台占" and c in "臺佔":
         return o              # 臺灣兩種寫法都通行；但「台风」的「颱」要照 OpenCC
     if o in _SURNAMES and not _in_phrase(norm, i) and (
-            _title_follows(text, i)
+            _title_follows(text, i, o)
             or (o in _SURNAMES_AFTER_TITLE and _title_precedes(text, i))):
         return o              # 不在任何詞裡、前後有職稱：是姓氏（游局長、范雲委員、立委游毓蘭）
-    if o == "只" and c == "隻" and _zhi_is_adverb(prev, nxt):
+    if o == "只" and c == "隻" and _zhi_is_adverb(text, i, prev, nxt):
         return o              # 是只有、唯一只能、最多只有、別只看、第一只是：副詞
     if o == "准" and c == "準" and prev == "不" and _zhun_forbids(text, i, nxt):
         return o              # 不准停車（OpenCC 詞庫把「不准」排成「不準」）
-    if o == "系" and c == "係" and nxt in _ZHENG:
-        return o              # 系爭條文、系爭土地
+    if o == "系" and c == "係" and nxt in _ZHENG and prev not in _GUAN:
+        return o              # 系爭條文、系爭土地；關係爭取 不是
     if o == "托" and nxt in _TUO_KEEP_BEFORE and prev not in _TUO_COMPOUND_AFTER:
         return o              # 托育、托嬰（OpenCC 會變成「託嬰」）；委托兒福 仍是委託
     if o == "表" and c == "錶" and nxt in _JUE:
@@ -340,8 +380,7 @@ def _shared(text: str, norm: str, i: int, o: str, c: str, prev: str, nxt: str) -
 
 
 def _li(text: str, i: int, c: str, prev: str, nxt: str) -> str:
-    if (prev == "那" and nxt in _LI_NA_VILLAGE and not _li_locative(text, i)
-            and text[i + 1:i + 3] not in _LI_NA_THERE):
+    if prev == "那" and nxt in _LI_NA_VILLAGE and text[i + 2:i + 3] in _LI_NA_VILLAGE_NEXT:
         return "里"           # 那 里民也跟我反映、那 里長說：這個「那」是語氣詞
     if prev in _LI_NEAR_BEFORE:
         return "裡"           # 这里长期、那里民众：「這裡」「那裡」優先
@@ -359,15 +398,19 @@ def _li(text: str, i: int, c: str, prev: str, nxt: str) -> str:
 
 
 def _li_locative(text: str, i: int) -> bool:
-    return text[i + 1:i + 3] in _LI_LOCATIVE_NEXT and text[i + 1:i + 4] not in _LI_OFFICES
+    """公園里民众、園區里辦公、社區里長大：容器名詞 + 里 + 民眾／辦公／長大／長期…"""
+    return (i > 0 and text[i - 1] in _LI_CONTAINER
+            and text[i + 1:i + 3] in _LI_LOCATIVE_NEXT
+            and text[i + 1:i + 4] not in _LI_OFFICES
+            and text[i + 1:i + 4] not in _LI_LOCATIVE_BLOCK)
 
 
-def _title_follows(text: str, i: int) -> bool:
+def _title_follows(text: str, i: int, surname: str = "") -> bool:
     for j in range(i + 1, i + 4):
         for title in _TITLES:
             if text.startswith(title, j) and not (
-                    title in ("委员", "委員") and text[j + 2:j + 3] in ("会", "會")):
-                return True   # 「于委员会」的委員會不是職稱
+                    surname == "于" and title in ("委员", "委員") and text[j + 2:j + 3] in ("会", "會")):
+                return True   # 「于委员会」是介詞＋委員會；「游委員會不會」是游委員＋會
     return False
 
 
@@ -375,20 +418,31 @@ def _title_precedes(text: str, i: int) -> bool:
     return any(text.endswith(title, 0, i) for title in _TITLES)
 
 
-def _zhi_is_adverb(prev: str, nxt: str) -> bool:
+def _zhi_is_adverb(text: str, i: int, prev: str, nxt: str) -> bool:
     if prev in _COUNTED or nxt in _COUNTED:
         return False          # 豬隻、犬隻、一隻狗
-    return prev in _ZHI_ADVERB_BEFORE or nxt in _ZHI_ADVERB_NEXT
+    if prev in _ZHI_ADVERB_BEFORE:
+        return True           # 是只有、这只能、就只剩
+    if prev in _ZHI_CLASSIFIER_BEFORE:
+        return text[max(0, i - 2):i] in _ZHI_WORD_BEFORE   # 唯一只有、最多只能；幾隻、每隻、一千多隻
+    return nxt in _ZHI_ADVERB_NEXT                         # 別只看、也有只針對
 
 
 def _zhun_forbids(text: str, i: int, nxt: str) -> bool:
-    """「不准」是禁止（准）還是不準確（準）：後面接動作才是禁止。"""
+    """「不准」是禁止（准）還是不準確（準）。
+
+    後面接動作一定是禁止（不准停車、說不准進入）；句尾或語助詞前，前面有測量的東西
+    （預報、數據、民調、測速照相）才是不準確，否則還是禁止（中央不准、依法是不准的）。
+    """
     before = text[i - 2] if i >= 2 else ""
-    if before == "准" or before in _ZHUN_JUDGE_BEFORE:
-        return False          # 准不准、說不準
-    if not nxt or not _CJK_CHAR.match(nxt) or nxt in _ZHUN_PARTICLES or nxt in _ZHUN_WORD_AFTER:
-        return False          # 預報不準、不準啦、不準的問題、不準確
-    return True
+    if before == "准" or before in _ZHUN_JUDGE_BEFORE or nxt in _ZHUN_WORD_AFTER:
+        return False          # 准不准、看不準、不準確、不準時
+    if nxt and _CJK_CHAR.match(nxt) and nxt not in _ZHUN_PARTICLES:
+        return True           # 不准停、說不准進入
+    if before in _ZHUN_SAY_BEFORE:
+        return False          # 句尾的「說不準」：很難說
+    window = text[max(0, i - 10):i - 1]
+    return not any(word in window for word in _ZHUN_MEASURED)
 
 
 def _protect(original: str, norm: str, out: str, keep: Sequence[str], names: frozenset[str],
@@ -430,7 +484,8 @@ def _crosses_word(original: str, start: int, end: int, term: str) -> bool:
     if term[0] == "后" and before and before not in _HOU_TERM_BEFORE:
         return True           # 然后里面、会后里长 的「后」屬於前一個詞
     if term.endswith("里") and after in _LI_INSIDE_AFTER:
-        return before in _AMOUNT  # 三千万里面、108万里面、上万里面 不是 萬里
+        # 三千万里面、108万里面、上万里面 不是 萬里；晚上大里面臨 的「上」屬於「晚上」
+        return before in _AMOUNT or (term[0] in "万萬" and before in _AMOUNT_BEFORE_WAN)
     if term.endswith("准") and after in _ZHUN_WORD_AFTER:
         return True           # 考核准则 是 準則
     return False
@@ -438,17 +493,7 @@ def _crosses_word(original: str, start: int, end: int, term: str) -> bool:
 
 def _name_inside_word(original: str, norm: str, start: int, end: int) -> bool:
     """提示句裡的姓名其實是別的詞的一部分（規范雲端、剩余天數、關于美人魚）：前一個字跟
-    姓名的第一個字在 OpenCC 詞庫裡是一個詞，而且後面沒有職稱。"""
+    姓名的第一個字是一個真正的詞，而且姓名後面沒有職稱。"""
     if start == 0 or any(original.startswith(title, end) for title in _TITLES):
         return False
-    return _joins(norm, start)
-
-
-def _joins(norm: str, k: int) -> bool:
-    """有沒有一個詞同時蓋到 k-1 與 k 兩個位置。"""
-    keys, longest = _phrases()
-    for size in range(2, min(longest, 6) + 1):
-        for begin in range(max(0, k - size + 1), k):
-            if begin + size <= len(norm) and norm[begin:begin + size] in keys:
-                return True
-    return False
+    return norm[start - 1] in _NAME_WORD_BEFORE.get(norm[start], ())
