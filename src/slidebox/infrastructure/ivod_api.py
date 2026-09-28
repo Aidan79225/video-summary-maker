@@ -12,6 +12,7 @@ from collections.abc import Sequence
 from ..domain.entities import Cue, Transcript
 from ..domain.errors import SubtitleDownloadFailed
 from ..usecases.sources import ivod_id
+from .chinese_script import TraditionalFixer, keep_terms_from
 
 _BASE = "https://ly.govapi.tw/v2/ivods"
 
@@ -110,6 +111,10 @@ class IvodSubtitleGateway:
 
         cues = tuple(c for c in (_cue(s) for s in _whisperx(record))
                      if c is not None)
+        # 立法院的 WhisperX 逐字稿也會漂成簡體（IVOD 170000 有 9/14 段）。依序修正，
+        # 委員姓名與會議名稱當成保護詞，免得「游」「范」這類姓被改掉。
+        fixer = TraditionalFixer(keep_terms_from(_title(record, video_id)))
+        cues = tuple(Cue(c.start, c.end, fixer(c.text)) for c in cues)
         if not cues:
             # 刻意用 SubtitleDownloadFailed：一般的 NoSubtitlesAvailable 會啟動
             # 語音備援，而備援用的是 yt-dlp，它不認得 IVOD 網址——使用者最後
