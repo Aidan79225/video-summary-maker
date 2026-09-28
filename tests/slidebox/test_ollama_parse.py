@@ -100,3 +100,56 @@ def test_missing_or_non_string_detail_degrades_to_empty():
     )
     assert slides[0].detail == ""
     assert slides[1].detail == ""
+
+
+# --- 第三人稱改寫 ---
+
+
+def test_rewrite_keeps_index_title_and_timestamp_from_the_original():
+    from slidebox.domain.entities import Slide
+    from slidebox.infrastructure.ollama_summarizer import parse_rewrite_response
+
+    original = Slide(index=3, title="標題", bullets=("我們要求",), timestamp=90.0, detail="我們認為")
+    slide = parse_rewrite_response(
+        '{"bullets": ["講者要求"], "detail": "講者認為", "title": "被改掉的標題", "timestamp": 1}',
+        original)
+    assert (slide.index, slide.title, slide.timestamp) == (3, "標題", 90.0)
+    assert slide.bullets == ("講者要求",)
+    assert slide.detail == "講者認為"
+
+
+def test_rewrite_in_normal_mode_never_gains_a_detail():
+    from slidebox.domain.entities import Slide
+    from slidebox.infrastructure.ollama_summarizer import parse_rewrite_response
+
+    original = Slide(index=1, title="t", bullets=("我們",), timestamp=0.0, detail="")
+    slide = parse_rewrite_response('{"bullets": ["講者"], "detail": "模型硬寫的一段"}', original)
+    assert slide.detail == ""
+
+
+def test_rewrite_with_empty_bullets_keeps_the_original_bullets():
+    from slidebox.domain.entities import Slide
+    from slidebox.infrastructure.ollama_summarizer import parse_rewrite_response
+
+    original = Slide(index=1, title="t", bullets=("我們",), timestamp=0.0)
+    assert parse_rewrite_response('{"bullets": [], "detail": ""}', original).bullets == ("我們",)
+
+
+def test_rewrite_rejects_non_json():
+    import pytest
+
+    from slidebox.domain.entities import Slide
+    from slidebox.domain.errors import SummarizerOutputInvalid
+    from slidebox.infrastructure.ollama_summarizer import parse_rewrite_response
+
+    with pytest.raises(SummarizerOutputInvalid):
+        parse_rewrite_response("not json", Slide(1, "t", ("x",), 0.0))
+
+
+def test_rewrite_prompt_tells_the_model_to_use_the_third_person():
+    from slidebox.domain.entities import Slide
+    from slidebox.infrastructure.ollama_summarizer import _REWRITE_SYSTEM, _build_rewrite_prompt
+
+    assert "第三人稱" in _REWRITE_SYSTEM and "講者" in _REWRITE_SYSTEM
+    prompt = _build_rewrite_prompt(Slide(1, "t", ("我們要求",), 0.0), "第 1 頁用了第一人稱「我們」")
+    assert "我們要求" in prompt and "第一人稱" in prompt and "detail 請輸出空字串" in prompt

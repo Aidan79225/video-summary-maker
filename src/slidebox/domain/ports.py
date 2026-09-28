@@ -71,6 +71,26 @@ class BriefWriter(Protocol):
         ...
 
 
+class SlideRewriter(Protocol):
+    def rewrite(
+        self,
+        slide: Slide,
+        problem: str,
+        progress: ProgressCallback,
+        is_cancelled: CancelCheck | None = None,
+    ) -> Slide:
+        """把一頁的條列與敘述改寫成第三人稱，其餘欄位（index、title、timestamp）原樣保留。
+
+        整份重新產生修不好第一人稱：模型修好這一頁，別頁又冒出「我們」。
+        只送有問題的那一頁回去改，範圍小、會收斂。problem 是驗證器的描述，
+        含被抓到的詞與前後文。
+
+        回應不是合法的結構時 raise SummarizerOutputInvalid；連不上模型時
+        raise SummarizerUnavailable。取消的規則與 Summarizer 相同。
+        """
+        ...
+
+
 class VideoSectionGateway(Protocol):
     def download_sections(
         self,

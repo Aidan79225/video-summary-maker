@@ -44,3 +44,9 @@ def test_the_prompt_tells_the_model_to_use_the_third_person():
     assert "講者" in prompt
     assert "第三人稱" in prompt
     assert "我們" in prompt
+
+
+def test_the_problem_quotes_the_surrounding_text():
+    """失敗訊息要看得出是真的第一人稱還是誤判。"""
+    problems = first_person_problems(_slide(detail="講者說明之後，我們要求部會限期回覆。" * 2))
+    assert "…" in problems[0] and "要求部會限期回覆" in problems[0]

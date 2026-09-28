@@ -200,6 +200,14 @@ _DETAIL_FIELD = """- detail：該章節的完整敘述，**必須用繁體中文
 
 _TAIL = '\n章節要平均涵蓋整支影片，不要全部集中在開頭。只輸出 JSON。'
 
+_REWRITE_SYSTEM = """你是文字編輯。使用者會給你一頁投影片的重點條列（bullets）與完整敘述（detail），
+裡面有第一人稱（「我」「我們」「本席」）——那是講者的視角，讀者會以為是整理的人在說話。
+
+請把它們改寫成**第三人稱**：稱發言者為「講者」（原文有姓名或職稱時可以沿用），
+「我們要求」改成「講者要求」、「我認為」改成「講者認為」。需要保留原話時放在「」裡。
+只改視角，不要增減內容、不要改數字、條列的數量與順序不變、敘述的長度大致不變。
+一律使用繁體中文，只輸出 JSON。"""
+
 
 def _system(detailed: bool) -> str:
     return _SYSTEM + (_DETAIL_FIELD if detailed else "") + _TAIL
@@ -237,6 +245,43 @@ _BRIEF_SYSTEM = """你是新聞編輯。使用者會給你一段發言（通常�
   - deadline：講者說的期限（例如「一個月內」「本會期結束前」），沒有就空字串
   - response：對方（官員、部會）當場的回應，20 字以內，沒有回應就空字串
 """
+
+
+def rewrite_schema() -> dict:
+    return {
+        "type": "object",
+        "properties": {
+            "bullets": {"type": "array", "items": {"type": "string"}},
+            "detail": {"type": "string"},
+        },
+        "required": ["bullets", "detail"],
+    }
+
+
+def _build_rewrite_prompt(slide: Slide, problem: str) -> str:
+    parts = [f"驗證器的說明：{problem}", "以下是這一頁：",
+             json.dumps({"bullets": list(slide.bullets), "detail": slide.detail},
+                        ensure_ascii=False, indent=2)]
+    if not slide.detail:
+        parts.append("這一頁沒有 detail，detail 請輸出空字串。")
+    return "\n\n".join(parts)
+
+
+def parse_rewrite_response(payload: str, original: Slide) -> Slide:
+    """改寫只換條列與敘述；index、title、timestamp 一律沿用原本的。"""
+    try:
+        data = json.loads(payload)
+    except (json.JSONDecodeError, TypeError) as e:
+        raise SummarizerOutputInvalid(f"改寫的回應不是合法的 JSON：{e}") from e
+    if not isinstance(data, dict):
+        raise SummarizerOutputInvalid("改寫的回應不是物件")
+    bullets = _to_bullets(data.get("bullets")) or original.bullets
+    detail = data.get("detail")
+    detail = detail if isinstance(detail, str) else original.detail
+    if not original.detail:
+        detail = ""  # 一般模式沒有敘述，模型硬寫一段也不要
+    return Slide(index=original.index, title=original.title, bullets=bullets,
+                 timestamp=original.timestamp, image_path=original.image_path, detail=detail)
 
 
 def _build_brief_prompt(digest: str, hint: str = "") -> str:
@@ -365,6 +410,32 @@ class OllamaBriefWriter:
         text = _stream_chat(self._host, body, self._timeout, progress, is_cancelled,
                             "整理摘要卡中")
         return parse_brief_response(text)
+
+
+class OllamaSlideRewriter:
+    """把一頁改寫成第三人稱。輸入只有幾百字，逾時比摘要短得多。"""
+
+    def __init__(self, host: str, model: str, num_ctx: int, timeout: float = 180.0):
+        self._host = host.rstrip("/")
+        self._model = model
+        self._num_ctx = num_ctx
+        self._timeout = timeout
+
+    def rewrite(self, slide: Slide, problem: str, progress: ProgressCallback,
+                is_cancelled: CancelCheck | None = None) -> Slide:
+        body = {
+            "model": self._model,
+            "messages": [
+                {"role": "system", "content": _REWRITE_SYSTEM},
+                {"role": "user", "content": _build_rewrite_prompt(slide, problem)},
+            ],
+            "format": rewrite_schema(),
+            "stream": True,
+            "options": {"num_ctx": self._num_ctx, "temperature": 0.2},
+        }
+        text = _stream_chat(self._host, body, self._timeout, progress, is_cancelled,
+                            f"第 {slide.index} 頁改寫中")
+        return parse_rewrite_response(text, slide)
 
 
 class OllamaModelCatalog:

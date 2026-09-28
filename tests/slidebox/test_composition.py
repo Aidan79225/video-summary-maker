@@ -87,3 +87,19 @@ def test_an_ivod_url_reaches_the_ivod_gateways():
     assert isinstance(sections._ivod, IvodSectionGateway)
     # 兩個 IVOD adapter 必須共用同一個 client，否則同一筆 record 會抓兩次
     assert subtitles._ivod._client is sections._ivod._client
+
+
+def test_the_forwarding_rewriter_takes_exactly_what_the_port_declares():
+    from slidebox.composition import CurrentSettingsSlideRewriter
+    from slidebox.domain.ports import SlideRewriter
+
+    port = inspect.signature(SlideRewriter.rewrite)
+    impl = inspect.signature(CurrentSettingsSlideRewriter.rewrite)
+    assert list(impl.parameters) == list(port.parameters)
+
+
+def test_the_pipeline_has_a_rewriter_wired_in():
+    from slidebox.composition import CurrentSettingsSlideRewriter, build_usecase
+
+    usecase = build_usecase(Settings(output_dir="OUT"))
+    assert isinstance(usecase._rewriter, CurrentSettingsSlideRewriter)
