@@ -138,6 +138,16 @@ TCCC_VOD_BASE = os.environ.get("TCCC_VOD_BASE", "https://vod.tccc.gov.tw")
 LY_TERM = int(os.environ.get("LY_TERM", "11"))
 TCCC_WEB_BASE = os.environ.get("TCCC_WEB_BASE", "https://www.tccc.gov.tw")
 
+# 新北市議會「議事影音隨選視訊系統」。一段是一個黨團或一位議員的質詢時段（15 分鐘～
+# 2 小時），同樣要在 GPU 主機跑語音辨識。不想抓就關掉。
+NTPC_ENABLED = _env_bool("NTPC_ENABLED", True)
+NTPC_VOD_BASE = os.environ.get("NTPC_VOD_BASE", "https://vod.ntp.gov.tw")
+# 名冊（政黨、議長／副議長、黨團）來自官網；講者規則要靠它
+NTPC_WEB_BASE = os.environ.get("NTPC_WEB_BASE", "https://www.ntp.gov.tw")
+# 市長施政報告、市長總預算報告、專案報告：各黨議員輪流上台的多黨混合時段。
+# 講者一長串、每人只講幾分鐘，不想收就關掉。
+NTPC_INCLUDE_MIXED = _env_bool("NTPC_INCLUDE_MIXED", True)
+
 # 每天最多處理幾段發言。一段約 3～5 分鐘，預設 20 段約 1～2 小時。
 INGEST_DAILY_LIMIT = int(os.environ.get("INGEST_DAILY_LIMIT", "20"))
 # 排程每天幾點跑（24 小時制，台北時間）。立法院的逐字稿不是即時產生的，
