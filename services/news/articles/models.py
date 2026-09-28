@@ -101,7 +101,8 @@ class Article(models.Model):
     slug = models.SlugField(max_length=64, unique=True)
 
     title = models.CharField(max_length=300)
-    speaker = models.CharField(max_length=100, db_index=True)
+    # 聯合質詢與新北的黨團時段會串起十幾位講者（實測最長 88 字），留足空間
+    speaker = models.CharField(max_length=300, db_index=True)
     meeting = models.CharField(max_length=300, blank=True)
     date = models.DateField(db_index=True)
     duration_seconds = models.PositiveIntegerField(default=0)
