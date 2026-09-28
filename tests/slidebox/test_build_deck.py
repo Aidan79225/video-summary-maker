@@ -657,3 +657,24 @@ def test_rewriting_that_breaks_another_rule_falls_back_to_a_full_retry():
     assert len(summ.hints) == 2
     assert "太短" in summ.hints[1]
     assert len(result.deck.slides) == 3
+
+
+# --- 語音辨識提示 ---
+
+
+def test_the_speech_hint_reaches_the_transcriber_only_on_the_speech_path():
+    transcriber = FakeTranscriber()
+    usecase = BuildDeckUseCase(
+        FakeSubtitleGateway(fail=True), FakeSummarizer([make_slides(3)]), FakeSectionGateway(),
+        FakeFrameExtractor(), FakeRenderer(), audio=FakeAudioGateway(), transcriber=transcriber)
+    usecase.execute("URL", _settings(), speech_hint="臺中市議會 市政總質詢。發言者：楊啓邦")
+    assert transcriber.prompts == ["臺中市議會 市政總質詢。發言者：楊啓邦"]
+
+
+def test_without_a_hint_the_transcriber_gets_none():
+    transcriber = FakeTranscriber()
+    usecase = BuildDeckUseCase(
+        FakeSubtitleGateway(fail=True), FakeSummarizer([make_slides(3)]), FakeSectionGateway(),
+        FakeFrameExtractor(), FakeRenderer(), audio=FakeAudioGateway(), transcriber=transcriber)
+    usecase.execute("URL", _settings())
+    assert transcriber.prompts == [None]

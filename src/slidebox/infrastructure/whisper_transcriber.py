@@ -84,6 +84,7 @@ class FasterWhisperTranscriber:
         duration: float,
         progress: ProgressCallback,
         is_cancelled: CancelCheck,
+        initial_prompt: str | None = None,
     ) -> tuple[tuple[Cue, ...], str]:
         model = self._load(progress)
         if is_cancelled():
@@ -100,7 +101,8 @@ class FasterWhisperTranscriber:
             # 「Thanks for watching」之類的句子，而那些句子會被寫進投影片。
             # 語言交給 Whisper 自動偵測，不拿 yt-dlp 的 language 當提示——
             # 上傳者標錯時，強制指定會產出整份錯誤語言的轉錄。
-            segments, info = model.transcribe(audio_path, vad_filter=True)
+            segments, info = model.transcribe(audio_path, vad_filter=True,
+                                              initial_prompt=initial_prompt or None)
             # segments 是惰性 generator，辨識在迭代時才真正發生，所以取消要
             # 在每段之間檢查，錯誤也可能在迭代中途才冒出來。
             for seg in segments:

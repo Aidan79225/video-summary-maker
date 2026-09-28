@@ -30,6 +30,8 @@ class JobRequest(BaseModel):
     min_slides: int | None = Field(default=None, ge=1, le=MAX_SLIDES)
     max_slides: int | None = Field(default=None, ge=1, le=MAX_SLIDES)
     model: str | None = None
+    # 語音辨識的專有名詞提示（講者姓名、機關名），走 Whisper 的來源才用得到
+    speech_hint: str | None = Field(default=None, max_length=200)
 
 
 class JobView(BaseModel):
@@ -107,7 +109,8 @@ def create_app(
         _validate(request)
         return _view(store.submit(
             request.url, detailed=request.detailed, min_slides=request.min_slides,
-            max_slides=request.max_slides, model=request.model))
+            max_slides=request.max_slides, model=request.model,
+            speech_hint=request.speech_hint))
 
     @app.get("/jobs", dependencies=[Depends(require_key)])
     def recent(limit: int = 20) -> list[JobView]:

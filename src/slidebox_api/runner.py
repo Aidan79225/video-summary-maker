@@ -117,7 +117,8 @@ class SlideboxExecutor:
     def __call__(self, job: Job, progress: ProgressCallback,
                  is_cancelled: CancelCheck) -> dict:
         settings = self._apply(job)
-        result = self._usecase.execute(job.url, settings, progress, is_cancelled)
+        result = self._usecase.execute(job.url, settings, progress, is_cancelled,
+                                       speech_hint=job.speech_hint)
         return deck_payload(result.deck, video_id_of(job.url))
 
     def _apply(self, job: Job) -> Settings:

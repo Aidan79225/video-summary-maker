@@ -166,8 +166,12 @@ class SpeechTranscriber(Protocol):
         duration: float,
         progress: ProgressCallback,
         is_cancelled: CancelCheck,
+        initial_prompt: str | None = None,
     ) -> tuple[tuple[Cue, ...], str]:
         """語音辨識，回傳 (字幕, 偵測到的語言代碼)。
+
+        initial_prompt 是給辨識器的提示：講者姓名、機關名這類專有名詞，
+        模型會優先用這些寫法（「楊啓邦」而不是同音的「楊啟邦」）。
 
         沒偵測到任何語音時回傳空的字幕 tuple，由呼叫端決定如何告知使用者。
         逐段檢查 is_cancelled，取消時 raise OperationCancelled。

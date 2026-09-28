@@ -96,7 +96,10 @@ class BuildDeckUseCase:
         settings: Settings,
         progress: ProgressCallback | None = None,
         is_cancelled: CancelCheck | None = None,
+        speech_hint: str | None = None,
     ) -> DeckResult:
+        """speech_hint：走語音辨識時給辨識器的專有名詞提示（講者姓名、機關名）；
+        有字幕的來源用不到。"""
         cb: ProgressCallback = progress or (lambda frac, status: None)
         cancelled: CancelCheck = is_cancelled or (lambda: False)
 
@@ -120,7 +123,7 @@ class BuildDeckUseCase:
             # 影片真的沒有可用字幕，才改用語音辨識
             if self._audio is None or self._transcriber is None:
                 raise
-            transcript = self._transcribe(url, settings, cb, check, cancelled)
+            transcript = self._transcribe(url, settings, cb, check, cancelled, speech_hint)
             note = "由語音辨識產生，可能有辨識錯誤"
 
         check()
@@ -186,6 +189,7 @@ class BuildDeckUseCase:
         cb: ProgressCallback,
         check,
         cancelled: CancelCheck,
+        speech_hint: str | None = None,
     ) -> Transcript:
         """沒有字幕時：下載音訊 → 語音辨識 → 組成 Transcript。
 
@@ -209,7 +213,7 @@ class BuildDeckUseCase:
             clip = self._audio.download_audio(url, audio_dir, speech_cb, cancelled)
             check()
             cues, language = self._transcriber.transcribe(
-                clip.path, clip.duration, speech_cb, cancelled
+                clip.path, clip.duration, speech_cb, cancelled, speech_hint
             )
         finally:
             self._audio.cleanup(audio_dir)

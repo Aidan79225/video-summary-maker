@@ -180,3 +180,10 @@ def test_a_non_ascii_api_key_is_rejected_not_a_crash():
         response = client.post("/jobs", json={"url": IVOD},
                                headers={"X-API-Key": "sécret".encode("latin-1")})
         assert response.status_code == 401
+
+
+def test_a_speech_hint_is_stored_on_the_job_and_capped(kit):
+    client, store, _, _ = kit
+    job_id = client.post("/jobs", json={"url": IVOD, "speech_hint": "臺中市議會。發言者：楊啓邦"}).json()["id"]
+    assert store.get(job_id).speech_hint == "臺中市議會。發言者：楊啓邦"
+    assert client.post("/jobs", json={"url": IVOD, "speech_hint": "x" * 201}).status_code == 422
