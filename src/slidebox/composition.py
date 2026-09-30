@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 from .domain.entities import Brief, Settings, Slide
 from .domain.ports import CancelCheck, ProgressCallback
 from .infrastructure.ffmpeg_frames import FfmpegFrameExtractor
+from .infrastructure.hls_audio import NoSubtitlesGateway
 from .infrastructure.html_renderer import HtmlDeckRenderer
 from .infrastructure.ivod_api import IvodClient, IvodSubtitleGateway
 from .infrastructure.ivod_sections import HlsSectionGateway, IvodSectionGateway
@@ -21,15 +22,17 @@ from .infrastructure.routing import (
     BySourceSectionGateway,
     BySourceSubtitleGateway,
 )
+from .infrastructure.ntpc_api import NtpcClient
+from .infrastructure.ntpc_audio import NtpcAudioGateway
 from .infrastructure.settings_repository import JsonSettingsRepository
 from .infrastructure.tccc_api import TcccClient
-from .infrastructure.tccc_audio import NoSubtitlesGateway, TcccAudioGateway
+from .infrastructure.tccc_audio import TcccAudioGateway
 from .infrastructure.whisper_transcriber import FasterWhisperTranscriber
 from .infrastructure.ytdlp_audio import YtDlpAudioGateway
 from .infrastructure.ytdlp_sections import YtDlpSectionGateway
 from .infrastructure.ytdlp_subtitles import YtDlpSubtitleGateway
 from .usecases.build_deck import BuildDeckUseCase
-from .usecases.sources import tccc_clip
+from .usecases.sources import ntpc_clip, tccc_clip
 
 if TYPE_CHECKING:
     from .presentation.main_window import MainWindow
@@ -117,27 +120,34 @@ def build_usecase(settings: Settings) -> BuildDeckUseCase:
     刻意與 UI 分開：這個函式不碰 PySide6，所以無介面的服務（例如每天跑一輪
     產出網頁的排程）可以直接 import 它來用。
 
-    字幕與片段兩個 gateway 依網址分派：立法院 IVOD 走開放 API（逐字稿是
-    立法院自己用 WhisperX 產好的）與 ffmpeg 切 HLS，其餘走 yt-dlp。
-    IVOD 的兩個 adapter 共用同一個 client，讓同一筆 record 只抓一次。
+    字幕、片段、音訊三個 gateway 依網址分派：立法院 IVOD 走開放 API（逐字稿是
+    立法院自己用 WhisperX 產好的）與 ffmpeg 切 HLS，臺中、新北兩個市議會走
+    語音辨識與 ffmpeg 切 HLS，其餘走 yt-dlp。
+    同一個來源的 adapter 共用同一個 client，讓同一筆 record 只抓一次。
     """
     ivod_client = IvodClient()
     # 臺中市議會沒有逐字稿：字幕 gateway 直接說沒有，音訊用 ffmpeg 抓 HLS 後
     # 交給 Whisper；截圖與 IVOD 同一套 ffmpeg 切 m3u8，只差「怎麼找到串流」。
     tccc_client = TcccClient()
+    # 新北市議會同理；差別是音訊走 Wowza 的純音訊串流（wowzaaudioonly），
+    # 截圖才用一般的影像串流。
+    ntpc_client = NtpcClient()
     return BuildDeckUseCase(
         BySourceSubtitleGateway(
             YtDlpSubtitleGateway(), IvodSubtitleGateway(ivod_client),
-            tccc=NoSubtitlesGateway("臺中市議會沒有逐字稿，改用語音辨識")),
+            tccc=NoSubtitlesGateway("臺中市議會沒有逐字稿，改用語音辨識"),
+            ntpc=NoSubtitlesGateway("新北市議會沒有逐字稿，改用語音辨識")),
         CurrentSettingsSummarizer(settings),
         BySourceSectionGateway(
             YtDlpSectionGateway(), IvodSectionGateway(ivod_client),
-            tccc=HlsSectionGateway(lambda url: tccc_client.video_url(tccc_clip(url)))),
+            tccc=HlsSectionGateway(lambda url: tccc_client.video_url(tccc_clip(url))),
+            ntpc=HlsSectionGateway(lambda url: ntpc_client.video_url(ntpc_clip(url)))),
         FfmpegFrameExtractor(),
         HtmlDeckRenderer(),
         # 沒有字幕時的語音辨識備援。模型在第一次需要時才載入（約 40 秒）並
         # 快取在這個實例裡；改 whisper_model 需重開 app（語言模型與 host 則每次生成時即時讀取）。
-        audio=BySourceAudioGateway(YtDlpAudioGateway(), tccc=TcccAudioGateway(tccc_client)),
+        audio=BySourceAudioGateway(YtDlpAudioGateway(), tccc=TcccAudioGateway(tccc_client),
+                                   ntpc=NtpcAudioGateway(ntpc_client)),
         transcriber=FasterWhisperTranscriber(settings.whisper_model),
         # 詳細模式下多寫一張摘要卡（一句話、關鍵數字、要求與回應）
         brief_writer=CurrentSettingsBriefWriter(settings),

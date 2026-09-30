@@ -16,6 +16,7 @@ class ArticleStatus(models.TextChoices):
 class ArticleSource(models.TextChoices):
     LY = "ly", "立法院"
     TCCC = "tccc", "臺中市議會"
+    NTPC = "ntpc", "新北市議會"
 
 
 class Person(models.Model):
@@ -46,7 +47,8 @@ class Membership(models.Model):
 
     person = models.ForeignKey(Person, related_name="memberships", on_delete=models.CASCADE)
     source = models.CharField(max_length=16, choices=ArticleSource.choices, db_index=True)
-    # 來源給的編號：立法院是歷屆立法委員編號（跨屆穩定）、臺中是官網的 cno
+    # 來源給的編號：立法院是歷屆立法委員編號（跨屆穩定）、臺中是官網的 cno、
+    # 新北是官網的 C（跨屆穩定）
     external_id = models.CharField(max_length=64, blank=True, db_index=True)
     # 來源上的寫法，可能與 Person.name 不同
     name = models.CharField(max_length=100, db_index=True)
@@ -54,6 +56,12 @@ class Membership(models.Model):
     district = models.CharField(max_length=100, blank=True)
     term = models.CharField(max_length=32, blank=True)
     photo_url = models.URLField(max_length=500, blank=True)
+    # 議長／副議長／空。新北的議長、副議長只主持不質詢，影音系統卻把他們列進
+    # 每一段的發言議員，要靠這欄把他們拿掉。其他來源留空。
+    role = models.CharField(max_length=32, blank=True)
+    # 黨團（國民黨團／民進黨團／無黨團結聯盟／空）。跟政黨不一定相同——新北有 4 人
+    # 政黨與黨團不同。文章標的是政黨；黨團只用來判斷「黨團時段」裡誰不屬於該黨團。
+    caucus = models.CharField(max_length=64, blank=True)
     start_date = models.DateField(null=True, blank=True)
     end_date = models.DateField(null=True, blank=True)
     # 換黨自動切段後日期待補
@@ -93,7 +101,8 @@ class Article(models.Model):
     slug = models.SlugField(max_length=64, unique=True)
 
     title = models.CharField(max_length=300)
-    speaker = models.CharField(max_length=100, db_index=True)
+    # 聯合質詢與新北的黨團時段會串起十幾位講者（實測最長 88 字），留足空間
+    speaker = models.CharField(max_length=300, db_index=True)
     meeting = models.CharField(max_length=300, blank=True)
     date = models.DateField(db_index=True)
     duration_seconds = models.PositiveIntegerField(default=0)

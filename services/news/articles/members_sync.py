@@ -1,12 +1,13 @@
 """議員名單同步：從各議會的來源抓「誰、哪個黨、哪個選區」，維護 Person／Membership，
 並把文章連到講者「當時」的任期。
 
-兩個來源都只給目前的黨籍，沒有異動日期：換黨只能「偵測到就切一段」，日期由人
+每個來源都只給目前的黨籍，沒有異動日期：換黨只能「偵測到就切一段」，日期由人
 到 admin 補。認人只用姓名與別名，同名多個一律標 needs_review、不猜。
 """
 from __future__ import annotations
 
 import html
+import http.client
 import json
 import logging
 import re
@@ -15,14 +16,17 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from collections import Counter
 from collections.abc import Callable, Iterable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import date
 
+from django.conf import settings
 from django.db import transaction
 from django.utils import timezone
 
 from .models import Article, ArticleSource, Membership, Person
+from .names import normalize_name
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +46,9 @@ class MemberRecord:
     photo_url: str = ""
     start_date: date | None = None
     end_date: date | None = None
+    # 只有新北填：議長／副議長／空、國民黨團／民進黨團／無黨團結聯盟／空
+    role: str = ""
+    caucus: str = ""
 
 
 @dataclass
@@ -79,6 +86,9 @@ def _http_get(url: str, sleep: Callable[[float], None] = time.sleep) -> str:
                 sleep(_RETRY_DELAYS[attempt])
                 continue
             raise
+        except http.client.HTTPException as e:
+            # IncompleteRead 不是 OSError，呼叫端的「抓不到」接不到它
+            raise OSError(f"回應不完整：{e!r}") from e
     raise AssertionError("unreachable")
 
 
@@ -207,6 +217,158 @@ class TcccMemberSource:
         return records
 
 
+# --- 新北市議會 ---
+
+ROLE_SPEAKER = "議長"
+ROLE_DEPUTY_SPEAKER = "副議長"
+# 只主持、從不質詢的人：影音系統把他們列進每一段的「發言議員」，要拿掉
+CHAIR_ROLES = frozenset({ROLE_SPEAKER, ROLE_DEPUTY_SPEAKER})
+# 黨團頁 party-group-detail?program=39&P=<n>。值刻意取影音系統議程字樣的寫法
+# （「…質詢-國民黨團發言」「…質詢-民進黨團聯合發言」），講者規則才能直接比對。
+NTPC_CAUCUSES = {"1": "國民黨團", "2": "民進黨團", "3": "無黨團結聯盟"}
+# 官網寫「無政黨」，立法院與臺中寫「無黨籍」；統一成後者，政黨篩選才不會分成兩個
+_NTPC_PARTY_ALIASES = {"無政黨": "無黨籍"}
+_NTPC_PACE_SECONDS = 1.0
+_NTPC_PROFILE_RETRIES = (3.0, 10.0)
+
+_NTPC_AREA_RE = re.compile(r'<div class="review-meeting all-list" id="area(\d+)"')
+# href 的引號前有一個空白（`C=590 "`），名字前後也有一堆空白
+_NTPC_MEMBER_RE = re.compile(
+    r'<a href="councilor-detail\?program=37&(?:amp;)?A=\d+&(?:amp;)?C=(\d+)\s*"[^>]*>'
+    r'.*?<p>\s*([^<]*?)\s*</p>', re.S)
+_NTPC_PARTY_RE = re.compile(r"<li>\s*政黨：\s*([^<]*?)\s*</li>")
+_NTPC_CURRENT_RE = re.compile(r"<h4>\s*現任\s*</h4>\s*<ul>(.*?)</ul>", re.S)
+_NTPC_POST_RE = re.compile(r"第(\d+)屆(副議長|議長|議員)")
+_NTPC_GROUP_MEMBER_RE = re.compile(r'href="councilor-detail\?[^"]*?C=(\d+)')
+
+
+def parse_ntpc_list(page: str) -> list[tuple[str, str, str]]:
+    """議員總覽：(官網編號 C, 正規化後的姓名, 選區編號)。
+
+    選區只能從這頁的 `id="area<N>"` 區塊拿：個人頁上的選區只是把網址的 A 參數
+    回顯出來（A 亂填，頁面就跟著顯示錯的選區），不可信。
+    """
+    marks = list(_NTPC_AREA_RE.finditer(page))
+    seen: dict[str, tuple[str, str]] = {}
+    for i, mark in enumerate(marks):
+        end = marks[i + 1].start() if i + 1 < len(marks) else len(page)
+        for cid, name in _NTPC_MEMBER_RE.findall(page[mark.end():end]):
+            name = normalize_name(html.unescape(name))
+            if name and cid not in seen:
+                seen[cid] = (name, mark.group(1))
+    return [(cid, name, area) for cid, (name, area) in seen.items()]
+
+
+def parse_ntpc_profile(page: str) -> tuple[str, str, str]:
+    """個人頁：(政黨, 職位, 屆次)。職位是議長／副議長／空。
+
+    職位與屆次只看「現任」清單：「經歷」裡也有「新北市第2、3屆議長」這種字樣。
+    """
+    party_match = _NTPC_PARTY_RE.search(page)
+    party = html.unescape(party_match.group(1)).strip() if party_match else ""
+    party = _NTPC_PARTY_ALIASES.get(party, party)
+    current = _NTPC_CURRENT_RE.search(page)
+    role, term = "", ""
+    for number, post in _NTPC_POST_RE.findall(current.group(1) if current else ""):
+        term = term or f"第{number}屆"
+        if post in CHAIR_ROLES and not role:
+            role = post
+    return party, role, term
+
+
+def parse_ntpc_caucus(page: str) -> list[str]:
+    """黨團頁上的成員（官網編號 C），依頁面順序、去重。"""
+    return list(dict.fromkeys(_NTPC_GROUP_MEMBER_RE.findall(page)))
+
+
+class NtpcMemberSource:
+    """新北市議會官網（www.ntp.gov.tw）：一次拿到全部 64 位，再逐一看個人頁。
+
+    共 1 + 3 + 64 次請求，循序、間隔一秒——對方是市議會的網站，一週才跑一次，
+    慢一分鐘沒有關係。
+    """
+
+    name = "新北市議會"
+
+    def __init__(self, base: str | None = None, fetch=_http_get,
+                 sleep: Callable[[float], None] = time.sleep):
+        # 預設值在呼叫時才讀 settings：寫在參數預設值裡會在 import 當下就定死
+        self._base = (base or settings.NTPC_WEB_BASE).rstrip("/")
+        self._fetch = fetch
+        self._sleep = sleep
+        self._requests = 0
+
+    def fetch(self) -> list[MemberRecord]:
+        try:
+            listing = parse_ntpc_list(self._get("councilor-all?program=37"))
+        except OSError as e:
+            raise MembersUnavailable(f"新北市議會的議員名單抓不到：{e}") from e
+        if not listing:
+            raise MembersUnavailable("新北市議會的議員名單解析不出任何人，頁面格式可能改了")
+        caucus_of = self._caucuses()
+        records: list[MemberRecord] = []
+        for cid, name, area in listing:
+            try:
+                page = self._get_retrying(f"councilor-detail?program=37&A={area}&C={cid}")
+            except OSError as e:
+                # 不能略過這個人：少了議長或副議長，總質詢就會把主席當成講者，而且表不是
+                # 空的就不會再同步。整次失敗，下次排程再來。
+                raise MembersUnavailable(f"新北市議會 {name}（C={cid}）的個人頁抓不到：{e}") from e
+            party, role, term = parse_ntpc_profile(page)
+            if not party and not term:
+                # 錯誤頁也可能回 200。當成抓不到：寫進去會把議長的職位洗成空的
+                raise MembersUnavailable(
+                    f"新北市議會 {name}（C={cid}）的個人頁解析不出政黨與屆次，頁面可能出錯")
+            records.append(MemberRecord(
+                source=ArticleSource.NTPC, external_id=cid, name=name, party=party,
+                district=f"第{area}選區", term=term, role=role,
+                caucus=caucus_of.get(cid, "")))
+        # 有人的「現任」只列社團職務、沒寫「新北市第4屆議員」（2026-09 的洪佳君）。
+        # 總覽頁列的都是本屆議員，屆次就用其他人頁面上的那一屆補。
+        roles = Counter(r.role for r in records if r.role)
+        if roles.get("議長") != 1 or roles.get("副議長") != 1:
+            raise MembersUnavailable(
+                f"新北市議會的名冊找到議長 {roles.get('議長', 0)} 位、副議長 {roles.get('副議長', 0)} 位，"
+                "不是各一位；名冊不完整就不寫入")
+        terms = Counter(r.term for r in records if r.term)
+        if terms:
+            current = terms.most_common(1)[0][0]
+            records = [r if r.term else replace(r, term=current) for r in records]
+        return records
+
+    def _caucuses(self) -> dict[str, str]:
+        """官網編號 → 黨團。任何一頁拿不到就整批放棄：同步是直接覆寫黨團欄位的，
+        少一頁會把一整個黨團的人寫成「沒有黨團」，講者規則就會把他們濾掉。"""
+        caucus_of: dict[str, str] = {}
+        for number, caucus in NTPC_CAUCUSES.items():
+            try:
+                members = parse_ntpc_caucus(self._get(f"party-group-detail?program=39&P={number}"))
+            except OSError as e:
+                raise MembersUnavailable(f"新北市議會的{caucus}名單抓不到：{e}") from e
+            if not members:
+                raise MembersUnavailable(f"新北市議會的{caucus}名單解析不出任何人，頁面格式可能改了")
+            for cid in members:
+                caucus_of.setdefault(cid, caucus)
+        return caucus_of
+
+    def _get_retrying(self, path: str) -> str:
+        """個人頁一頁失敗就整次同步失敗（見 fetch），所以暫時性的逾時要先重試兩次。"""
+        for attempt in range(len(_NTPC_PROFILE_RETRIES) + 1):
+            try:
+                return self._get(path)
+            except OSError:
+                if attempt == len(_NTPC_PROFILE_RETRIES):
+                    raise
+                self._sleep(_NTPC_PROFILE_RETRIES[attempt])
+        raise AssertionError("unreachable")
+
+    def _get(self, path: str) -> str:
+        if self._requests:
+            self._sleep(_NTPC_PACE_SECONDS)
+        self._requests += 1
+        return self._fetch(f"{self._base}/{path}")
+
+
 # --- 同步 ---
 
 
@@ -260,6 +422,10 @@ def sync(records: Iterable[MemberRecord], today: date | None = None) -> SyncRepo
         membership.district = record.district or membership.district
         membership.term = record.term or membership.term
         membership.photo_url = record.photo_url or membership.photo_url
+        # 直接覆寫、不「空的就保留舊值」：卸任的議長要變回空的，否則下一屆的新聞
+        # 會把他當主持人拿掉。來源抓不到的人根本不會出現在 records 裡，不會被寫空。
+        membership.role = record.role
+        membership.caucus = record.caucus
         if record.end_date:
             membership.end_date = record.end_date
         membership.synced_at = now

@@ -137,3 +137,79 @@ def test_section_cleanup_reaches_the_taichung_branch_too():
     yt, ivod, tccc = Spy("yt"), Spy("ivod"), Spy("tccc")
     BySourceSectionGateway(yt, ivod, tccc).cleanup("d")
     assert tccc.cleaned == ["d"]
+
+
+# --- 新北市議會 ---
+
+NTPC = ("https://vod.ntp.gov.tw/VodCloudV2/VOD/ViewMetaData"
+        "?assetID=ebc80ece-7491-4288-be73-7c59f6b4815c")
+
+
+def test_new_taipei_urls_go_to_the_new_taipei_branch():
+    yt, ivod, tccc, ntpc = Spy("yt"), Spy("ivod"), Spy("tccc"), Spy("ntpc")
+    subtitles = BySourceSubtitleGateway(yt, ivod, tccc, ntpc)
+    sections = BySourceSectionGateway(yt, ivod, tccc, ntpc)
+    assert subtitles.fetch(NTPC, ()) == "ntpc"
+    assert sections.download_sections(NTPC, [], None, "d", None, None) == ["ntpc"]
+    # 其他來源不受影響
+    assert subtitles.fetch(TCCC, ()) == "tccc"
+    assert subtitles.fetch(IVOD, ()) == "ivod"
+    assert subtitles.fetch(YOUTUBE, ()) == "yt"
+    assert ntpc.fetched == [NTPC] and ntpc.downloaded == [NTPC]
+
+
+def test_new_taipei_works_without_a_taichung_branch():
+    """新北分支是關鍵字參數，不必先接臺中才能接新北。"""
+    yt, ivod, ntpc = Spy("yt"), Spy("ivod"), Spy("ntpc")
+    assert BySourceSubtitleGateway(yt, ivod, ntpc=ntpc).fetch(NTPC, ()) == "ntpc"
+    assert BySourceSubtitleGateway(yt, ivod, ntpc=ntpc).fetch(TCCC, ()) == "yt"
+
+
+def test_without_a_new_taipei_branch_the_default_handles_it():
+    """桌面 app 沒接新北那一套：退回 yt-dlp，行為跟加這個分支以前一樣。"""
+    yt, ivod, tccc = Spy("yt"), Spy("ivod"), Spy("tccc")
+    assert BySourceSubtitleGateway(yt, ivod, tccc).fetch(NTPC, ()) == "yt"
+    assert BySourceSectionGateway(yt, ivod, tccc).download_sections(
+        NTPC, [], None, "d", None, None) == ["yt"]
+
+
+def test_audio_routes_both_councils_and_falls_back_to_the_default():
+    from slidebox.infrastructure.routing import BySourceAudioGateway
+
+    yt, tccc, ntpc = AudioSpy("yt"), AudioSpy("tccc"), AudioSpy("ntpc")
+    router = BySourceAudioGateway(yt, tccc, ntpc)
+    assert router.download_audio(NTPC, "d", None, None) == "ntpc"
+    assert router.download_audio(TCCC, "d", None, None) == "tccc"
+    assert router.download_audio(YOUTUBE, "d", None, None) == "yt"
+    assert router.download_audio(IVOD, "d", None, None) == "yt"   # IVOD 不走語音備援
+    assert BySourceAudioGateway(yt, ntpc=ntpc).download_audio(NTPC, "d", None, None) == "ntpc"
+    assert BySourceAudioGateway(yt, tccc).download_audio(NTPC, "d", None, None) == "yt"
+
+
+def test_cleanup_reaches_the_new_taipei_branch_too():
+    """攔的 bug：加了分支卻忘了加進 cleanup 的清單，新北的暫存音訊與片段
+    （兩小時的 wav 約 230 MB）會留在硬碟上。"""
+    from slidebox.infrastructure.routing import BySourceAudioGateway
+
+    yt, ivod, tccc, ntpc = Spy("yt"), Spy("ivod"), Spy("tccc"), Spy("ntpc")
+    BySourceSectionGateway(yt, ivod, tccc, ntpc).cleanup("d")
+    assert [s.cleaned for s in (yt, ivod, tccc, ntpc)] == [["d"]] * 4
+
+    a_yt, a_tccc, a_ntpc = AudioSpy("yt"), AudioSpy("tccc"), AudioSpy("ntpc")
+    BySourceAudioGateway(a_yt, a_tccc, a_ntpc).cleanup("x")
+    assert [s.cleaned for s in (a_yt, a_tccc, a_ntpc)] == [["x"]] * 3
+
+
+def test_the_new_branch_comes_after_taichung_in_the_constructors():
+    """攔的 bug：把新參數插在中間，既有照位置傳的呼叫會把臺中的 gateway
+    接到新北的位置上，兩邊都靜靜地走錯路。"""
+    import inspect
+
+    from slidebox.infrastructure.routing import BySourceAudioGateway
+
+    def params(cls):
+        return list(inspect.signature(cls.__init__).parameters)[1:]
+
+    assert params(BySourceSubtitleGateway) == ["default", "ivod", "tccc", "ntpc"]
+    assert params(BySourceSectionGateway) == ["default", "ivod", "tccc", "ntpc"]
+    assert params(BySourceAudioGateway) == ["default", "tccc", "ntpc"]

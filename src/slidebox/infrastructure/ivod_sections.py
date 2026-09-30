@@ -7,7 +7,7 @@ IVOD 只提供 m3u8，而 yt-dlp 的分段下載不支援 HLS（會產出沒有�
 輸出形狀與 YtDlpSectionGateway 完全相同（一個時間點一個本地檔），所以
 抽幀那一步與 use case 都不需要知道來源是誰。
 
-`HlsSectionGateway` 通用於任何 m3u8 來源（臺中市議會也用它），差別只在
+`HlsSectionGateway` 通用於任何 m3u8 來源（臺中、新北市議會也用它），差別只在
 「由網址找到串流」那一步，用建構參數注入；`IvodSectionGateway` 是接上
 IVOD client 的薄包裝。
 """

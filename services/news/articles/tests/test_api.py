@@ -292,6 +292,16 @@ class SourceTests(TestCase):
         self.assertEqual([i["ivod_id"] for i in res["items"]], ["tccc-14833"])
         self.assertEqual(self.client.get("/api/articles?source=nope").status_code, 422)
 
+    def test_new_taipei_is_a_source_too(self):
+        _article("900001", speaker="範例一")
+        _article("ntpc-0408R1150916020", speaker="周雅玲、林裔綺", source="ntpc")
+        res = self.client.get("/api/articles?source=ntpc").json()
+        self.assertEqual([i["ivod_id"] for i in res["items"]], ["ntpc-0408R1150916020"])
+        self.assertEqual(res["items"][0]["source"], "ntpc")
+        items = self.client.get("/api/speakers?source=ntpc").json()["items"]
+        self.assertEqual({i["name"] for i in items}, {"周雅玲", "林裔綺"})
+        self.assertEqual(self.client.get("/api/parties?source=ntpc").status_code, 200)
+
     def test_the_detail_carries_the_source_too(self):
         _article("tccc-14833", speaker="楊啓邦", source="tccc")
         res = self.client.get("/api/articles/2026-08-27-tccc-14833").json()

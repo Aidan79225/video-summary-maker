@@ -70,3 +70,63 @@ def test_recognises_taichung_council_clip_pages(url):
 def test_everything_else_is_not_a_taichung_clip(url):
     assert tccc_clip(url) is None
     assert tccc_id(url) is None
+
+
+# --- 新北市議會 ---
+
+from slidebox.usecases.sources import NtpcRef, ntpc_clip, ntpc_id  # noqa: E402
+
+GUID = "ebc80ece-7491-4288-be73-7c59f6b4815c"
+
+
+@pytest.mark.parametrize("url", [
+    f"https://vod.ntp.gov.tw/VodCloudV2/VOD/ViewMetaData?assetID={GUID}",
+    f"https://vod.ntp.gov.tw/VodCloudV2/VOD/ViewMetaData?assetid={GUID}",
+    f"https://vod.ntp.gov.tw/vodcloudv2/vod/viewmetadata?ASSETID={GUID.upper()}",
+    f"https://vod.ntp.gov.tw/VodCloudV2/VOD/ViewMetaData?x=1&assetID={GUID}",
+    f"http://VOD.NTP.GOV.TW/VodCloudV2/VOD/ViewMetaData?assetID={GUID}",
+    f"https://vod.ntp.gov.tw:443/VodCloudV2/VOD/ViewMetaData?assetID={GUID}",
+    f"  https://vod.ntp.gov.tw/VodCloudV2/VOD/ViewMetaData?assetID={GUID}  ",
+    f"https://vod.ntp.gov.tw/VodCloudV2/VOD/ViewDetailMetaData/{GUID}",
+    f"https://vod.ntp.gov.tw/VodCloudV2/VOD/ViewDetailMetaData/{GUID.upper()}/",
+])
+def test_recognises_new_taipei_council_clip_pages(url):
+    """GUID 一律轉小寫：同一段影片不該因為大小寫不同變成兩個 id。"""
+    assert ntpc_clip(url) == NtpcRef(GUID)
+    assert ntpc_id(url) == f"ntpc-{GUID}"
+
+
+@pytest.mark.parametrize("url", [
+    "https://vod.ntp.gov.tw/VodCloudV2/VOD/ViewMetaData",                     # 沒有 assetID
+    "https://vod.ntp.gov.tw/VodCloudV2/VOD/ViewMetaData?assetID=",
+    "https://vod.ntp.gov.tw/VodCloudV2/VOD/ViewMetaData?assetID=12345",
+    f"https://vod.ntp.gov.tw/VodCloudV2/VOD/ViewMetaData?assetID={GUID[:-1]}",
+    f"https://vod.ntp.gov.tw/VodCloudV2/VOD/ViewMetaData?assetID={GUID}x",
+    f"https://vod.ntp.gov.tw/VodCloudV2/VOD/ViewMetaData?assetID={GUID}%0A",  # 結尾換行
+    f"https://vod.ntp.gov.tw/VodCloudV2/VodStream/VideoPlayer?assetID={GUID}&type=Book_SD",
+    f"https://vod.ntp.gov.tw/VodCloudV2/VOD/ViewMetaDataX?assetID={GUID}",
+    f"https://vod.ntp.gov.tw/Other/VodCloudV2/VOD/ViewMetaData?assetID={GUID}",
+    f"https://vod.ntp.gov.tw/VodCloudV2/VOD/ViewDetailMetaData/{GUID}/extra",
+    f"https://vod.ntp.gov.tw/VodCloudV2/VOD/ViewDetailMetaData?assetID={GUID}",
+    "https://vod.ntp.gov.tw/VodCloudV2/VOD/Index",
+    f"https://vod.ntp.gov.tw.attacker.com/VodCloudV2/VOD/ViewMetaData?assetID={GUID}",
+    f"https://evil-vod.ntp.gov.tw/VodCloudV2/VOD/ViewMetaData?assetID={GUID}",
+    f"https://www.ntp.gov.tw/VodCloudV2/VOD/ViewMetaData?assetID={GUID}",
+    f"https://attacker.com/VodCloudV2/VOD/ViewMetaData?assetID={GUID}&h=vod.ntp.gov.tw",
+    f"https://vod.ntp.gov.tw@attacker.com/VodCloudV2/VOD/ViewMetaData?assetID={GUID}",
+    "https://vod.tccc.gov.tw/index.asp?url=12&cno=85&ano=14833",
+    "https://ivod.ly.gov.tw/Play/Clip/1M/171180",
+    "",
+])
+def test_everything_else_is_not_a_new_taipei_clip(url):
+    """攔的 bug：GUID 會被拼進送給市議會的請求，只比對前綴或用 `$` 結尾，
+    `…%0A` 這種尾巴就會跟著混進去；主機名用 in 比對則會把仿冒網域當自己人。"""
+    assert ntpc_clip(url) is None
+    assert ntpc_id(url) is None
+
+
+def test_the_other_sources_do_not_claim_new_taipei_urls():
+    """三個來源的判別互斥，路由才不必擔心先後順序以外的事。"""
+    url = f"https://vod.ntp.gov.tw/VodCloudV2/VOD/ViewMetaData?assetID={GUID}"
+    assert ivod_id(url) is None
+    assert tccc_clip(url) is None

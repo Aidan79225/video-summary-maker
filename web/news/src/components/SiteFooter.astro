@@ -11,8 +11,8 @@ const fixture = isFixtureMode();
       <div class="max-w-md">
         <p class="headline text-base font-semibold">質詢日報</p>
         <p class="mt-2 text-sm leading-relaxed text-muted">
-          內容整理自立法院 IVOD 與臺中市議會隨選視訊的公開影音。立法院的逐字稿由院方 AI 產生、
-          臺中市議會的由本站語音辨識產生，都可能有辨識錯誤；摘要為自動整理，正式引用請以原始影音與公報為準。
+          內容整理自立法院 IVOD、臺中市議會隨選視訊與新北市議會議事影音公開的質詢影片。立法院的逐字稿由院方 AI 產生，
+          臺中市議會與新北市議會的由本站語音辨識產生，都可能有辨識錯誤；摘要為自動整理，正式引用請以原始影音與公報為準。
         </p>
       </div>
       <div class="text-sm text-muted">
@@ -36,8 +36,18 @@ const fixture = isFixtureMode();
             臺中市議會議員質詢隨選視訊
           </a>
         </p>
+        <p class="mt-1">
+          <a
+            href="https://vod.ntp.gov.tw/VodCloudV2/"
+            rel="noopener noreferrer"
+            target="_blank"
+            class="underline decoration-line underline-offset-4 transition-colors hover:text-accent"
+          >
+            新北市議會議事影音隨選視訊
+          </a>
+        </p>
         <p class="mt-2 text-xs break-all text-muted/70">
-          {fixture ? '資料來源：示範資料（src/fixtures/sample.json）' : '資料來源：立法院 IVOD、臺中市議會隨選視訊'}
+          {fixture ? '資料來源：示範資料（src/fixtures/sample.json）' : '資料來源：立法院 IVOD、臺中市議會隨選視訊、新北市議會議事影音'}
         </p>
       </div>
     </div>

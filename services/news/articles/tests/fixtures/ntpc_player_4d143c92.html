@@ -1,0 +1,21 @@
+
+<!DOCTYPE html>
+<html>
+<head>
+    <meta name="viewport" content="width=device-width" />
+    <title>VideoPlayer</title>
+    <link href="/VodCloudV2/css/bootstrap.css" rel="stylesheet">
+    <link href="/VodCloudV2/css/bootstrap-theme.css" rel="stylesheet">
+    <link href="/VodCloudV2/css/bootstrap-table.css" rel="stylesheet">
+    <link href="https://vjs.zencdn.net/7.20.3/video-js.css" rel="stylesheet" />
+</head>
+<body style="overflow:hidden">
+    <div class="embed-responsive embed-responsive-16by9  fill">
+        <video id="player_Video" poster='/VodCloudV2/VodStream/GetThumbnail?assetID=4d143c92-f66b-46eb-bd52-6cbf7657165b'
+               controls="controls" data-setup='{"techOrder": ["flash","html5"]}'
+               class="embed-responsive-item video-js vjs-default-skin vjs-big-play-centered fill">
+            <source src="https://vodwms.ntp.gov.tw:443/NTP/_definst_/mp4:PlayAgenda/Book_SD/0408R1150916/0408R1150916030.mp4/playlist.m3u8?device=PC&amp;kind=Guest" type="application/x-mpegURL" />
+        </video>
+    </div>
+</body>
+</html>

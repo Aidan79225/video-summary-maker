@@ -4,7 +4,7 @@ export type { ArticleSource };
 
 export type ArticleCard = {
   slug: string;
-  /** 來源給的識別碼；立法院是 IVOD 數字、臺中市議會是 tccc-<ano> */
+  /** 來源給的識別碼；立法院是 IVOD 數字、臺中市議會是 tccc-<ano>、新北市議會是 ntpc-<檔案key> */
   ivod_id: string;
   source: ArticleSource;
   /** 講者「當時」的政黨全名；聯合質詢多黨用頓號分隔；查無資料是空字串 */
