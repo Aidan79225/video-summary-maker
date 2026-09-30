@@ -227,3 +227,38 @@ def test_a_record_with_no_video_url_is_reported():
     client = IvodClient(fetch=FakeFetch({"data": record}))
     with pytest.raises(SubtitleDownloadFailed):
         client.video_url("171180")
+
+
+def test_drifted_whisperx_segments_are_converted_and_the_legislator_name_is_kept():
+    """立法院自己的 WhisperX 逐字稿也會漂成簡體；委員姓名（范雲）不能被改成「範雲」。"""
+    record = dict(RECORD, **{
+        "委員名稱": "范雲",
+        "transcript": {"whisperx": [
+            {"start": 0.0, "end": 5.0, "text": "谢谢主席 今天的公听会我们对照的是修法版本"},
+            {"start": 5.0, "end": 9.0, "text": "范云认为这个问题很重要"},
+        ]},
+    })
+    gateway, _ = _gateway(FakeFetch({"data": record}))
+    transcript = gateway.fetch(URL, ())
+    assert [c.text for c in transcript.cues] == [
+        "謝謝主席 今天的公聽會我們對照的是修法版本",
+        "范雲認為這個問題很重要",
+    ]
+
+
+def test_co_sponsor_names_from_the_meeting_name_are_protected():
+    """攔的 bug：會議名稱在 record 的最上層（不在 會議資料 裡），而且名字夾在
+    「委員范雲等17人」裡；抓不到的話漂移段落裡的「范云」會變成「範雲」。"""
+    record = dict(RECORD, **{
+        "委員名稱": "林月琴",
+        "會議名稱": "審查委員范雲等17人、委員涂權吉等16人擬具「性別平等工作法」修正草案",
+        "transcript": {"whisperx": [
+            {"start": 0.0, "end": 5.0, "text": "谢谢主席 今天我们要讨论的是性别平等工作法"},
+            {"start": 5.0, "end": 9.0, "text": "范云提的版本跟行政院的版本不一样"},
+            {"start": 9.0, "end": 12.0, "text": "涂权吉的版本也是这样"},
+        ]},
+    })
+    gateway, _ = _gateway(FakeFetch({"data": record}))
+    texts = [c.text for c in gateway.fetch(URL, ()).cues]
+    assert texts[1] == "范雲提的版本跟行政院的版本不一樣"
+    assert texts[2] == "涂權吉的版本也是這樣"

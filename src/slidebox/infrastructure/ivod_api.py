@@ -6,12 +6,14 @@
 from __future__ import annotations
 
 import json
+import re
 import urllib.request
 from collections.abc import Sequence
 
 from ..domain.entities import Cue, Transcript
 from ..domain.errors import SubtitleDownloadFailed
 from ..usecases.sources import ivod_id
+from .chinese_script import fix_transcript, keep_terms_from
 
 _BASE = "https://ly.govapi.tw/v2/ivods"
 
@@ -110,6 +112,10 @@ class IvodSubtitleGateway:
 
         cues = tuple(c for c in (_cue(s) for s in _whisperx(record))
                      if c is not None)
+        # 立法院的 WhisperX 逐字稿也會漂成簡體（IVOD 170000 有 9/14 段）。整份一起判斷，
+        # 委員姓名與會議名稱當成保護詞，免得「游」「范」這類姓被改掉。
+        texts = fix_transcript([c.text for c in cues], _keep_terms(record, video_id))
+        cues = tuple(Cue(c.start, c.end, t) for c, t in zip(cues, texts))
         if not cues:
             # 刻意用 SubtitleDownloadFailed：一般的 NoSubtitlesAvailable 會啟動
             # 語音備援，而備援用的是 yt-dlp，它不認得 IVOD 網址——使用者最後
@@ -157,6 +163,19 @@ def _cue(segment: object) -> Cue | None:
     if not text or start is None or end is None:
         return None
     return Cue(start=start, end=end, text=text)
+
+
+# 會議名稱裡的提案委員：「委員范雲等17人」「本院委員涂權吉等16人」
+_CO_SPONSOR_RE = re.compile(r"委員([一-鿿]{2,4}?)(?=等|、|，|,|\d)")
+
+
+def _keep_terms(record: dict, video_id: str) -> list[str]:
+    """標題（日期 委員－會議）加上會議名稱裡的提案委員。會議名稱在 record 的最上層，
+    名字夾在「委員范雲等17人」裡，要用正規表示式抽出來才會是獨立的保護詞。"""
+    meeting = record.get("會議資料")
+    title = meeting.get("標題") if isinstance(meeting, dict) else ""
+    names = _CO_SPONSOR_RE.findall(str(record.get("會議名稱") or ""))
+    return [*keep_terms_from(f"{_title(record, video_id)} {title or ''}"), *names]
 
 
 def _title(record: dict, video_id: str) -> str:

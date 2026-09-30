@@ -14,8 +14,11 @@ from collections.abc import Callable
 from ..domain.entities import Cue
 from ..domain.errors import NoSubtitlesAvailable, OperationCancelled
 from ..domain.ports import CancelCheck, ProgressCallback
+from .chinese_script import fix_transcript, keep_terms_from
 
 DEVICE_ENV = "SLIDEBOX_WHISPER_DEVICE"
+# 只對普通話做正體修正。粵語的「晒」「吓」是正確寫法，轉了就錯；日文漢字更不能碰。
+_MANDARIN = "zh"
 
 
 def resolve_device(requested: str | None, cuda_available: bool) -> tuple[str, str]:
@@ -127,6 +130,10 @@ class FasterWhisperTranscriber:
             # 上傳者標錯時，強制指定會產出整份錯誤語言的轉錄。
             segments, info = model.transcribe(audio_path, vad_filter=True,
                                               initial_prompt=initial_prompt or None)
+            # 中文長音訊會在中途漂成簡體，而且一漂就是一整段（實測 1 小時的議會
+            # 質詢從第 35 分鐘起全簡體）。只對中文做：日文的漢字轉了就是錯字。
+            # 轉換在全部段落收齊之後做：要看前後文才判斷得出哪一段漂了
+            mandarin = (getattr(info, "language", "") or "") == _MANDARIN
             # segments 是惰性 generator，辨識在迭代時才真正發生，所以取消要
             # 在每段之間檢查，錯誤也可能在迭代中途才冒出來。
             for seg in segments:
@@ -146,6 +153,9 @@ class FasterWhisperTranscriber:
             raise
         except Exception as e:  # noqa: BLE001 底層錯誤一律轉成可讀訊息
             raise NoSubtitlesAvailable(f"這部影片沒有字幕，語音辨識也失敗：{_brief(e)}") from e
+        if mandarin and cues:
+            texts = fix_transcript([c.text for c in cues], keep_terms_from(initial_prompt))
+            cues = [Cue(start=c.start, end=c.end, text=t) for c, t in zip(cues, texts)]
         return tuple(cues), info.language
 
     def _load(self, progress: ProgressCallback):

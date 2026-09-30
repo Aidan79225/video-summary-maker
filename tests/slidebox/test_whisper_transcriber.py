@@ -286,6 +286,44 @@ def test_the_initial_prompt_is_passed_to_faster_whisper():
     assert seen["prompt"] is None
 
 
+# --- 簡體漂移 ---
+
+
+def test_chinese_output_that_drifted_to_simplified_is_converted():
+    model = FakeModel([Seg(0.0, 2.0, "請里長幫忙"), Seg(2.0, 4.0, "我们这样是不对的")], language="zh")
+    cues, language = _make(model).transcribe("a.wav", 4.0, _quiet, lambda: False)
+    assert language == "zh"
+    assert [c.text for c in cues] == ["請里長幫忙", "我們這樣是不對的"]
+
+
+def test_japanese_kanji_are_never_converted():
+    """日文的「国」「会」是正確的日文漢字，轉成「國」「會」就是錯字。"""
+    model = FakeModel([Seg(0.0, 2.0, "国会で話します")], language="ja")
+    cues, _ = _make(model).transcribe("a.wav", 2.0, _quiet, lambda: False)
+    assert [c.text for c in cues] == ["国会で話します"]
+
+
+def test_hint_names_are_protected_on_the_speech_path():
+    """沒有保護詞時「游」會被改成「遊」：提示句裡的講者姓名必須一路傳到轉換。"""
+    model = FakeModel([Seg(0.0, 2.0, "我们来讲一下这个问题"), Seg(2.0, 4.0, "游淑慧议员说")], language="zh")
+    cues, _ = _make(model).transcribe("a.wav", 4.0, _quiet, lambda: False,
+                                      initial_prompt="新北市議會。發言者：游淑慧")
+    assert [c.text for c in cues] == ["我們來講一下這個問題", "游淑慧議員說"]
+
+
+def test_leading_shared_only_segments_are_converted_once_the_drift_is_known():
+    model = FakeModel([Seg(0.0, 1.0, "然后呢"), Seg(1.0, 3.0, "里面的问题我们来看一下")], language="zh")
+    cues, _ = _make(model).transcribe("a.wav", 3.0, _quiet, lambda: False)
+    assert [c.text for c in cues] == ["然後呢", "裡面的問題我們來看一下"]
+
+
+def test_cantonese_is_left_alone():
+    """粵語的「晒」「吓」是正確寫法，轉成「曬」「嚇」就錯。"""
+    model = FakeModel([Seg(0.0, 2.0, "唔該晒"), Seg(2.0, 4.0, "你諗吓")], language="yue")
+    cues, _ = _make(model).transcribe("a.wav", 4.0, _quiet, lambda: False)
+    assert [c.text for c in cues] == ["唔該晒", "你諗吓"]
+
+
 # --- auto 裝置的退路 ---
 
 
