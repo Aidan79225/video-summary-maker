@@ -21,10 +21,10 @@ from datetime import date, datetime
 from fractions import Fraction
 
 from django.db import transaction
-from django.db.models import Max, Min
+from django.db.models import Count, Max, Min
 from django.utils import timezone
 
-from .members_sync import CHAIR_ROLES, SPEAKER_SEPARATOR
+from .members_sync import CHAIR_ROLES, SPEAKER_SEPARATOR, term_number
 from .models import Article, ArticleSource, ArticleStatus, Membership, Person, ProfileStat, Session
 
 logger = logging.getLogger(__name__)
@@ -181,6 +181,8 @@ class _Term:
     start: date | None
     end: date | None
     chair: bool
+    # 第幾屆（「11」「4」）；空字串是不知道
+    term: str = ""
 
     def covers(self, day: date) -> bool:
         return (self.start is None or self.start <= day) and (self.end is None or day <= self.end)
@@ -199,9 +201,9 @@ class _Roster:
     def load(cls, source: str) -> _Roster:
         # 跟 members_sync.membership_for 同一個排序：多筆重疊時取最晚開始的、同日再取最新建的
         rows = (Membership.objects.filter(source=source).order_by("-start_date", "-id")
-                .values_list("person_id", "name", "start_date", "end_date", "role"))
-        return cls([_Term(pid, name, start, end, role in CHAIR_ROLES)
-                    for pid, name, start, end, role in rows])
+                .values_list("person_id", "name", "start_date", "end_date", "role", "term"))
+        return cls([_Term(pid, name, start, end, role in CHAIR_ROLES, term_number(term))
+                    for pid, name, start, end, role, term in rows])
 
     def person_for(self, name: str, day: date) -> int | None:
         """同來源、同名、任期涵蓋文章日期——跟 members_sync.link_article 同一套規則。"""
@@ -210,15 +212,22 @@ class _Roster:
             return None
         return max(candidates, key=lambda t: t.start or date.min).person_id
 
-    def population(self, start: date | None, end: date | None) -> set[int]:
-        """任期與會期涵蓋範圍有重疊的人，去掉議長、副議長。
+    def population(self, start: date | None, end: date | None,
+                   term: str = "") -> tuple[set[int], set[int]]:
+        """(母體, 被排除的議長副議長)。母體 = 這一屆、任期與會期涵蓋範圍有重疊的人。
 
-        議長、副議長只主持、不質詢，放進母體只是一堆零，會把其他人的百分位墊高。
-        只有新北的名冊有這欄；立法院、臺中沒有，就沒有人被排除。
+        要看「這一屆」：議會的任期沒有起訖日期（空的就是無限早到現任），只看日期的話，
+        換屆之後舊會期的同儕會混進新議員、新會期會混進已經卸任的人。任期或會期不知道
+        是哪一屆時才只看日期。
+
+        議長、副議長只主持、不質詢，放進母體只是一堆零，會把其他人的百分位墊高。只看
+        這一屆的任期上的職位：下一屆當選議長的人，這一屆仍是一般議員。只有新北的名冊有
+        這欄；立法院、臺中沒有，就沒有人被排除。
         """
-        overlapping = [t for t in self._terms if _overlaps(t.start, t.end, start, end)]
-        chairs = {t.person_id for t in overlapping if t.chair}
-        return {t.person_id for t in overlapping} - chairs
+        serving = [t for t in self._terms if _overlaps(t.start, t.end, start, end)
+                   and (not term or not t.term or t.term == term)]
+        chairs = {t.person_id for t in serving if t.chair}
+        return {t.person_id for t in serving} - chairs, chairs
 
 
 def name_in_session(person: Person, session: Session) -> str:
@@ -378,6 +387,10 @@ class ProfileReport:
     sessions: list[SessionSummary] = field(default_factory=list)
     # (來源, 講者名字) → 篇數。通常是名冊的寫法跟影音系統不同，要人看
     unmatched: Counter = field(default_factory=Counter)
+    # (來源, 講者名字) → 篇數：對得到人、但他不在那個會期的母體裡（例如任期的屆別對不上）
+    outside: Counter = field(default_factory=Counter)
+    # 來源 → 已完成、但掛不上會期的文章數（會議名稱裡沒有會期）。這些不計入任何指標
+    unsessioned: Counter = field(default_factory=Counter)
 
     def __str__(self) -> str:
         lines = [f"這次掛上會期 {self.assigned} 篇"]
@@ -386,12 +399,19 @@ class ProfileReport:
                     if s.session.start_date else "無資料")
             lines.append(f"{s.session}（資料涵蓋 {span}）：母體 {s.population} 人、"
                          f"已完成文章 {s.ready_articles} 篇")
-        if self.unmatched:
-            lines.append(f"對不到任期的講者 {len(self.unmatched)} 位（不計入指標；"
-                         "通常是名冊的寫法不同，請到 admin 確認）：")
-            for (source, name), count in sorted(self.unmatched.items(),
-                                                key=lambda item: (-item[1], item[0])):
-                lines.append(f"  {ArticleSource(source).label} {name}：{count} 篇")
+        for counter, heading in (
+                (self.unmatched, "對不到任期的講者 {n} 位（不計入指標；通常是名冊的寫法不同，"
+                                 "請到 admin 核對任期的名字與起訖）："),
+                (self.outside, "對得到人、但不在該會期母體裡的講者 {n} 位（不計入指標；"
+                               "通常是任期的屆別或起訖不對）：")):
+            if counter:
+                lines.append(heading.format(n=len(counter)))
+                for (source, name), count in sorted(counter.items(),
+                                                    key=lambda item: (-item[1], item[0])):
+                    lines.append(f"  {ArticleSource(source).label} {name}：{count} 篇")
+        for source, count in sorted(self.unsessioned.items()):
+            lines.append(f"{ArticleSource(source).label}：已完成但會議名稱裡沒有會期的文章 "
+                         f"{count} 篇（不計入指標）")
         return "\n".join(lines)
 
 
@@ -403,19 +423,23 @@ def compute_profiles(now: datetime | None = None) -> ProfileReport:
     for session in Session.objects.order_by("source", "start_date", "id"):
         if session.source not in rosters:
             rosters[session.source] = _Roster.load(session.source)
-        rows, summary = _compute_session(session, rosters[session.source], now, report.unmatched)
+        rows, summary = _compute_session(session, rosters[session.source], now, report)
         _replace(session, rows)
         report.sessions.append(summary)
+    report.unsessioned.update({
+        row["source"]: row["n"] for row in (
+            Article.objects.filter(status=ArticleStatus.READY, session__isnull=True)
+            .order_by().values("source").annotate(n=Count("id")))})
     logger.info("人物側寫重算完成：%d 個會期", len(report.sessions))
     return report
 
 
 def _compute_session(session: Session, roster: _Roster, now: datetime,
-                     unmatched: Counter) -> tuple[list[ProfileStat], SessionSummary]:
+                     report: ProfileReport) -> tuple[list[ProfileStat], SessionSummary]:
     # 只算已完成的文章：只有它們有頁面可以點回去
     articles = list(Article.objects.filter(session=session, status=ArticleStatus.READY)
                     .order_by().values_list("speaker", "date", "duration_seconds", "brief"))
-    population = roster.population(session.start_date, session.end_date)
+    population, chairs = roster.population(session.start_date, session.end_date, session.term)
     summary = SessionSummary(session, len(population) if articles else 0, len(articles))
     if not articles:
         # 會期裡的文章都還沒做完：全員零分不是事實，是還沒有資料
@@ -426,7 +450,7 @@ def _compute_session(session: Session, roster: _Roster, now: datetime,
     for speaker, day, duration, brief in articles:
         people, strangers = _speakers_of(speaker, day, roster)
         for name in strangers:
-            unmatched[(session.source, name)] += 1
+            report.unmatched[(session.source, name)] += 1
         heads = len(people) + len(strangers)
         if not heads:
             continue
@@ -434,10 +458,12 @@ def _compute_session(session: Session, roster: _Roster, now: datetime,
         share = Fraction(duration, heads)
         # 聯合質詢的摘要卡是整段的，分不出是誰講的，不算進任何一個人的具體度
         counts_brief = is_solo(speaker) and brief is not None
-        for person_id in people:
+        for person_id, name in people.items():
             tally = tallies.get(person_id)
             if tally is None:
-                # 議長、副議長：不在母體
+                # 議長、副議長本來就不在母體；其他不在母體的人要報出來，不能靜悄悄地少算
+                if person_id not in chairs:
+                    report.outside[(session.source, name)] += 1
                 continue
             tally.speeches += 1
             tally.seconds += share
@@ -450,21 +476,21 @@ def _compute_session(session: Session, roster: _Roster, now: datetime,
     return rows, summary
 
 
-def _speakers_of(speaker: str, day: date, roster: _Roster) -> tuple[list[int], list[str]]:
-    """一篇的講者：(對到的人，去重、保留順序, 對不到任期的名字)。
+def _speakers_of(speaker: str, day: date, roster: _Roster) -> tuple[dict[int, str], list[str]]:
+    """一篇的講者：({對到的人: 名字}，以人去重、保留順序, 對不到任期的名字)。
 
     以人去重：同一個人的兩段任期寫法不同、又同時出現在講者欄位時，仍然只是「一篇有他」
     ——發言次數是「講者包含他的文章數」，證據清單點進去也只有一篇。
     """
-    people: dict[int, None] = {}
+    people: dict[int, str] = {}
     strangers: list[str] = []
     for name in speaker_names(speaker):
         person_id = roster.person_for(name, day)
         if person_id is None:
             strangers.append(name)
         else:
-            people[person_id] = None
-    return list(people), strangers
+            people.setdefault(person_id, name)
+    return people, strangers
 
 
 def _rank(indicator: Indicator, session: Session, tallies: dict[int, _Tally],

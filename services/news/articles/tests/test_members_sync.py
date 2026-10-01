@@ -393,3 +393,32 @@ class NtpcCaucusClearingTests(TestCase):
         sync([_rec("甲", "民主進步黨", source="ntpc", caucus="民進黨團")])
         sync([_rec("甲", "民主進步黨", source="ntpc", caucus="")])
         self.assertEqual(Membership.objects.get(name="甲").caucus, "")
+
+
+class TermChangeTests(TestCase):
+    """攔的 bug：換屆時直接改寫 term 與 role，議會的任期又沒有日期，舊會期的同儕就會混進
+    新議員，新任議長以前當一般議員的發言也會被當成主持人拿掉。"""
+
+    def test_a_re_elected_member_gets_a_new_term_and_the_old_one_is_kept(self):
+        sync([_rec("甲", "中國國民黨", source="ntpc", term="第4屆")], today=date(2026, 9, 1))
+        report = sync([_rec("甲", "中國國民黨", source="ntpc", term="第5屆", role="議長")],
+                      today=date(2026, 12, 27))
+        self.assertEqual(report.term_changes, 1)
+        old, new = Membership.objects.order_by("id")
+        self.assertEqual((old.term, old.role, old.end_date), ("第4屆", "", date(2026, 12, 26)))
+        self.assertEqual((new.term, new.role, new.start_date), ("第5屆", "議長", date(2026, 12, 27)))
+        self.assertEqual(old.person_id, new.person_id)
+        # 下一次同步找到的是新的一段，不會再切
+        self.assertEqual(sync([_rec("甲", "中國國民黨", source="ntpc", term="第5屆", role="議長")],
+                              today=date(2027, 1, 3)).term_changes, 0)
+
+    def test_an_unknown_term_is_not_a_change(self):
+        sync([_rec("甲", "中國國民黨", source="tccc", term="")])
+        self.assertEqual(sync([_rec("甲", "中國國民黨", source="tccc", term="第4屆")]).term_changes, 0)
+        self.assertEqual(Membership.objects.get().term, "第4屆")
+
+    def test_term_numbers(self):
+        from articles.members_sync import term_number
+
+        self.assertEqual([term_number(t) for t in ("第11屆", "11", "第０４屆", "", None)],
+                         ["11", "11", "4", "", ""])

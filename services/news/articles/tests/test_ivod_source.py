@@ -173,3 +173,36 @@ class RateLimitTests(SimpleTestCase):
         with self.assertRaises(IvodUnavailable):
             source.clips_for(date(2026, 8, 27))
         self.assertEqual(len(calls), 1)
+
+
+class MeetingFallbackTests(SimpleTestCase):
+    """攔的 bug：全院委員會、公聽會的片段沒有「會議資料」（實測約 6%），會議名稱存成空字串、
+    解析不出會期，這些發言就從人物側寫裡消失。"""
+
+    def test_the_top_level_meeting_name_is_used_without_the_long_reason(self):
+        from articles.ivod_source import meeting_title
+
+        raw = {"會議名稱": "第11屆第5會期第2次全院委員會（事由：總統咨，為監察院第六屆監察委員…）"}
+        self.assertEqual(meeting_title(raw), "第11屆第5會期第2次全院委員會")
+        raw = {"會議資料": None, "會議名稱": "第11屆第5會期經濟委員會公聽會(事由:能源轉型)"}
+        self.assertEqual(meeting_title(raw), "第11屆第5會期經濟委員會公聽會")
+
+    def test_the_structured_title_still_wins(self):
+        from articles.ivod_source import meeting_title
+
+        raw = {"會議資料": {"標題": "第11屆第5會期第23次會議"}, "會議名稱": "別的寫法"}
+        self.assertEqual(meeting_title(raw), "第11屆第5會期第23次會議")
+        self.assertEqual(meeting_title({}), "")
+
+    def test_a_clip_without_meeting_data_gets_the_fallback(self):
+        row = _row(171127)
+        del row["會議資料"]
+        row["會議名稱"] = "第11屆第5會期第2次全院委員會（事由：…）"
+        source, _ = _source([{"ivods": [row], "total_page": 1}])
+        [clip] = source.clips_for(date(2026, 8, 24))
+        self.assertEqual(clip.meeting, "第11屆第5會期第2次全院委員會")
+
+    def test_one_record_is_fetched_and_unwrapped(self):
+        source, fetch = _source([{"data": {"IVOD_ID": 171127, "會議名稱": "第11屆第5會期第2次全院委員會"}}])
+        self.assertEqual(source.record("171127")["IVOD_ID"], 171127)
+        self.assertTrue(fetch.urls[0].endswith("/ivods/171127"))

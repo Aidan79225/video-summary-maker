@@ -487,3 +487,93 @@ class NightlyJobTests(SimpleTestCase):
         with self.assertLogs(self.LOGGER, "ERROR"):
             calls = self._run(fail={"ingest_ivod"})
         self.assertEqual([name for name, _ in calls], ["ingest_ivod", "compute_profiles"])
+
+
+class TermRolloverTests(TestCase):
+    """攔的 bug：議會的任期沒有日期，只看日期的話每個會期的同儕是「名冊上出現過的所有人」。
+    換屆同步之後，舊會期混進新議員、新會期混進卸任的人，已經公開的百分位跟著變。"""
+
+    def _sync(self, names, term, today, roles=None):
+        from articles.members_sync import MemberRecord, sync
+
+        roles = roles or {}
+        sync([MemberRecord(source="ntpc", external_id=f"C{name}", name=name, party="無黨籍",
+                           term=term, role=roles.get(name, "")) for name in names], today=today)
+
+    def test_old_sessions_keep_their_peers_after_the_next_term_is_synced(self):
+        old = ["甲", "乙", "丙", "丁", "戊", "己"]
+        self._sync(old, "第4屆", date(2026, 9, 1))
+        for count, name in enumerate(old, start=1):
+            for _ in range(count):
+                _article(name, source="ntpc", meeting=NTPC_MEETING, day="2026-09-10")
+        compute_profiles()
+        before = _snapshot()
+        self.assertEqual(_stats("speeches")["甲"].peers, 6)
+
+        # 第5屆：甲、乙連任，五位新人；丙丁戊己卸任
+        self._sync(["甲", "乙", "庚", "辛", "壬", "癸", "子"], "第5屆", date(2026, 12, 27))
+        _article("甲", source="ntpc", meeting="第5屆第1次定期會 市政總質詢", day="2027-03-01")
+        compute_profiles()
+
+        old_session = Session.objects.get(name="第4屆第8次定期會")
+        self.assertEqual(sorted(r for r in _snapshot() if r[1] == old_session.id), before)
+        new_session = Session.objects.get(name="第5屆第1次定期會")
+        peers = {s.person.name for s in ProfileStat.objects.filter(
+            session=new_session, indicator="speeches").select_related("person")}
+        self.assertEqual(peers, {"甲", "乙", "庚", "辛", "壬", "癸", "子"})
+
+    def test_a_member_who_later_becomes_speaker_keeps_his_earlier_speeches(self):
+        """職位看「那一屆」的任期：下一屆當選議長的人，這一屆仍是一般議員。"""
+        names = ["甲", "乙", "丙", "丁", "戊", "己", "蔣根煌"]
+        self._sync(names, "第4屆", date(2026, 9, 1), roles={"蔣根煌": "議長"})
+        for _ in range(4):
+            _article("甲", source="ntpc", meeting=NTPC_MEETING, day="2026-09-10")
+        compute_profiles()
+        self.assertEqual(_stats("speeches")["甲"].value, 4)
+
+        self._sync(names, "第5屆", date(2026, 12, 27), roles={"甲": "議長"})
+        compute_profiles()
+        stats = _stats("speeches")
+        self.assertEqual(stats["甲"].value, 4)
+        self.assertNotIn("蔣根煌", stats)
+
+
+class ReportTests(TestCase):
+    def test_a_speaker_outside_the_sessions_peers_is_reported_not_silently_dropped(self):
+        person = Person.objects.create(name="甲")
+        Membership.objects.create(person=person, source="tccc", name="甲", term="第3屆")
+        _member("乙", source="tccc")
+        _article("甲、乙", source="tccc")
+        report = compute_profiles()
+        self.assertEqual(report.outside[("tccc", "甲")], 1)
+        self.assertIn("不在該會期母體", str(report))
+
+    def test_finished_articles_without_a_session_are_counted_in_the_report(self):
+        _member("甲", source="ly")
+        _article("甲", source="ly", meeting="")
+        _article("甲", source="ly", meeting="立法院朝野黨團協商")
+        _article("甲", source="ly", meeting="", status=ArticleStatus.PENDING)
+        report = compute_profiles()
+        self.assertEqual(report.unsessioned["ly"], 2)
+        self.assertIn("會議名稱裡沒有會期的文章 2 篇", str(report))
+
+
+class BackfillMeetingsTests(TestCase):
+    def test_empty_meeting_names_are_filled_from_lyapi_and_then_get_a_session(self):
+        _member("甲", source="ly")
+        empty = _article("甲", source="ly", meeting="")
+        kept = _article("甲", source="ly", meeting=LY_MEETING)
+        record = {"會議名稱": "第11屆第5會期第2次全院委員會（事由：總統咨…）"}
+        out = io.StringIO()
+        with mock.patch("articles.management.commands.backfill_meetings.IvodDailySource") as cls:
+            cls.return_value.record.return_value = record
+            call_command("backfill_meetings", stdout=out)
+            cls.return_value.record.assert_called_once_with(empty.ivod_id)
+        empty.refresh_from_db()
+        self.assertEqual(empty.meeting, "第11屆第5會期第2次全院委員會")
+        self.assertIn("補上 1", out.getvalue())
+        compute_profiles()
+        empty.refresh_from_db()
+        kept.refresh_from_db()
+        self.assertEqual(empty.session_id, kept.session_id)
+        self.assertEqual(_stats("speeches")["甲"].value, 2)

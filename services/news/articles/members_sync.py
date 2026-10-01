@@ -19,7 +19,7 @@ import urllib.request
 from collections import Counter
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field, replace
-from datetime import date
+from datetime import date, timedelta
 
 from django.conf import settings
 from django.db import transaction
@@ -58,12 +58,13 @@ class SyncReport:
     created_memberships: int = 0
     updated: int = 0
     party_changes: int = 0
+    term_changes: int = 0
     review: int = 0
     errors: list[str] = field(default_factory=list)
 
     def __str__(self) -> str:
         text = (f"名單 {self.seen} 筆：新人物 {self.created_persons}、新任期 {self.created_memberships}、"
-                f"更新 {self.updated}、換黨 {self.party_changes}")
+                f"更新 {self.updated}、換黨 {self.party_changes}、換屆 {self.term_changes}")
         if self.review:
             text += f"、待人工確認 {self.review}"
         return text
@@ -383,6 +384,21 @@ def _find_person(name: str) -> tuple[Person | None, bool]:
     return None, len(matches) > 1
 
 
+_TERM_NUMBER_RE = re.compile(r"\d+")
+_FULLWIDTH = str.maketrans("０１２３４５６７８９", "0123456789")
+
+
+def term_number(term: str | None) -> str:
+    """「第11屆」「11」都變成「11」；沒有數字就是空字串（不知道是哪一屆）。"""
+    match = _TERM_NUMBER_RE.search((term or "").translate(_FULLWIDTH))
+    return str(int(match.group())) if match else ""
+
+
+def _term_changed(membership: Membership, record: MemberRecord) -> bool:
+    old, new = term_number(membership.term), term_number(record.term)
+    return bool(old and new and old != new)
+
+
 @transaction.atomic
 def sync(records: Iterable[MemberRecord], today: date | None = None) -> SyncReport:
     today = today or timezone.localdate()
@@ -404,6 +420,19 @@ def sync(records: Iterable[MemberRecord], today: date | None = None) -> SyncRepo
                                     external_id=record.external_id, name=record.name,
                                     party=record.party, start_date=record.start_date)
             report.created_memberships += 1
+        elif _term_changed(membership, record):
+            # 換屆（連任也算）：舊的一段結束在昨天、新開一筆。不能直接改寫 term／role——
+            # 議會的任期沒有日期，人物側寫靠 term 分辨「誰在這一屆」，改寫了，舊會期的
+            # 同儕就會混進新議員、新任議長以前的發言也會被當成主持人拿掉。
+            membership.end_date = today - timedelta(days=1)
+            membership.synced_at = now
+            membership.save()
+            logger.info("%s 換屆（%s → %s），已開新的一段任期", record.name,
+                        membership.term, record.term)
+            membership = Membership(person=membership.person, source=record.source,
+                                    external_id=record.external_id, name=record.name,
+                                    party=record.party, start_date=today)
+            report.term_changes += 1
         elif membership.party != record.party and record.party:
             # 換黨：舊的結束在今天、新開一筆。真正的日期來源不給，標起來讓人補。
             membership.end_date = today
