@@ -538,6 +538,28 @@ class TermRolloverTests(TestCase):
         self.assertNotIn("蔣根煌", stats)
 
 
+class ShortSessionAfterTermChangeTests(TestCase):
+    def test_re_elected_councillors_count_in_a_session_held_before_the_next_sync(self):
+        """攔的 bug：新任期從同步那天開始的話，新屆開議到下一次同步之間的臨時會裡，連任的
+        人對不上第5屆的任期（從同步日才開始）、第4屆的又被屆別擋掉，於是從母體裡消失。"""
+        from articles.members_sync import MemberRecord, sync
+
+        def roster(names, term, today):
+            sync([MemberRecord(source="ntpc", external_id=f"C{n}", name=n, party="無黨籍", term=term)
+                  for n in names], today=today)
+
+        roster(["甲", "乙", "丙", "丁", "戊", "己"], "第4屆", date(2026, 9, 6))
+        new_term = ["甲", "乙", "庚", "辛", "壬", "癸", "子"]
+        for name in new_term:
+            _article(name, source="ntpc", meeting="第5屆第1次臨時會", day="2026-12-28")
+        roster(new_term, "第5屆", date(2027, 1, 3))
+        report = compute_profiles()
+        stats = _stats("speeches")
+        self.assertEqual(set(stats), set(new_term))
+        self.assertEqual(stats["甲"].peers, 7)
+        self.assertFalse(report.outside)
+
+
 class ReportTests(TestCase):
     def test_a_speaker_outside_the_sessions_peers_is_reported_not_silently_dropped(self):
         person = Person.objects.create(name="甲")
