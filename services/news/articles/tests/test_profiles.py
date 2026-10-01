@@ -197,6 +197,47 @@ class VolumeTests(TestCase):
         compute_profiles()
         self.assertEqual(_stats("speaking_minutes")["甲"].value, 0.8)
 
+    def test_an_exact_half_rounds_up(self):
+        """round() 是銀行家捨入：15 秒＝0.25 分鐘會變成 0.2、23.25 會變成 23.2。"""
+        _member("甲")
+        _member("乙")
+        _article("甲", duration=15)
+        _article("乙", duration=1395)
+        compute_profiles()
+        minutes = _stats("speaking_minutes")
+        self.assertEqual((minutes["甲"].value, minutes["乙"].value), (0.3, 23.3))
+
+    def test_equal_time_from_different_splits_is_a_tie(self):
+        """1/3 + 49/3 + 13/3 秒跟單獨 21 秒一樣長（0.35 分鐘）。
+
+        用浮點數加是 20.999999999999996 秒，會捨成 0.3，單獨講 21 秒的人卻是 0.4。
+        """
+        for name in ("甲", "乙", "丙", "丁", "戊"):
+            _member(name)
+        for duration in (1, 49, 13):
+            _article("甲、乙、丙", duration=duration)
+        _article("丁", duration=21)
+        compute_profiles()
+        minutes = _stats("speaking_minutes")
+        self.assertEqual({k: v.value for k, v in minutes.items()},
+                         {"甲": 0.4, "乙": 0.4, "丙": 0.4, "丁": 0.4, "戊": 0.0})
+        # 比 0.4 低的 1 人、同值 4 人：(1 + 0.5×4) ÷ 5
+        self.assertEqual({minutes[k].percentile for k in ("甲", "乙", "丙", "丁")}, {60.0})
+
+    def test_one_person_under_two_spellings_is_one_speaker(self):
+        """名冊上同一個人的兩段任期寫法不同、又同時出現在講者欄位：仍然只是一篇有他。"""
+        person = Person.objects.create(name="楊啓邦")
+        _member("楊啓邦", person=person, end=date(2026, 12, 31))
+        _member("楊啟邦", person=person, start=date(2026, 1, 1))
+        _member("乙")
+        _article("楊啓邦、楊啟邦、乙", duration=1200)
+        compute_profiles()
+        speeches = _stats("speeches")
+        self.assertEqual((speeches["楊啓邦"].value, speeches["楊啓邦"].n), (1.0, 1))
+        # 講者是兩個人，各佔一半
+        minutes = _stats("speaking_minutes")
+        self.assertEqual((minutes["楊啓邦"].value, minutes["乙"].value), (10.0, 10.0))
+
     def test_a_member_who_never_spoke_is_a_zero_not_missing(self):
         _member("甲")
         _member("乙")

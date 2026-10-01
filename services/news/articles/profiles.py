@@ -11,12 +11,14 @@ Pi 的資料庫是 SD 卡上的 SQLite：任期一個來源只讀一次、文章
 from __future__ import annotations
 
 import logging
+import math
 import re
 from bisect import bisect_left, bisect_right
 from collections import Counter, defaultdict
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
 from datetime import date, datetime
+from fractions import Fraction
 
 from django.db import transaction
 from django.db.models import Max, Min
@@ -238,7 +240,9 @@ def name_in_session(person: Person, session: Session) -> str:
 class _Tally:
     """一個人在一個會期的原始計數。"""
     speeches: int = 0
-    seconds: float = 0.0
+    # 用分數累加：聯合質詢平分出來的 1000/3 秒用浮點數加，加的順序不同尾數就不同，
+    # 兩個實際上一樣長的人會在取整時被分出高低
+    seconds: Fraction = field(default_factory=Fraction)
     # 具體度的基礎文章：單獨發言、而且有摘要卡
     base: int = 0
     numbers: int = 0
@@ -276,6 +280,17 @@ def _ratio(part: float, whole: int, scale: float = 1.0) -> float | None:
     return part / whole * scale if whole else None
 
 
+def round_half_up(value: Fraction, places: int = 1) -> float:
+    """四捨五入到小數 places 位（值不會是負的）。
+
+    不用 round()：它是銀行家捨入，15 秒＝0.25 分鐘會變成 0.2；而浮點數的 1.05 其實是
+    1.0500…04，又會進位成 1.1——同樣是「剛好一半」，結果看浮點數的尾數決定。讀者心裡的
+    「取到小數一位」是四捨五入，所以用精確的分數算。
+    """
+    scale = 10 ** places
+    return math.floor(value * scale + Fraction(1, 2)) / scale
+
+
 VOLUME = "volume"
 SPECIFICITY = "specificity"
 BLOCK_TITLES = {VOLUME: "投入量", SPECIFICITY: "具體度"}
@@ -306,7 +321,7 @@ SPEAKING_MINUTES = Indicator(
     "speaking_minutes", VOLUME, "發言總時長", "分鐘", "篇",
     # 聯合質詢的時長平分給每位講者：分不出誰講了多久，平分是唯一不用猜的公式。
     # 先取到小數一位再比百分位，讀者看到一樣的數字就是同值。
-    lambda t: (round(t.seconds / 60, 1), t.speeches))
+    lambda t: (round_half_up(t.seconds / 60), t.speeches))
 NUMBERS_PER_SPEECH = Indicator(
     "numbers_per_speech", SPECIFICITY, "每篇落地數字數", "個／篇", "篇",
     lambda t: (_ratio(t.numbers, t.base), t.base), min_sample=True)
@@ -409,17 +424,17 @@ def _compute_session(session: Session, roster: _Roster, now: datetime,
     # 母體裡沒有任何發言的人也要有一列：投入量算 0——這正是要比較的
     tallies = {person_id: _Tally() for person_id in population}
     for speaker, day, duration, brief in articles:
-        names = speaker_names(speaker)
-        if not names:
+        people, strangers = _speakers_of(speaker, day, roster)
+        for name in strangers:
+            unmatched[(session.source, name)] += 1
+        heads = len(people) + len(strangers)
+        if not heads:
             continue
-        share = duration / len(names)
+        # 該篇講者人數：對不到任期的人與議長也是講者，照樣佔一份
+        share = Fraction(duration, heads)
         # 聯合質詢的摘要卡是整段的，分不出是誰講的，不算進任何一個人的具體度
         counts_brief = is_solo(speaker) and brief is not None
-        for name in names:
-            person_id = roster.person_for(name, day)
-            if person_id is None:
-                unmatched[(session.source, name)] += 1
-                continue
+        for person_id in people:
             tally = tallies.get(person_id)
             if tally is None:
                 # 議長、副議長：不在母體
@@ -433,6 +448,23 @@ def _compute_session(session: Session, roster: _Roster, now: datetime,
     for indicator in INDICATORS:
         rows.extend(_rank(indicator, session, tallies, now))
     return rows, summary
+
+
+def _speakers_of(speaker: str, day: date, roster: _Roster) -> tuple[list[int], list[str]]:
+    """一篇的講者：(對到的人，去重、保留順序, 對不到任期的名字)。
+
+    以人去重：同一個人的兩段任期寫法不同、又同時出現在講者欄位時，仍然只是「一篇有他」
+    ——發言次數是「講者包含他的文章數」，證據清單點進去也只有一篇。
+    """
+    people: dict[int, None] = {}
+    strangers: list[str] = []
+    for name in speaker_names(speaker):
+        person_id = roster.person_for(name, day)
+        if person_id is None:
+            strangers.append(name)
+        else:
+            people[person_id] = None
+    return list(people), strangers
 
 
 def _rank(indicator: Indicator, session: Session, tallies: dict[int, _Tally],
