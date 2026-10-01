@@ -81,10 +81,10 @@ const list = 'mt-3 grid list-disc gap-2 pl-5 marker:text-muted';
           <strong class={term}>只跟同儕比。</strong>立委只跟立委比，臺中市議員只跟臺中市議員比，新北市議員只跟新北市議員比，而且只比同一個會期。各議會的質詢制度不同，放在一起比沒有意義。
         </li>
         <li>
-          <strong class={term}>數字由程式按公式算。</strong>每個指標都是從既有資料直接計數或相除，公式就寫在下面。
+          <strong class={term}>數字由程式按公式算。</strong>每個指標都是從既有資料直接計數或相除，公式就寫在下面。模型不給數字：具體度用到的摘要卡是語言模型從逐字稿抽取、再由程式逐一檢查過的（見「具體度」），目前的指標都沒有用到模型分類。
         </li>
         <li>
-          <strong class={term}>樣本太少就不比較。</strong>分母不到 5 時只顯示原始的值，不跟別人比（見「最小樣本」）。
+          <strong class={term}>樣本太少就不比較。</strong>具體度的分母不到 5 時只顯示原始的值，不跟別人比（見「最小樣本」）。
         </li>
         <li>
           <strong class={term}>每個數字都能點回去。</strong>指標底下的「看這 12 篇」，列出的就是算出這個數字的那 12 篇報導。
@@ -165,6 +165,7 @@ const list = 'mt-3 grid list-disc gap-2 pl-5 marker:text-muted';
       <div class="prose-cn">
         <ul class={list}>
           <li>投入量沒有分母，不套最小樣本；但同儕不到 5 人時不給百分位。</li>
+          <li>發言總時長是用取到小數一位之後的分鐘數跟同儕比：頁面上分鐘數一樣的人，就是同值。</li>
           <li>
             市議會的側寫把時長放在前面：總質詢一次幾十分鐘、業務質詢十幾分鐘，時長比次數更能反映投入。立法院則次數在前。
           </li>
@@ -247,7 +248,10 @@ const list = 'mt-3 grid list-disc gap-2 pl-5 marker:text-muted';
       <h3 id="profile-sample" class={h3}>最小樣本</h3>
       <div class="prose-cn mt-3">
         <p>
-          一項指標的分母（n）不到 <strong class={term}>5</strong> 時，不給百分位、不畫長條，只顯示原始的值與 n，並寫「樣本不足（需至少 5 篇）」。一兩篇算出來的比例起伏太大，拿去跟別人比只會誤導。
+          具體度的三項指標，分母（n）不到 <strong class={term}>5</strong> 時，不給百分位、不畫長條，只顯示原始的值與 n，並寫「樣本不足（需至少 5 篇）」；有來源占比的分母是數字個數，寫的是「需至少 5 個數字」。一兩篇算出來的比例起伏太大，拿去跟別人比只會誤導。
+        </p>
+        <p class="mt-3">
+          投入量是計數、不是比例，沒有分母，所以不套最小樣本：發言 1 次的人一樣有百分位。但同儕不到 5 人時，投入量也不比較。
         </p>
       </div>
 
