@@ -103,21 +103,48 @@ uv run python manage.py ingest_ivod --retry-imageless --limit 5
 
 ```bash
 # 一、常駐排程（不想碰 systemd 的話）
-uv run python manage.py run_scheduler                   # 每天 04:10；每次都回補三天的清單
+uv run python manage.py run_scheduler                   # 每天 04:10；每次都回補三天的清單，接著重算人物側寫
 uv run python manage.py run_scheduler --backfill-days 0 # 不要回補
 
-# 二、系統排程（crontab -e）
-10 4 * * * cd /home/pi/yt-downloader/services/news && /home/pi/.local/bin/uv run python manage.py ingest_ivod >> /var/log/ly-news-ingest.log 2>&1
+# 二、系統排程（crontab -e）：匯入之後接著重算側寫；用 ; 而不是 &&，匯入失敗照樣重算
+10 4 * * * cd /home/pi/yt-downloader/services/news && /home/pi/.local/bin/uv run python manage.py ingest_ivod >> /var/log/ly-news-ingest.log 2>&1; /home/pi/.local/bin/uv run python manage.py compute_profiles >> /var/log/ly-news-ingest.log 2>&1
 ```
+
+## 人物側寫（投入量、具體度）
+
+設計見 issue #24 與 `docs/superpowers/specs/2026-10-01-profile-indicators-step1-design.md`。原則：不加總、不排名、只跟同一議會同一會期的人比、樣本不足不給百分位、每個數字都能點回那幾篇文章。
+
+```bash
+uv run python manage.py compute_profiles
+```
+
+做三件事，整批重算、重跑是安全的：
+
+1. 替還沒掛會期的文章掛上會期（從 `meeting` 解析：立法院 `第11屆第5會期`，臨時會併入所屬會期；議會 `第4屆第8次定期會`／`第4屆第2次臨時會`），並更新每個會期的**資料涵蓋範圍**（掛在那個會期的文章最早與最晚的日期，不是官方起訖）。解析不出來的（例如「立法院朝野黨團協商」）不掛、不計入。新文章在匯入登記時就會掛上。
+2. 逐會期算每個人的指標，存進 `ProfileStat`（同一個 transaction 裡刪掉舊的、寫入新的）。母體是任期與會期涵蓋範圍重疊的所有人，去掉新北名冊上的議長、副議長（只主持、不質詢）；母體裡沒發言的人投入量是 0。只算已完成的文章。
+3. 印出每個會期的人數，以及**對不到任期的講者**與篇數——通常是名冊的寫法跟影音系統不同，要到 admin 補別名或合併人物，再跑一次。
+
+| 區塊 | 指標 | 公式 | n |
+|---|---|---|---|
+| 投入量 | 發言次數 | 講者包含他的文章數（聯合質詢每人各算一次） | 同值 |
+| 投入量 | 發言總時長 | Σ（時長 ÷ 該篇講者人數）÷ 60，取到小數一位 | 發言次數 |
+| 具體度 | 每篇落地數字數 | 摘要卡 `key_numbers` 總數 ÷ 基礎文章數 | 基礎文章數 |
+| 具體度 | 每篇帶期限的要求數 | `asks` 中期限非空的項數 ÷ 基礎文章數 | 基礎文章數 |
+| 具體度 | 有來源的數字占比 | 有 `sources` 的數字 ÷ 數字總數 × 100 | 數字總數 |
+
+具體度的基礎文章：單獨發言、而且有摘要卡（聯合質詢的卡片分不出是誰講的）。具體度 n < 5 時不給百分位；任何一項的同儕（母體中這一項樣本夠的人）少於 5 人時，誰都不給百分位。百分位 =（比他低的人數 ＋ 0.5 × 同值人數）÷ 同儕人數 × 100。
+
+排程：`run_scheduler` 每晚匯入之後接著跑一次，包在自己的 try 裡，失敗只記 log、不影響匯入。部署這一版之後先手動跑一次，把既有的文章掛上會期。
 
 ## API
 
 | 端點 | 說明 |
 |---|---|
 | `GET /api/health` | 文章數與最新日期 |
-| `GET /api/articles?date=&speaker=&q=&page=&page_size=` | 已完成的文章清單 |
+| `GET /api/articles?date=&speaker=&q=&source=&party=&session=&solo=&has_brief=&page=&page_size=` | 已完成的文章清單。`session`（會期 id）、`solo=1`（只要單獨發言）、`has_brief=1`（只要有摘要卡）是側寫的證據篩選：證據網址查出來的篇數等於指標的 n |
 | `GET /api/articles/{slug}` | 單篇，含摘要卡（`brief`：一句話、關鍵數字、要求與回應；GPU 端產不出來時為 `null`）、每段的條列與完整敘述、完整逐字稿 |
-| `GET /api/speakers` | 委員與篇數 |
+| `GET /api/speakers` | 委員與篇數；`person_id` 是同來源、同名任期所屬的人（查無任期為 `null`） |
+| `GET /api/people/{person_id}/profile?source=&session=` | 人物側寫：一個會期的投入量與具體度，每項附 n、百分位、同儕人數與證據網址（網站的相對路徑）。省略 `source` 用他最近一個有統計的會期的來源；省略 `session` 用他有發言的最近一個會期。沒有統計回 404 |
 
 清單裡每張卡片的 `teaser` 優先用摘要卡的一句話，沒有卡片才退回第一段的完整敘述。
 
@@ -173,13 +200,15 @@ WantedBy=multi-user.target
 
 ```
 articles/
-├─ models.py        實體：Article / Slide
+├─ models.py        實體：Article / Slide / Person / Membership / Session / ProfileStat
 ├─ ivod_source.py   adapter：立法院開放資料
 ├─ gpu_client.py    adapter：GPU 主機上的摘要 API
 ├─ ingest.py        use case：發現 → 處理 → 落地（相依都用注入的）
+├─ profiles.py      use case：會期解析、人物側寫指標的計算與快取
 ├─ api.py           presentation：django-ninja 端點
 └─ management/commands/
    ├─ ingest_ivod.py    composition root：從 settings 組出 adapter 再注入
+   ├─ compute_profiles.py
    └─ run_scheduler.py
 ```
 
