@@ -69,7 +69,11 @@ node ./dist/server/entry.mjs       # 等同 npm run preview / npm start
 `src/fixtures/sample.json` 內含 4 篇完整的假文章（含分段重點、截圖路徑、逐字稿）。
 啟用後：
 
-- 完全不會對後端發出任何請求，`/api/articles`、`/api/articles/{slug}`、`/api/speakers`、`/api/health` 全部在本地模擬（含日期／委員／關鍵字篩選與分頁）。
+- 完全不會對後端發出任何請求，`/api/articles`、`/api/articles/{slug}`、`/api/speakers`、`/api/people/{id}/profile`、`/api/health` 全部在本地模擬（含日期／委員／關鍵字／會期／單獨發言／有摘要卡篩選與分頁）。
+- 人物側寫：`people`（名冊）、`sessions`（會期）、`profiles`（每人每會期的指標）三段，文章多一個假資料才有的 `session_id`。看版面用這幾頁：
+  - `/speaker/範例一?source=ly`：預設會期（第11屆第5會期）照假文章算，投入量有百分位、具體度全是「樣本不足」；切到第11屆第4會期可以看到有百分位的具體度與「同儕不足」（這一期沒有對應的假文章，「看這 N 篇」是空清單）。
+  - `/speaker/範例五?source=ntpc`：新北的聯合質詢，時長排在次數前面、具體度沒有分母。
+  - `/speaker/範例三`（有 person_id、沒有側寫）與 `/speaker/範例四`（不在名冊）：側寫整段不顯示。
 - 頁面最上方會出現一條「示範資料模式」橫幅，避免把假資料當成真的。
 - 截圖檔案實際上不存在，圖片會自動換成同尺寸的佔位方塊（版面不會塌）。
 
@@ -83,7 +87,8 @@ node ./dist/server/entry.mjs       # 等同 npm run preview / npm start
 | --- | --- |
 | `/` | 最新報導。支援 `?date=`、`?speaker=`、`?q=`、`?page=`；第一頁無篩選時，最新一篇會以大版面呈現。 |
 | `/article/[slug]` | 單篇報導。逐段排版（截圖＋小標＋條列＋完整敘述），每段可點時間戳連回 IVOD 原片，最後是可折疊的完整逐字稿。 |
-| `/speaker/[name]` | 某位委員的報導列表（含分頁與其他委員快捷鍵）。 |
+| `/speaker/[name]` | 某位委員的報導列表（含分頁與其他委員快捷鍵）。有 `person_id` 且側寫 API 成功時，清單上方是人物側寫；側寫失敗或 404 就整段不顯示。支援 `?source=`、`?session=`（會期 id）、`?solo=1`（只看單獨發言）、`?brief=1`（只看有摘要卡的），有篩選時清單上方顯示條件與「清除」。 |
+| `/method` | 方法說明。`#profile` 寫人物側寫的原則、公式、會期與同儕、百分位、最小樣本、資料限制與還沒做的指標。改後端的計算時這一頁要跟著改。 |
 | 其他 | `src/pages/404.astro` |
 
 IVOD 的網址不吃時間參數，所以時間戳只顯示 `mm:ss` 並連到 `ivod_url`（從頭播放），
@@ -193,7 +198,8 @@ web/news/
 ├─ src/
 │  ├─ layouts/Base.astro     # <head>、頁首頁尾、圖片載入失敗的全域 fallback
 │  ├─ components/            # SiteHeader / SiteFooter / ArticleCard / Filters /
-│  │                         # Pagination / SlideBlock / Transcript / Figure / Notice
+│  │                         # Pagination / SlideBlock / Transcript / Figure / Notice /
+│  │                         # ProfilePanel / ProfileIndicator（人物側寫）
 │  ├─ lib/
 │  │  ├─ api.ts              # 所有 API 呼叫、逾時、錯誤分類、假資料模式
 │  │  ├─ types.ts            # 對應後端契約的型別
@@ -203,6 +209,7 @@ web/news/
 │  │  ├─ index.astro
 │  │  ├─ article/[slug].astro
 │  │  ├─ speaker/[name].astro
+│  │  ├─ method.astro
 │  │  └─ 404.astro
 │  └─ styles/global.css      # 設計 token（深色優先）、中文排版、動態
 └─ public/favicon.svg
