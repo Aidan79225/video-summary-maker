@@ -136,7 +136,7 @@ class IndicatorOut(Schema):
     value: int | float | None
     n: int
     n_unit: str
-    # 樣本不足或同儕不足時是 null
+    # 樣本不足或同儕不足時是 null；沒有先捨入，頁面自己四捨五入到整數
     percentile: float | None
     peers: int
     sample_ok: bool
@@ -379,7 +379,9 @@ def _indicator_out(stat: ProfileStat | None, indicator: profiles.Indicator, name
         "value": value,
         "n": n,
         "n_unit": indicator.n_unit,
-        "percentile": round(stat.percentile, 1) if stat and stat.percentile is not None else None,
+        # 原樣給，不在這裡先取到小數一位：頁面還要再四捨五入到整數，兩次捨入會讓
+        # 64.46 變成 64.5 再變成 65，跟公式算出來的 64 對不上
+        "percentile": stat.percentile if stat else None,
         "peers": stat.peers if stat else 0,
         "sample_ok": indicator.sample_ok(n),
         "evidence_url": _evidence_url(name, session, indicator),

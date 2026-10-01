@@ -12,7 +12,7 @@ from urllib.parse import parse_qsl, unquote, urlsplit
 from django.test import TestCase, override_settings
 
 from articles.ingest import save_result
-from articles.models import Article, ArticleStatus, Membership, Person, Session
+from articles.models import Article, ArticleStatus, Membership, Person, ProfileStat, Session
 from articles.profiles import assign_sessions, compute_profiles
 
 MEDIA = tempfile.mkdtemp(prefix="news_api_media_")
@@ -467,6 +467,15 @@ class ProfileApiTests(TestCase):
                          (50.0, 12, "個數字", "%"))
         # 具體度只有他夠樣本（王立任只有 2 篇）：同儕不足，不比較
         self.assertEqual((share["sample_ok"], share["percentile"], share["peers"]), (True, None, 1))
+
+    def test_percentiles_are_passed_through_unrounded(self):
+        """頁面自己四捨五入到整數。API 先取到小數一位就是兩次捨入：64.46 → 64.5 → 65。"""
+        stat = ProfileStat.objects.get(person=self.m["王立"].person, session=self.s5,
+                                       indicator="speeches")
+        got = self._indicators(self._profile("王立").json())["speeches"]
+        # 第 5 會期的發言次數 0、0、1、2、3、8：比他低的 5 人、同值 1 人
+        self.assertEqual(stat.percentile, 5.5 * 100 / 6)
+        self.assertEqual(got["percentile"], stat.percentile)
 
     def test_evidence_urls_are_relative_site_paths_with_the_name_encoded(self):
         got = self._indicators(self._profile("王立").json())
