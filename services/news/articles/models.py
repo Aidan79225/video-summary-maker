@@ -81,6 +81,32 @@ class Membership(models.Model):
                 and (self.end_date is None or day <= self.end_date))
 
 
+class Session(models.Model):
+    """一個會期：人物側寫的比較單位（同一個議會、同一個會期的人互相比）。
+
+    會期從文章的會議名稱解析出來（見 profiles.parse_session），不是另外維護的表。
+    start_date／end_date 是**資料涵蓋範圍**——掛在這個會期的文章（任何狀態）最早與
+    最晚的日期，不是官方起訖：同儕比較時大家的涵蓋範圍一樣才公平，市議會的官方起訖
+    也沒有結構化來源。每晚重算時更新。
+    """
+
+    source = models.CharField(max_length=16, choices=ArticleSource.choices, db_index=True)
+    # 屆次的數字（"11"），給頁面分組用
+    term = models.CharField(max_length=16)
+    # 立法院「第11屆第5會期」（臨時會併入它所屬的會期）；議會「第4屆第8次定期會」
+    name = models.CharField(max_length=64)
+    start_date = models.DateField(null=True, blank=True)
+    end_date = models.DateField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["source", "-start_date", "-id"]
+        constraints = [models.UniqueConstraint(fields=["source", "name"],
+                                               name="unique_session_per_source")]
+
+    def __str__(self) -> str:
+        return f"{self.get_source_display()} {self.name}"
+
+
 class Article(models.Model):
     """一段質詢發言的摘要。
 
@@ -104,6 +130,10 @@ class Article(models.Model):
     # 聯合質詢與新北的黨團時段會串起十幾位講者（實測最長 88 字），留足空間
     speaker = models.CharField(max_length=300, db_index=True)
     meeting = models.CharField(max_length=300, blank=True)
+    # 從 meeting 解析出的會期。解析不出來（例如「立法院朝野黨團協商」）就留空，
+    # 那篇不計入任何側寫指標。會期被刪掉時文章留著，下次重算再掛回去。
+    session = models.ForeignKey(Session, null=True, blank=True,
+                                on_delete=models.SET_NULL, related_name="articles")
     date = models.DateField(db_index=True)
     duration_seconds = models.PositiveIntegerField(default=0)
     ivod_url = models.URLField(max_length=500)
@@ -164,6 +194,35 @@ class Article(models.Model):
         多打一次資料庫——一頁 20 張就是 20 次多餘查詢打在 Pi 的 SD 卡上。
         """
         return next((slide for slide in self.slides.all() if slide.image), None)
+
+
+class ProfileStat(models.Model):
+    """人物側寫的快取：一個人在一個會期的一項指標。每晚整批重算（profiles.compute_profiles）。
+
+    以 Person 為鍵而不是 Membership：同一會期內換黨會切成兩段任期，但那是同一個人。
+    sample_ok 不存：投入量永遠成立、具體度就是 n >= MIN_SAMPLE，存了只會跟公式不同步。
+    """
+
+    person = models.ForeignKey(Person, related_name="profile_stats", on_delete=models.CASCADE)
+    session = models.ForeignKey(Session, related_name="profile_stats", on_delete=models.CASCADE)
+    # profiles.INDICATORS 的 key（speeches、speaking_minutes、numbers_per_speech…）
+    indicator = models.CharField(max_length=32)
+    # 分母是 0 時是 null（例如一篇基礎文章都沒有的具體度）
+    value = models.FloatField(null=True, blank=True)
+    n = models.PositiveIntegerField(default=0)
+    # 樣本不足或同儕不足時是 null
+    percentile = models.FloatField(null=True, blank=True)
+    # 同儕人數：頁面寫「在 N 位同儕中」
+    peers = models.PositiveIntegerField(default=0)
+    computed_at = models.DateTimeField()
+
+    class Meta:
+        ordering = ["session", "person", "indicator"]
+        constraints = [models.UniqueConstraint(fields=["person", "session", "indicator"],
+                                               name="unique_profile_stat")]
+
+    def __str__(self) -> str:
+        return f"{self.person} {self.session} {self.indicator}={self.value}"
 
 
 class Slide(models.Model):
