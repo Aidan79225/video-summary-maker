@@ -310,7 +310,9 @@ function fixtureList(query: ArticleQuery): ArticleList {
     if (query.source && a.source !== query.source) return false;
     // 下面三個跟後端的篩選同一套定義：側寫的「看這 N 篇」靠它們把 N 篇列出來
     if (query.session && a.session_id !== query.session) return false;
-    if (query.solo && speakerNames(a.speaker).length !== 1) return false;
+    // 單獨發言照 spec 的字面定義：講者欄位沒有「、」。不數 speakerNames 的人數——
+    // 「甲、」這種殘缺的欄位後端算聯合質詢，這裡也要算，假資料的 count 才會等於 n
+    if (query.solo && a.speaker.includes('、')) return false;
     if (query.has_brief && a.brief == null) return false;
     if (query.party && !(a.party ?? '').split('、').includes(query.party)) return false;
     if (q) {
@@ -330,6 +332,12 @@ function fixtureList(query: ArticleQuery): ArticleList {
    ------------------------------------------------------------------ */
 
 const num = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null);
+
+/**
+ * 同儕少於這個人數就不給百分位（spec 的 MIN_PEERS）。API 沒有回這個值
+ * （只回 min_sample），所以寫在這裡；後端改門檻時這裡要跟著改。
+ */
+const MIN_PEERS = 5;
 
 function normalizeSession(raw: unknown): ProfileSession | null {
   if (!raw || typeof raw !== 'object') return null;
@@ -354,18 +362,21 @@ function normalizeIndicator(raw: unknown): ProfileIndicator | null {
   const label = str(o.label).trim();
   if (!key || !label) return null;
   const sampleOk = o.sample_ok === true;
+  const value = num(o.value);
+  const peers = Math.max(0, num(o.peers) ?? 0);
   const percentile = num(o.percentile);
+  // 樣本不足、同儕不足、沒有值，都不給百分位。後端本來就回 null，這裡再擋一次：
+  // 「最小樣本」與「同儕至少幾人」是側寫的底線，不該只靠一邊守。
+  const comparable = sampleOk && value !== null && peers >= MIN_PEERS && percentile !== null;
   return {
     key,
     label,
     unit: str(o.unit),
-    value: num(o.value),
+    value,
     n: Math.max(0, num(o.n) ?? 0),
     n_unit: str(o.n_unit) || '篇',
-    // 樣本不足就不給百分位。後端本來就回 null，這裡再擋一次：
-    // 「最小樣本」是側寫的底線，不該只靠一邊守。
-    percentile: sampleOk && percentile !== null ? Math.min(100, Math.max(0, percentile)) : null,
-    peers: Math.max(0, num(o.peers) ?? 0),
+    percentile: comparable ? Math.min(100, Math.max(0, percentile)) : null,
+    peers,
     sample_ok: sampleOk,
     evidence_url: str(o.evidence_url),
   };
@@ -415,9 +426,9 @@ export function normalizeProfile(raw: unknown): Profile | null {
 /**
  * 假資料的側寫：照 API 的規則挑來源與會期、組 evidence_url。
  *
- * 規則跟後端相同——沒指定來源就用最近一個有統計的會期的來源；沒指定會期就用
- * 他有發言的最近一個會期，都沒有就用最近一個。這樣不連 Pi 也能看到切換會期、
- * 樣本不足、同儕不足這幾種版面。
+ * 規則跟後端相同——指定了會期就用那個會期的來源；沒指定來源就用最近一個有統計的
+ * 會期的來源；沒指定會期就用他有發言的最近一個會期，都沒有就用最近一個。這樣不連
+ * Pi 也能看到切換會期、樣本不足、同儕不足這幾種版面。
  */
 function fixtureProfile(personId: number, query: ProfileQuery): Result<unknown> {
   const notFound: Result<unknown> = {
@@ -425,21 +436,29 @@ function fixtureProfile(personId: number, query: ProfileQuery): Result<unknown> 
     error: { kind: 'notfound', status: 404, message: '假資料裡沒有這個人的側寫' },
   };
   const sessionOf = (id: number) => (fx.sessions ?? []).find((s) => s.id === id) ?? null;
+  // 新舊跟後端的 _recency 一樣：先看資料涵蓋到哪一天，同一天再看起始日、id
+  // （日期是 YYYY-MM-DD，直接比字串就是比先後；沒有日期當成最舊）
+  const cmp = (x: string | number, y: string | number) => (x < y ? -1 : x > y ? 1 : 0);
+  const newerFirst = (a: ProfileSession, b: ProfileSession) =>
+    cmp(b.end_date ?? '', a.end_date ?? '') ||
+    cmp(b.start_date ?? '', a.start_date ?? '') ||
+    cmp(b.id, a.id);
   const mine = (fx.profiles ?? [])
     .filter((p) => p.person_id === personId)
     .flatMap((p) => {
       const s = sessionOf(p.session_id);
       return s ? [{ p, s }] : [];
     })
-    .sort((a, b) => (b.s.end_date ?? '').localeCompare(a.s.end_date ?? ''));
+    .sort((a, b) => newerFirst(a.s, b.s));
 
-  const source = query.source || mine[0]?.p.source;
+  // 指定了會期：來源跟著會期走；同時指定了來源而對不上就是 404（後端同樣處理）
+  let picked = query.session ? mine.find((x) => x.s.id === query.session) : undefined;
+  if (query.session && (!picked || (query.source && picked.p.source !== query.source))) return notFound;
+  const source = picked?.p.source || query.source || mine[0]?.p.source;
   const inSource = mine.filter((x) => x.p.source === source);
   const spoke = (x: (typeof inSource)[number]) =>
     x.p.blocks.some((b) => b.indicators.some((i) => i.key === 'speeches' && (i.value ?? 0) > 0));
-  const picked = query.session
-    ? inSource.find((x) => x.s.id === query.session)
-    : (inSource.find(spoke) ?? inSource[0]);
+  picked ??= inSource.find(spoke) ?? inSource[0];
   if (!picked || !source) return notFound;
 
   // 證據連結用這個人在該來源的寫法，跟後端一樣

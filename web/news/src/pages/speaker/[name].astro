@@ -48,11 +48,16 @@ const speakersRes = await getSpeakers(source);
 const allSpeakers = speakersRes.ok ? speakersRes.data.items : [];
 const me = allSpeakers.find((s) => s.name === name);
 
-// 側寫失敗（含 404：這個人在這個來源還沒有統計）就整段不顯示，頁面其他部分照常
+// 側寫失敗（含 404：這個人在這個來源還沒有統計）就整段不顯示，頁面其他部分照常。
+// 網址指定了會期卻沒指定來源時不替它補來源：會期本身就決定了來源，交給後端
+// 照會期挑；補上 me.source 反而可能跟會期對不上而變成 404。
 const [listRes, profileRes] = await Promise.all([
   listPromise,
   me?.person_id
-    ? getProfile(me.person_id, { source: source || me.source, session: session || undefined })
+    ? getProfile(me.person_id, {
+        source: source || (session ? undefined : me.source),
+        session: session || undefined,
+      })
     : Promise.resolve(null),
 ]);
 const profile = profileRes?.ok ? profileRes.data : null;
