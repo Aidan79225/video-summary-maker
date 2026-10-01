@@ -8,11 +8,14 @@ interface Props {
   base: string;
   /** 要保留的其他 query 參數 */
   params?: Record<string, string | undefined>;
+  /** 翻頁後跳到的錨點（不含 #）；清單上方有很高的區塊時用 */
+  hash?: string;
 }
 
-const { page, pages, base, params = {} } = Astro.props;
+const { page, pages, base, params = {}, hash } = Astro.props;
 
-const href = (p: number) => `${base}${buildQuery(params, { page: p <= 1 ? undefined : p })}`;
+const href = (p: number) =>
+  `${base}${buildQuery(params, { page: p <= 1 ? undefined : p })}${hash ? `#${hash}` : ''}`;
 
 const windowSize = 5;
 let start = Math.max(1, page - Math.floor(windowSize / 2));

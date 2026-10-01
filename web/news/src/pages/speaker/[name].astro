@@ -84,7 +84,8 @@ const listParams = {
   brief: brief ? '1' : undefined,
 };
 const retryHref = `${url.pathname}${url.search}`;
-const clearHref = `${basePath}${buildQuery({ source: source || undefined }, {})}`;
+// 篩選相關的連結都帶 #articles：側寫區塊很高，不跳過去的話點了看起來像沒反應
+const clearHref = `${basePath}${buildQuery({ source: source || undefined }, {})}#articles`;
 
 // 會期名稱從側寫的會期清單查；查不到（側寫沒載入）就只寫編號，不猜
 const sessionName =
@@ -142,16 +143,19 @@ const chips = [
       )
     }
 
+    <div id="articles" class="scroll-mt-20" aria-hidden="true"></div>
+
     {
       hasFilter && (
         <div class="mb-6 flex flex-wrap items-center gap-2 rounded-[var(--radius-card)] border border-line bg-surface/70 px-4 py-3">
           <span class="text-[0.72rem] text-muted">目前篩選</span>
           {chips.map((c) => (
             <a
-              href={`${basePath}${buildQuery(listParams, { [c.key]: undefined })}`}
+              href={`${basePath}${buildQuery(listParams, { [c.key]: undefined })}#articles`}
               class="group inline-flex items-center gap-1.5 rounded-full border border-line bg-bg-soft px-2.5 py-1 text-[0.72rem] text-ink-2 transition-colors hover:border-danger hover:text-danger"
               title="移除這個條件"
             >
+              <span class="sr-only">移除條件：</span>
               {c.label}
               <span aria-hidden="true" class="text-muted group-hover:text-danger">
                 ×
@@ -166,7 +170,7 @@ const chips = [
             清除
           </a>
           {solo && brief && (
-            <p class="w-full text-[0.72rem] leading-relaxed text-muted/90">
+            <p class="w-full text-[0.72rem] leading-relaxed text-muted">
               具體度只用這些報導計算：聯合質詢的摘要卡分不出是誰講的，沒有摘要卡的報導沒有可數的東西。
             </p>
           )}
@@ -203,7 +207,7 @@ const chips = [
       )
     }
 
-    {list && <Pagination page={list.page} pages={list.pages} base={basePath} params={listParams} />}
+    {list && <Pagination page={list.page} pages={list.pages} base={basePath} params={listParams} hash="articles" />}
 
     {
       others.length > 0 && (

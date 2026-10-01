@@ -23,7 +23,9 @@ const hasValue = ind.value !== null;
 const pct = ind.percentile;
 // 頁面四捨五入到整數；長條的位置用原值，兩個同儕在 63.5 與 64.4 時記號不會疊在一起
 const pctLabel = pct !== null ? `第 ${Math.round(pct)} 百分位，在 ${ind.peers} 位同儕中` : '';
-const evidence = ind.n > 0 ? safeInternalPath(ind.evidence_url) : null;
+const safeEvidence = ind.n > 0 ? safeInternalPath(ind.evidence_url) : null;
+// 跳到清單：側寫區塊在清單上面，不跳的話點了只會回到頁首
+const evidence = safeEvidence && !safeEvidence.includes('#') ? `${safeEvidence}#articles` : safeEvidence;
 // 證據連結列出的是文章；「有來源的數字占比」的 n 是數字個數，不能寫成「看這 23 篇」
 const evidenceLabel = ind.n_unit === '篇' ? `看這 ${ind.n} 篇` : '看這些數字出自哪幾篇';
 // 百分號緊貼數字，其他單位留一點空隙
@@ -76,7 +78,7 @@ const tightUnit = ind.unit === '%';
               />
             </div>
             {/* 刻度字以中心對齊各自的位置，「50」才會正好落在中位刻度底下 */}
-            <div class="tabular relative mt-0.5 h-3 text-[0.62rem] leading-none text-muted/70">
+            <div class="tabular relative mt-0.5 h-3 text-[0.62rem] leading-none text-muted">
               <span class="absolute left-0 -translate-x-1/2">0</span>
               <span class="absolute left-1/2 -translate-x-1/2">50</span>
               <span class="absolute left-full -translate-x-1/2">100</span>
@@ -114,7 +116,7 @@ const tightUnit = ind.unit === '%';
           <span aria-hidden="true">→</span>
         </a>
       ) : (
-        <span class="text-muted/80">{ind.n > 0 ? '' : `這個會期沒有可計算的${ind.n_unit === '篇' ? '報導' : '數字'}`}</span>
+        <span class="text-muted">{ind.n > 0 ? '' : `這個會期沒有可計算的${ind.n_unit === '篇' ? '報導' : '數字'}`}</span>
       )
     }
   </p>
