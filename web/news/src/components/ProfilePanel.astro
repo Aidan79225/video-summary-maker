@@ -1,0 +1,120 @@
+---
+/**
+ * 發言者頁的人物側寫：一個會期裡，投入量與具體度各自的幾個指標。
+ *
+ * 規矩（issue #24 的原則）：不加總、不排名、只跟同一個議會同一個會期的人比。
+ * 所以這裡沒有總分、沒有名次，每個指標各自一格；每格都能點回算它用的那幾篇。
+ */
+import type { Profile } from '../lib/types';
+import { formatDate, formatDateTime } from '../lib/format';
+import ProfileIndicator from './ProfileIndicator.astro';
+
+interface Props {
+  profile: Profile;
+  /** 這位發言者的頁面路徑（不含 query），切換會期的連結接在它後面 */
+  basePath: string;
+}
+
+const { profile, basePath } = Astro.props;
+const { session } = profile;
+
+// 區塊的白話說明。API 只給標題；新的區塊沒有說明時就只顯示標題
+const BLOCK_NOTE: Record<string, string> = {
+  volume: '這個會期發言了幾次、講了多久。聯合質詢每人各算一次，時長由講者平分。',
+  // 「落地」是逐字稿裡查得到，「有來源」是附了條文原文——兩件事，說明裡不能混成「查得到出處」
+  specificity:
+    '只看他單獨發言、而且有摘要卡的報導：講了多少在逐字稿裡查得到的數字、提了幾項帶期限的要求，以及數字有沒有附來源。',
+};
+
+const coverage =
+  session.start_date && session.end_date
+    ? `${formatDate(session.start_date)}～${formatDate(session.end_date)}`
+    : '';
+const computed = formatDateTime(profile.computed_at);
+const sessionHref = (id: number) => `${basePath}?source=${profile.source}&session=${id}#profile`;
+---
+
+<section
+  id="profile"
+  class="scroll-mt-24 rounded-[var(--radius-card)] border border-line bg-surface p-5 sm:p-7"
+  aria-labelledby="profile-title"
+>
+  <div class="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
+    <h2 id="profile-title" class="headline text-xl font-semibold sm:text-[1.35rem]">人物側寫</h2>
+    <p class="text-[0.75rem] text-muted">{session.name}</p>
+  </div>
+
+  <p class="mt-2 text-[0.82rem] leading-relaxed text-muted">
+    指標由公開公式從既有資料計算，不加總、不排名。
+    <a
+      href="/method#profile"
+      class="whitespace-nowrap text-accent underline decoration-accent/40 underline-offset-4 transition-colors hover:decoration-accent"
+    >
+      公式與資料限制
+    </a>
+  </p>
+
+  {
+    profile.sessions.length > 1 && (
+      <nav class="mt-4" aria-label="切換會期">
+        <ul class="flex flex-wrap gap-2">
+          {profile.sessions.map((s) =>
+            s.id === session.id ? (
+              <li>
+                <span
+                  class="inline-flex items-center rounded-full border border-accent/50 bg-accent-soft px-3 py-1 text-[0.78rem] font-medium text-accent-ink"
+                  aria-current="page"
+                >
+                  {s.name}
+                </span>
+              </li>
+            ) : (
+              <li>
+                <a
+                  href={sessionHref(s.id)}
+                  class="inline-flex items-center rounded-full border border-line px-3 py-1 text-[0.78rem] text-ink-2 transition-colors hover:border-accent hover:text-accent"
+                >
+                  {s.name}
+                </a>
+              </li>
+            ),
+          )}
+        </ul>
+      </nav>
+    )
+  }
+
+  {
+    (coverage || computed) && (
+      <p class="mt-3 flex flex-wrap gap-x-3 gap-y-0.5 text-[0.72rem] text-muted/90">
+        {coverage && <span class="tabular">資料涵蓋 {coverage}</span>}
+        {coverage && computed && (
+          <span aria-hidden="true" class="hidden text-line sm:inline">
+            ·
+          </span>
+        )}
+        {computed && <span class="tabular">計算於 {computed}</span>}
+      </p>
+    )
+  }
+
+  <div class="mt-6 grid gap-7">
+    {
+      profile.blocks.map((block) => (
+        <section aria-labelledby={`profile-${block.key}`}>
+          <h3 id={`profile-${block.key}`} class="text-[0.72rem] tracking-[0.2em] text-muted">
+            {block.title}
+          </h3>
+          {BLOCK_NOTE[block.key] && (
+            <p class="mt-1 text-[0.78rem] leading-relaxed text-muted/90">{BLOCK_NOTE[block.key]}</p>
+          )}
+          <ul class="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            {block.indicators.map((ind) => (
+              <ProfileIndicator indicator={ind} minSample={profile.min_sample} />
+            ))}
+          </ul>
+        </section>
+      ))
+    }
+  </div>
+</section>

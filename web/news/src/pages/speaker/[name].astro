@@ -3,8 +3,9 @@ import Base from '../../layouts/Base.astro';
 import ArticleCardView from '../../components/ArticleCard.astro';
 import Notice from '../../components/Notice.astro';
 import Pagination from '../../components/Pagination.astro';
-import { getArticles, getSpeakers, statusFor } from '../../lib/api';
-import { formatDateWithWeekday } from '../../lib/format';
+import ProfilePanel from '../../components/ProfilePanel.astro';
+import { getArticles, getProfile, getSpeakers, statusFor } from '../../lib/api';
+import { buildQuery, formatDateWithWeekday } from '../../lib/format';
 import { isSource, memberKicker, memberTitle, sourceLabel } from '../../lib/sources';
 import PartyBadge from '../../components/PartyBadge.astro';
 
@@ -23,10 +24,43 @@ const page = Math.max(1, Number(url.searchParams.get('page')) || 1);
 const rawSource = url.searchParams.get('source')?.trim() ?? '';
 const source = isSource(rawSource) ? rawSource : '';
 
-const [listRes, speakersRes] = await Promise.all([
-  getArticles({ speaker: name, source, page, page_size: PAGE_SIZE }),
-  getSpeakers(source),
+// 側寫的「看這 N 篇」帶這三個參數過來。會期只認正整數、開關只認 1／true：
+// 亂打的當成沒篩，不要把後端的 422 傳染給整頁（跟 ?source= 同一個做法）。
+const rawSession = url.searchParams.get('session')?.trim() ?? '';
+const session = /^\d{1,9}$/.test(rawSession) && Number(rawSession) > 0 ? Number(rawSession) : 0;
+const flag = (key: string) =>
+  ['1', 'true'].includes(url.searchParams.get(key)?.trim().toLowerCase() ?? '');
+const solo = flag('solo');
+const brief = flag('brief');
+const hasFilter = Boolean(session || solo || brief);
+
+// 側寫要等名單回來才知道 person_id；文章清單先送出去，兩邊不必排隊
+const listPromise = getArticles({
+  speaker: name,
+  source,
+  session: session || undefined,
+  solo,
+  has_brief: brief,
+  page,
+  page_size: PAGE_SIZE,
+});
+const speakersRes = await getSpeakers(source);
+const allSpeakers = speakersRes.ok ? speakersRes.data.items : [];
+const me = allSpeakers.find((s) => s.name === name);
+
+// 側寫失敗（含 404：這個人在這個來源還沒有統計）就整段不顯示，頁面其他部分照常。
+// 網址指定了會期卻沒指定來源時不替它補來源：會期本身就決定了來源，交給後端
+// 照會期挑；補上 me.source 反而可能跟會期對不上而變成 404。
+const [listRes, profileRes] = await Promise.all([
+  listPromise,
+  me?.person_id
+    ? getProfile(me.person_id, {
+        source: source || (session ? undefined : me.source),
+        session: session || undefined,
+      })
+    : Promise.resolve(null),
 ]);
+const profile = profileRes?.ok ? profileRes.data : null;
 
 if (!listRes.ok) {
   Astro.response.status = statusFor(listRes.error.kind);
@@ -34,16 +68,32 @@ if (!listRes.ok) {
 
 const list = listRes.ok ? listRes.data : null;
 const items = list?.items ?? [];
-const allSpeakers = speakersRes.ok ? speakersRes.data.items : [];
 const others = allSpeakers.filter((s) => s.name !== name);
-const me = allSpeakers.find((s) => s.name === name);
 // 沒帶 ?source= 時，用這位發言者實際所屬的議會決定用語
 const effectiveSource = source || me?.source || items[0]?.source || 'ly';
 const title = memberTitle(effectiveSource);
 const latest = me?.latest_date ?? items[0]?.date ?? '';
 const total = me?.count ?? list?.count ?? 0;
-const base = `/speaker/${encodeURIComponent(name)}${source ? `?source=${source}` : ''}`;
+const basePath = `/speaker/${encodeURIComponent(name)}`;
+// 分頁要帶著目前的篩選。以前把 ?source= 直接寫進 base，
+// Pagination 再接一個「?page=2」，翻頁網址就變成「?source=ly?page=2」。
+const listParams = {
+  source: source || undefined,
+  session: session ? String(session) : undefined,
+  solo: solo ? '1' : undefined,
+  brief: brief ? '1' : undefined,
+};
 const retryHref = `${url.pathname}${url.search}`;
+const clearHref = `${basePath}${buildQuery({ source: source || undefined }, {})}`;
+
+// 會期名稱從側寫的會期清單查；查不到（側寫沒載入）就只寫編號，不猜
+const sessionName =
+  profile?.sessions.find((s) => s.id === session)?.name ?? (session ? `會期 #${session}` : '');
+const chips = [
+  session ? { key: 'session', label: `會期：${sessionName}` } : null,
+  solo ? { key: 'solo', label: '只看單獨發言' } : null,
+  brief ? { key: 'brief', label: '只看有摘要卡的' } : null,
+].filter(Boolean) as { key: string; label: string }[];
 ---
 
 <Base
@@ -84,16 +134,63 @@ const retryHref = `${url.pathname}${url.search}`;
   </section>
 
   <div class="mx-auto max-w-6xl px-4 py-8 sm:px-6 sm:py-10">
+    {
+      profile && (
+        <div class="mb-10">
+          <ProfilePanel profile={profile} basePath={basePath} />
+        </div>
+      )
+    }
+
+    {
+      hasFilter && (
+        <div class="mb-6 flex flex-wrap items-center gap-2 rounded-[var(--radius-card)] border border-line bg-surface/70 px-4 py-3">
+          <span class="text-[0.72rem] text-muted">目前篩選</span>
+          {chips.map((c) => (
+            <a
+              href={`${basePath}${buildQuery(listParams, { [c.key]: undefined })}`}
+              class="group inline-flex items-center gap-1.5 rounded-full border border-line bg-bg-soft px-2.5 py-1 text-[0.72rem] text-ink-2 transition-colors hover:border-danger hover:text-danger"
+              title="移除這個條件"
+            >
+              {c.label}
+              <span aria-hidden="true" class="text-muted group-hover:text-danger">
+                ×
+              </span>
+            </a>
+          ))}
+          {list && <span class="tabular text-[0.72rem] text-muted">共 {list.count} 篇</span>}
+          <a
+            href={clearHref}
+            class="ml-auto rounded-full border border-line px-3 py-1 text-[0.75rem] text-muted transition-colors hover:border-danger hover:text-danger"
+          >
+            清除
+          </a>
+          {solo && brief && (
+            <p class="w-full text-[0.72rem] leading-relaxed text-muted/90">
+              具體度只用這些報導計算：聯合質詢的摘要卡分不出是誰講的，沒有摘要卡的報導沒有可數的東西。
+            </p>
+          )}
+        </div>
+      )
+    }
+
     {!listRes.ok && <Notice error={listRes.error} retryHref={retryHref} />}
 
     {
-      listRes.ok && items.length === 0 && (
-        <Notice
-          title={`目前沒有 ${name} 的報導`}
-          body={`可能是姓名有誤，或這位${title}的質詢還沒有被整理。可以回首頁看看其他人。`}
-          retryHref="/"
-        />
-      )
+      listRes.ok &&
+        items.length === 0 &&
+        (hasFilter ? (
+          <Notice
+            title="這個篩選條件下沒有報導"
+            body="這個會期可能還沒有符合條件的報導，或報導還在處理中。按上面的「清除」可以看這位發言者的全部報導。"
+          />
+        ) : (
+          <Notice
+            title={`目前沒有 ${name} 的報導`}
+            body={`可能是姓名有誤，或這位${title}的質詢還沒有被整理。可以回首頁看看其他人。`}
+            retryHref="/"
+          />
+        ))
     }
 
     {
@@ -106,7 +203,7 @@ const retryHref = `${url.pathname}${url.search}`;
       )
     }
 
-    {list && <Pagination page={list.page} pages={list.pages} base={base} />}
+    {list && <Pagination page={list.page} pages={list.pages} base={basePath} params={listParams} />}
 
     {
       others.length > 0 && (
