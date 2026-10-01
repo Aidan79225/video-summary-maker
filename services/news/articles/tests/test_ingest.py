@@ -654,3 +654,43 @@ class DiscoverWithTermDatesTests(TestCase):
                            start_date=date(2024, 2, 1), end_date=date(2026, 2, 1))])
         discover(date(2026, 8, 27), FakeSource())
         self.assertEqual(Article.objects.get(ivod_id="900001").party, "")
+
+
+@override_settings(MEDIA_ROOT=MEDIA)
+class SessionOnDiscoverTests(TestCase):
+    """登記時就掛會期，不必等每晚的側寫重算。"""
+
+    def test_a_new_article_gets_its_session_when_registered(self):
+        discover(date(2026, 8, 27), FakeSource([_clip(), _clip_tccc()]))
+        ly = Article.objects.get(ivod_id="900001")
+        self.assertEqual((ly.session.source, ly.session.name, ly.session.term),
+                         ("ly", "第11屆第5會期", "11"))
+        self.assertEqual((ly.session.start_date, ly.session.end_date),
+                         (date(2026, 8, 27), date(2026, 8, 27)))
+        council = Article.objects.get(ivod_id="tccc-14833")
+        self.assertEqual((council.session.source, council.session.name), ("tccc", "第4屆第8次定期會"))
+
+    def test_the_span_widens_as_articles_arrive(self):
+        from dataclasses import replace
+        discover(date(2026, 8, 27), FakeSource([_clip("900001"),
+                                                replace(_clip("900002"), date="2026-08-20")]))
+        session = Article.objects.get(ivod_id="900002").session
+        self.assertEqual((session.start_date, session.end_date),
+                         (date(2026, 8, 20), date(2026, 8, 27)))
+        self.assertEqual(Article.objects.get(ivod_id="900001").session, session)
+
+    def test_a_meeting_without_a_session_leaves_it_empty(self):
+        from dataclasses import replace
+
+        from articles.models import Session
+        discover(date(2026, 8, 27), FakeSource([replace(_clip(), meeting="立法院朝野黨團協商")]))
+        self.assertIsNone(Article.objects.get(ivod_id="900001").session)
+        self.assertFalse(Session.objects.exists())
+
+    def test_the_party_is_still_linked_in_the_same_save(self):
+        from articles.members_sync import MemberRecord, sync
+        sync([MemberRecord(source="ly", external_id="1", name="範例一", party="民主進步黨")])
+        discover(date(2026, 8, 27), FakeSource())
+        article = Article.objects.get(ivod_id="900001")
+        self.assertEqual((article.party, article.membership.name, article.session.name),
+                         ("民主進步黨", "範例一", "第11屆第5會期"))
