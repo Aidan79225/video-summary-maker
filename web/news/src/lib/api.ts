@@ -11,7 +11,13 @@ import type {
   Speaker,
   Party,
   PartyList,
+  Profile,
+  ProfileBlock,
+  ProfileIndicator,
+  ProfileQuery,
+  ProfileSession,
 } from './types';
+import { toSource } from './sources';
 import fixture from '../fixtures/sample.json';
 
 /* ------------------------------------------------------------------
@@ -77,6 +83,19 @@ export function mediaUrl(path: string | null | undefined): string | null {
 export function safeExternalUrl(url: string | null | undefined): string | null {
   if (!url) return null;
   return /^https?:\/\//i.test(url.trim()) ? url.trim() : null;
+}
+
+/**
+ * 站內連結只接受「/」開頭的相對路徑。
+ *
+ * 側寫的 evidence_url 由後端組好、直接變成可點的連結；跟 safeExternalUrl
+ * 同一個理由，上游給了 javascript: 或 //別的網域（協定相對網址會跳出本站）
+ * 都不能原樣放進 href。反斜線也擋：有些瀏覽器把 /\ 當成 //。
+ */
+export function safeInternalPath(path: string | null | undefined): string | null {
+  if (!path) return null;
+  const p = path.trim();
+  return p.startsWith('/') && !p.startsWith('//') && !p.includes('\\') ? p : null;
 }
 
 /* ------------------------------------------------------------------
@@ -176,19 +195,62 @@ async function getJson<T>(path: string): Promise<Result<T>> {
    假資料模式（USE_FIXTURE=1）
    ------------------------------------------------------------------ */
 
-const fx = fixture as unknown as { articles: ArticleDetail[] };
+/**
+ * 假資料的文章多一個 session_id：真的 API 不把會期放在文章卡片上（篩選在
+ * 後端做），假資料沒有後端，只好把「這篇掛在哪個會期」直接寫在文章上。
+ */
+type FixtureArticle = ArticleDetail & { session_id?: number | null };
 
-function fixtureArticles(): ArticleDetail[] {
+/** 名冊：同來源、同名對到哪個人。對不到的名字就沒有 person_id，跟真的後端一樣 */
+type FixturePerson = { id: number; name: string; source: string };
+
+/**
+ * 一個人在一個會期的側寫。evidence_url 不寫在檔案裡，由 fixtureProfile 照
+ * 後端的規則組出來——手寫百分號編碼的中文名字太容易打錯，而且一錯就是死連結。
+ */
+type FixtureProfile = {
+  person_id: number;
+  source: string;
+  session_id: number;
+  computed_at: string;
+  blocks: {
+    key: string;
+    title: string;
+    indicators: Omit<ProfileIndicator, 'evidence_url'>[];
+  }[];
+};
+
+const fx = fixture as unknown as {
+  articles: FixtureArticle[];
+  people?: FixturePerson[];
+  sessions?: ProfileSession[];
+  profiles?: FixtureProfile[];
+};
+
+function fixtureArticles(): FixtureArticle[] {
   return [...fx.articles].sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0));
 }
 
-function toCard(a: ArticleDetail) {
-  const { source_note, transcript_text, slides, brief, ...card } = a;
+function toCard(a: FixtureArticle) {
+  const { source_note, transcript_text, slides, brief, session_id, ...card } = a;
   void source_note;
   void transcript_text;
   void slides;
   void brief;
+  void session_id;
   return card;
+}
+
+/** 聯合質詢的講者欄位是「甲、乙」；跟後端的 _joined_q 一樣逐一比對，不用 includes（「王立」會誤中「王立任」） */
+function speakerNames(speaker: string): string[] {
+  return speaker
+    .split('、')
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+function fixturePersonId(name: string, source: string): number | null {
+  return (fx.people ?? []).find((p) => p.name === name && p.source === source)?.id ?? null;
 }
 
 const str = (v: unknown): string => (typeof v === 'string' ? v : '');
@@ -244,8 +306,12 @@ function fixtureList(query: ArticleQuery): ArticleList {
 
   const filtered = fixtureArticles().filter((a) => {
     if (query.date && a.date !== query.date) return false;
-    if (query.speaker && a.speaker !== query.speaker) return false;
+    if (query.speaker && !speakerNames(a.speaker).includes(query.speaker)) return false;
     if (query.source && a.source !== query.source) return false;
+    // 下面三個跟後端的篩選同一套定義：側寫的「看這 N 篇」靠它們把 N 篇列出來
+    if (query.session && a.session_id !== query.session) return false;
+    if (query.solo && speakerNames(a.speaker).length !== 1) return false;
+    if (query.has_brief && a.brief == null) return false;
     if (query.party && !(a.party ?? '').split('、').includes(query.party)) return false;
     if (q) {
       const hay = `${a.title} ${a.teaser} ${a.meeting} ${a.speaker} ${a.transcript_text}`;
@@ -257,6 +323,147 @@ function fixtureList(query: ArticleQuery): ArticleList {
   const pages = Math.max(1, Math.ceil(filtered.length / pageSize));
   const items = filtered.slice((page - 1) * pageSize, page * pageSize).map(toCard);
   return { count: filtered.length, page, page_size: pageSize, pages, items };
+}
+
+/* ------------------------------------------------------------------
+   人物側寫
+   ------------------------------------------------------------------ */
+
+const num = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null);
+
+function normalizeSession(raw: unknown): ProfileSession | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const o = raw as Record<string, unknown>;
+  const id = num(o.id);
+  const name = str(o.name).trim();
+  if (id === null || !name) return null;
+  return {
+    id,
+    source: toSource(str(o.source)),
+    term: str(o.term),
+    name,
+    start_date: str(o.start_date) || null,
+    end_date: str(o.end_date) || null,
+  };
+}
+
+function normalizeIndicator(raw: unknown): ProfileIndicator | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const o = raw as Record<string, unknown>;
+  const key = str(o.key);
+  const label = str(o.label).trim();
+  if (!key || !label) return null;
+  const sampleOk = o.sample_ok === true;
+  const percentile = num(o.percentile);
+  return {
+    key,
+    label,
+    unit: str(o.unit),
+    value: num(o.value),
+    n: Math.max(0, num(o.n) ?? 0),
+    n_unit: str(o.n_unit) || '篇',
+    // 樣本不足就不給百分位。後端本來就回 null，這裡再擋一次：
+    // 「最小樣本」是側寫的底線，不該只靠一邊守。
+    percentile: sampleOk && percentile !== null ? Math.min(100, Math.max(0, percentile)) : null,
+    peers: Math.max(0, num(o.peers) ?? 0),
+    sample_ok: sampleOk,
+    evidence_url: str(o.evidence_url),
+  };
+}
+
+/**
+ * 側寫缺欄位時不讓整頁爆掉：壞掉的指標丟掉、沒有任何指標就當作沒有側寫
+ * （回 null，頁面整段不顯示），而不是畫出一個空殼。
+ */
+export function normalizeProfile(raw: unknown): Profile | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const o = raw as Record<string, unknown>;
+  const person = (o.person && typeof o.person === 'object' ? o.person : {}) as Record<string, unknown>;
+  const personId = num(person.id);
+  const session = normalizeSession(o.session);
+  if (personId === null || !session) return null;
+
+  const blocks: ProfileBlock[] = (Array.isArray(o.blocks) ? o.blocks : [])
+    .filter((b) => b && typeof b === 'object')
+    .map((b) => ({
+      key: str(b.key),
+      title: str(b.title).trim(),
+      indicators: (Array.isArray(b.indicators) ? (b.indicators as unknown[]) : [])
+        .map(normalizeIndicator)
+        .filter((i): i is ProfileIndicator => i !== null),
+    }))
+    .filter((b) => b.key && b.title && b.indicators.length > 0);
+  if (blocks.length === 0) return null;
+
+  const sessions = (Array.isArray(o.sessions) ? o.sessions : [])
+    .map(normalizeSession)
+    .filter((s): s is ProfileSession => s !== null);
+  // 切換列至少要有目前這個會期，否則訪客看不出現在看的是哪一個
+  if (!sessions.some((s) => s.id === session.id)) sessions.unshift(session);
+
+  return {
+    person: { id: personId, name: str(person.name) },
+    source: toSource(str(o.source) || session.source),
+    session,
+    sessions,
+    computed_at: str(o.computed_at),
+    min_sample: num(o.min_sample) ?? 5,
+    blocks,
+  };
+}
+
+/**
+ * 假資料的側寫：照 API 的規則挑來源與會期、組 evidence_url。
+ *
+ * 規則跟後端相同——沒指定來源就用最近一個有統計的會期的來源；沒指定會期就用
+ * 他有發言的最近一個會期，都沒有就用最近一個。這樣不連 Pi 也能看到切換會期、
+ * 樣本不足、同儕不足這幾種版面。
+ */
+function fixtureProfile(personId: number, query: ProfileQuery): Result<unknown> {
+  const notFound: Result<unknown> = {
+    ok: false,
+    error: { kind: 'notfound', status: 404, message: '假資料裡沒有這個人的側寫' },
+  };
+  const sessionOf = (id: number) => (fx.sessions ?? []).find((s) => s.id === id) ?? null;
+  const mine = (fx.profiles ?? [])
+    .filter((p) => p.person_id === personId)
+    .flatMap((p) => {
+      const s = sessionOf(p.session_id);
+      return s ? [{ p, s }] : [];
+    })
+    .sort((a, b) => (b.s.end_date ?? '').localeCompare(a.s.end_date ?? ''));
+
+  const source = query.source || mine[0]?.p.source;
+  const inSource = mine.filter((x) => x.p.source === source);
+  const spoke = (x: (typeof inSource)[number]) =>
+    x.p.blocks.some((b) => b.indicators.some((i) => i.key === 'speeches' && (i.value ?? 0) > 0));
+  const picked = query.session
+    ? inSource.find((x) => x.s.id === query.session)
+    : (inSource.find(spoke) ?? inSource[0]);
+  if (!picked || !source) return notFound;
+
+  // 證據連結用這個人在該來源的寫法，跟後端一樣
+  const name = (fx.people ?? []).find((p) => p.id === personId && p.source === source)?.name ?? '';
+  const evidence = `/speaker/${encodeURIComponent(name)}?source=${source}&session=${picked.s.id}`;
+  return {
+    ok: true,
+    data: {
+      person: { id: personId, name },
+      source,
+      session: picked.s,
+      sessions: inSource.map((x) => x.s),
+      computed_at: picked.p.computed_at,
+      min_sample: 5,
+      blocks: picked.p.blocks.map((b) => ({
+        ...b,
+        indicators: b.indicators.map((i) => ({
+          ...i,
+          // 具體度只算單獨發言、有摘要卡的文章，證據清單也要用同一組篩選
+          evidence_url: b.key === 'specificity' ? `${evidence}&solo=1&brief=1` : evidence,
+        })),
+      })),
+    },
+  };
 }
 
 /* ------------------------------------------------------------------
@@ -283,6 +490,9 @@ export async function getArticles(query: ArticleQuery = {}): Promise<Result<Arti
   if (query.source) params.set('source', query.source);
   if (query.party) params.set('party', query.party);
   if (query.q) params.set('q', query.q);
+  if (query.session) params.set('session', String(query.session));
+  if (query.solo) params.set('solo', 'true');
+  if (query.has_brief) params.set('has_brief', 'true');
   params.set('page', String(Math.max(1, Number(query.page) || 1)));
   params.set('page_size', String(Math.max(1, Number(query.page_size) || 12)));
 
@@ -360,13 +570,22 @@ export async function getSpeakers(source?: string): Promise<Result<SpeakerList>>
     const map = new Map<string, Speaker>();
     for (const a of fixtureArticles()) {
       if (source && a.source !== source) continue;
-      const key = `${a.source}:${a.speaker}`;
-      const cur = map.get(key);
-      if (cur) {
-        cur.count += 1;
-        if (a.date > cur.latest_date) cur.latest_date = a.date;
-      } else {
-        map.set(key, { name: a.speaker, source: a.source, count: 1, latest_date: a.date });
+      // 跟後端一樣把聯合質詢拆開、每人各算一篇，發言者頁才找得到每一位的 person_id
+      for (const name of speakerNames(a.speaker)) {
+        const key = `${a.source}:${name}`;
+        const cur = map.get(key);
+        if (cur) {
+          cur.count += 1;
+          if (a.date > cur.latest_date) cur.latest_date = a.date;
+        } else {
+          map.set(key, {
+            name,
+            source: a.source,
+            count: 1,
+            latest_date: a.date,
+            person_id: fixturePersonId(name, a.source),
+          });
+        }
       }
     }
     return { ok: true, data: { items: [...map.values()].sort((a, b) => b.count - a.count) } };
@@ -375,6 +594,35 @@ export async function getSpeakers(source?: string): Promise<Result<SpeakerList>>
   const res = await getJson<SpeakerList>(source ? `/api/speakers?source=${source}` : '/api/speakers');
   if (!res.ok) return res;
   return { ok: true, data: { items: Array.isArray(res.data?.items) ? res.data.items : [] } };
+}
+
+/**
+ * 人物側寫。source／session 可省略，由後端挑預設（見 spec 的 API 一節）。
+ *
+ * 呼叫端的約定：失敗（含 404：這個人在這個來源還沒有統計）就整段不顯示，
+ * 發言者頁其餘部分照常——側寫是附加的，不能拖垮報導清單。
+ */
+export async function getProfile(personId: number, query: ProfileQuery = {}): Promise<Result<Profile>> {
+  // person_id 來自後端，但它會被拼進路徑；不是正整數就不送出去
+  if (!Number.isSafeInteger(personId) || personId <= 0) {
+    return { ok: false, error: { kind: 'notfound', status: 404, message: '沒有這個人' } };
+  }
+
+  let res: Result<unknown>;
+  if (isFixtureMode()) {
+    res = fixtureProfile(personId, query);
+  } else {
+    const params = new URLSearchParams();
+    if (query.source) params.set('source', query.source);
+    if (query.session) params.set('session', String(query.session));
+    const qs = params.toString();
+    res = await getJson<unknown>(`/api/people/${personId}/profile${qs ? `?${qs}` : ''}`);
+  }
+  if (!res.ok) return res;
+
+  const profile = normalizeProfile(res.data);
+  if (!profile) return { ok: false, error: { kind: 'parse', message: '側寫資料不完整' } };
+  return { ok: true, data: profile };
 }
 
 /**

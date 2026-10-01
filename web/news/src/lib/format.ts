@@ -79,3 +79,40 @@ export function displayTitle(title: string): string {
   if (!title) return '';
   return title.replace(/^\s*\d{4}-\d{2}-\d{2}\s*[／/·–—-]?\s*/, '').trim() || title;
 }
+
+/**
+ * "2026-10-01T06:12:00+08:00" -> "2026年10月1日 06:12"（臺灣時間）。
+ *
+ * 一律換成臺灣時間再顯示：後端哪天改回 UTC（結尾是 Z），直接切字串會讓
+ * 「計算於」差八小時，讀者會以為資料是舊的。
+ */
+export function formatDateTime(iso: string | null | undefined): string {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  const parts = Object.fromEntries(
+    new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'Asia/Taipei',
+      year: 'numeric',
+      month: 'numeric',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+      hourCycle: 'h23',
+    })
+      .formatToParts(d)
+      .map((p) => [p.type, p.value]),
+  );
+  return `${parts.year}年${Number(parts.month)}月${Number(parts.day)}日 ${parts.hour}:${parts.minute}`;
+}
+
+/**
+ * 指標的值：整數照寫（千分位），小數看大小決定位數。
+ *
+ * 「每篇 0.06 項」若一律取一位會變成 0.1，差了快一倍；大的數字（分鐘、百分比）
+ * 則一位小數就夠，多了只是雜訊。
+ */
+export function formatMetric(value: number): string {
+  const digits = Number.isInteger(value) ? 0 : Math.abs(value) >= 10 ? 1 : 2;
+  return new Intl.NumberFormat('zh-TW', { maximumFractionDigits: digits }).format(value);
+}
