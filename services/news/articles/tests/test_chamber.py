@@ -327,7 +327,7 @@ class ChamberApiTests(TestCase):
         self.assertEqual(got["plenary_attendance"]["evidence_url"],
                          f"/records/{self.m['甲'].person_id}?session={self.s5.id}&kind=plenary")
         self.assertEqual(got["caucus_agreement"]["evidence_url"],
-                         f"/records/{self.m['甲'].person_id}?session={self.s5.id}&kind=caucus")
+                         f"/records/{self.m['甲'].person_id}?session={self.s5.id}&kind=caucus_votes")
         self.assertEqual({i["reason"] for i in block["indicators"]}, {""})
 
     def test_articles_and_records_sit_side_by_side(self):

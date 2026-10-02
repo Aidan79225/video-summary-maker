@@ -464,9 +464,9 @@ class RecordsReport:
 
     def __str__(self) -> str:
         scope = f"第{self.term}屆" + (f"第{self.session}會期" if self.session else "（全部會期）")
-        lines = [f"立法院院內紀錄 {scope}：院會 {self.plenary} 場、委員會（含聯席會議）{self.committee} 場"
-                 f"（其中還沒有出席紀錄 {self.without_attendance} 場，不計入出席率）、"
-                 f"委員提案 {self.bills} 件、記名表決 {self.votes} 次"]
+        lines = [f"立法院院內紀錄 {scope}：院會 {self.plenary} 場、委員會（含聯席會議）{self.committee} 場、"
+                 f"委員提案 {self.bills} 件、記名表決 {self.votes} 次；還沒有出席紀錄的會議 "
+                 f"{self.without_attendance} 場（不計入出席率）"]
         if self.sessions_created:
             lines.append(f"新建會期：{'、'.join(self.sessions_created)}")
         if self.skipped:

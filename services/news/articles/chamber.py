@@ -122,7 +122,7 @@ KINDS = (
     Kind("votes", "記名表決", VOTE_PARTICIPATION.key, "n"),
     # 一致率的分母：他有投票、黨團也有多數的表決。設計只列了七類，但一致率的 n 跟投票出席率的 n
     # 不一樣，沒有這一類就點不回「n 筆」
-    Kind("caucus", "他有投票、黨團有多數的表決", CAUCUS_AGREEMENT.key, "n"),
+    Kind("caucus_votes", "他有投票、黨團有多數的表決", CAUCUS_AGREEMENT.key, "n"),
     Kind("defections", "跨黨投票", CAUCUS_DEFECTIONS.key, "value"),
 )
 KIND_BY_KEY = {kind.key: kind for kind in KINDS}
@@ -405,7 +405,7 @@ class SessionRecords:
             "cosigned": (self.cosigned, self._bill_out),
             "passed": (self.passed, self._bill_out),
             "votes": (self.all_votes, self._vote_out),
-            "caucus": (self.caucus_votes, self._vote_out),
+            "caucus_votes": (self.caucus_votes, self._vote_out),
             "defections": (self.defections, self._vote_out),
         }
         if kind not in listings:
