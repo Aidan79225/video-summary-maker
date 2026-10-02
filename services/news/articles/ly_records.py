@@ -5,8 +5,10 @@
 
 幾件探勘出來、跟直覺不同的事（2026-10-03 實測 LYAPI v2）：
 
-- 院會的出席名單在「會議資料[].出席委員」；委員會與聯席會議的「會議資料」出席名單**永遠是空的**，
-  名單在「議事錄.出席委員」，而議事錄常常晚好幾週才有——還沒有的那一場是「不知道」，不是「沒人出席」。
+- 出席以「議事錄.出席委員」為準（正式紀錄），議事錄常常晚好幾週才有。院會的「會議資料[].出席委員」
+  每天一份，但**不是簽到**：院會-11-5-2 每天都是 114 人，連請假的委員、還沒到職的委員都在上面，只能
+  在還沒有議事錄時湊合用，而且要扣掉議事錄的「請假委員」。委員會與聯席會議的「會議資料」出席名單
+  **永遠是空的**——還沒有議事錄的那一場是「不知道」，不是「沒人出席」。
 - 聯席會議是另一個會議種類（「聯席會議」），不在「委員會」裡，要另外抓。
 - 清單加 output_fields=連署人 就拿得到每一件的連署人：翻完全部委員提案（八頁）就有，不必逐人逐會期
   查 `連署人=<姓名>`（那要上百個請求）。實測兩種做法的件數相同。
@@ -176,7 +178,7 @@ def _list(value: object) -> list:
 def _names(values: Iterable[object]) -> tuple[str, ...]:
     """姓名清單：去空白、去掉空的、同一個人（name_key 相同）只留第一個寫法。
 
-    院會的出席名單是每一天各一份、再加上議事錄的一份，合起來同一個人會出現好幾次、寫法也不一定一樣。
+    院會每一天的出席名單各一份，合起來同一個人會出現好幾次；議事錄與每天的名單寫法也不一定一樣。
     """
     seen: dict[str, str] = {}
     for value in values:
@@ -216,8 +218,12 @@ def _official_url(value: object, pattern: re.Pattern = _PPG_RE) -> str:
 def parse_meeting(row: object, kind: str) -> MeetingRecord | None:
     """/meets 的一筆。代碼、屆、會期缺一個就不收。
 
-    出席名單取「會議資料」每一天的出席委員與「議事錄」的出席委員的聯集：院會兩邊都有（同一份），
-    委員會只有議事錄有。兩邊都空就是 None——還沒有紀錄，不是沒人出席。
+    出席名單以「議事錄」的出席委員為準：那是正式紀錄。「會議資料」每一天的出席委員不是簽到——
+    院會-11-5-2（2026-10-03 實測）每天的名單都是 114 人，把議事錄寫著請假的 7 位、與一個多月後才
+    到職的委員都列了進去，議事錄的出席委員是 106 人。所以只有還沒有議事錄（或議事錄沒有出席名單）
+    時才退回每一天的名單；委員會的「會議資料」本來就沒有名單，只能等議事錄。不管用哪一份，議事錄的
+    「請假委員」一律扣掉：請假的人不能因為被列在名單上就算出席。
+    最後是空的就是 None——還沒有紀錄，不是沒人出席。
     """
     if not isinstance(row, dict):
         return None
@@ -229,8 +235,10 @@ def parse_meeting(row: object, kind: str) -> MeetingRecord | None:
     days = sorted({d for d in map(_iso_date, _list(row.get("日期"))) if d}
                   or {d for d in (_iso_date(item.get("日期")) for item in data) if d})
     minutes = row.get("議事錄") if isinstance(row.get("議事錄"), dict) else {}
-    attendees = _names([name for item in data for name in _list(item.get("出席委員"))]
-                       + _list(minutes.get("出席委員")))
+    listed = (_names(_list(minutes.get("出席委員")))
+              or _names(name for item in data for name in _list(item.get("出席委員"))))
+    on_leave = {name_key(name) for name in _names(_list(minutes.get("請假委員")))}
+    attendees = tuple(name for name in listed if name_key(name) not in on_leave)
     units = (_names(_list(row.get("委員會代號:str")))
              or _names(item.get("會議單位") for item in data))
     url = next((u for u in (_official_url(item.get("ppg_url"), _PPG_MEETING_RE) for item in data)

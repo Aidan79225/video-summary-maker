@@ -149,11 +149,39 @@ class ParseMeetingTests(SimpleTestCase):
                                       "?meetingDate=115/08/21")
 
     def test_the_minutes_and_the_sign_in_list_are_the_same_people(self):
-        """院會-11-5-22 兩份名單都有，族名寫法不同（空白對 U+2027）：同一個人只算一次。"""
+        """院會-11-5-22 兩份名單都有、是同一批人，族名寫法不同（空白對 U+2027）：用議事錄的那份，
+        同一個人只算一次。"""
         meeting = parse_meeting(_rows("lyapi_meets_plenary_11.json", "meets")[1],
                                 LyMeetingKind.PLENARY)
         self.assertEqual(len(meeting.attendees), 112)
         self.assertEqual(sum(1 for n in meeting.attendees if n.startswith("伍麗華")), 1)
+
+    def test_plenary_attendance_is_the_minutes_not_the_padded_daily_list(self):
+        """院會-11-5-2（2026-10-03 實測，原樣存成 fixture）：每天的「出席委員」都是 114 人，把議事錄寫著
+        請假的 7 位、與 2026-04-22 才到職的許忠信都列了進去；議事錄的出席委員是 106 人。"""
+        row = _rows("lyapi_meets_plenary_11_5_2.json", "meets")[0]
+        self.assertEqual([len(item["出席委員"]) for item in row["會議資料"]], [114, 114])
+        meeting = parse_meeting(row, LyMeetingKind.PLENARY)
+        self.assertEqual((meeting.code, meeting.dates), ("院會-11-5-2", (date(2026, 3, 6), date(2026, 3, 10))))
+        self.assertEqual(len(meeting.attendees), 106)
+        keys = {name_key(n) for n in meeting.attendees}
+        for absent in ("羅美玲", "林楚茵", "林宜瑾", "邱議瑩", "沈發惠", "李昆澤", "蔡其昌", "許忠信"):
+            self.assertNotIn(absent, keys)
+        self.assertEqual(keys, {name_key(n) for n in row["議事錄"]["出席委員"]})
+
+    def test_without_minutes_the_daily_list_is_used_minus_anyone_on_leave(self):
+        row = _rows("lyapi_meets_plenary_11_5_2.json", "meets")[0]
+        # 還沒有議事錄：只能用每天的名單
+        self.assertEqual(len(parse_meeting(dict(row, 議事錄=None), LyMeetingKind.PLENARY).attendees), 114)
+        # 議事錄只有請假名單（出席委員是空的）：每天的名單扣掉請假的 7 位
+        leave_only = dict(row, 議事錄={"請假委員": row["議事錄"]["請假委員"]})
+        meeting = parse_meeting(leave_only, LyMeetingKind.PLENARY)
+        self.assertEqual(len(meeting.attendees), 107)
+        self.assertNotIn("羅美玲", meeting.attendees)
+        # 請假名單的寫法跟出席名單不同也認得（族名的間隔號）
+        spaced = dict(row, 議事錄={"請假委員": ["伍麗華Saidhai‧Tahovecahe"]})
+        self.assertFalse(any(n.startswith("伍麗華") for n in
+                             parse_meeting(spaced, LyMeetingKind.PLENARY).attendees))
 
     def test_committee_attendance_comes_from_the_minutes(self):
         rows = _rows("lyapi_meets_committee_11.json", "meets")
@@ -483,6 +511,25 @@ class SaveTests(TestCase):
         self.assertEqual(LyVote.objects.count(), 2)
         self.assertEqual(report.kept_because_empty, ["表決"])
         self.assertIn("舊紀錄先留著", str(report))
+
+    def test_members_on_leave_are_not_counted_as_attending(self):
+        """院會-11-5-2 每天的名單把請假的人也列進去：照它算，請假的羅美玲會是 100% 出席。"""
+        from articles.models import ProfileStat
+        from articles.profiles import compute_profiles
+
+        for name, start in (("范雲", date(2024, 2, 1)), ("羅美玲", date(2024, 2, 1)),
+                            ("許忠信", date(2026, 4, 22))):
+            Membership.objects.create(person=Person.objects.create(name=name), source="ly", name=name,
+                                      term="第11屆", start_date=start)
+        routes = {("meets", "院會", 1): _payload("meets", _rows("lyapi_meets_plenary_11_5_2.json",
+                                                                "meets"))}
+        source, _, _ = _source(routes)
+        save(source.fetch(), now=NOW)
+        compute_profiles()
+        stats = {s.person.name: (s.value, s.n) for s in ProfileStat.objects.filter(
+            indicator="plenary_attendance").select_related("person")}
+        # 許忠信 2026-04-22 才到職：這一場不是他在任期間的會議，不在母體裡
+        self.assertEqual(stats, {"范雲": (100.0, 1), "羅美玲": (0.0, 1)})
 
     def test_vote_dates_come_from_the_meeting(self):
         """院會-11-2-18 那一筆的原文沒有年：靠會議的日期補上。"""
