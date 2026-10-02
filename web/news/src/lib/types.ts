@@ -1,3 +1,4 @@
+import type { RECORD_KIND_KEYS } from './records';
 import type { ArticleSource } from './sources';
 
 export type { ArticleSource };
@@ -253,19 +254,12 @@ export type ProfileQuery = {
    ------------------------------------------------------------------ */
 
 /**
- * 紀錄的類別，也是網址的 kind；每一類對到哪個指標見 lib/records.ts 的 RECORD_KINDS。
- * 'caucus' 是一致率的分母（他有投票、黨團也有多數的表決）：設計列了七類，但一致率的 n
+ * 紀錄的類別，也是網址的 kind；清單本身是 lib/records.ts 的 RECORD_KIND_KEYS（跟後端
+ * chamber.KIND_KEYS 一樣），每一類對到哪個指標見同一個檔的 RECORD_KINDS。
+ * 'caucus_votes' 是一致率的分母（他有投票、黨團也有多數的表決）：設計列了七類，但一致率的 n
  * 跟投票出席率的 n 不一樣，少了這一類，一致率就點不回「n 筆」（後端也多了這一類）
  */
-export type RecordKind =
-  | 'plenary'
-  | 'committee'
-  | 'proposed'
-  | 'cosigned'
-  | 'passed'
-  | 'votes'
-  | 'caucus'
-  | 'defections';
+export type RecordKind = (typeof RECORD_KIND_KEYS)[number];
 
 /*
  * 下面三種是網站整理後的形狀。後端（RecordOut）把代碼、編號放在 id，名稱、議題放在
@@ -331,7 +325,7 @@ export type VoteRecord = {
 export type RecordList = { dropped: number } & (
   | { kind: 'plenary' | 'committee'; items: MeetingRecord[] }
   | { kind: 'proposed' | 'cosigned' | 'passed'; items: BillRecord[] }
-  | { kind: 'votes' | 'caucus' | 'defections'; items: VoteRecord[] }
+  | { kind: 'votes' | 'caucus_votes' | 'defections'; items: VoteRecord[] }
 );
 
 export type RecordQuery = {

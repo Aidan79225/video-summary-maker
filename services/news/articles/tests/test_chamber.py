@@ -4,13 +4,16 @@ from __future__ import annotations
 
 import io
 import itertools
+import re
+import unittest
 from datetime import date, datetime
+from pathlib import Path
 from unittest import mock
 from urllib.parse import parse_qsl, urlsplit
 
 from django.core.management import call_command
 from django.db import connection
-from django.test import TestCase
+from django.test import SimpleTestCase, TestCase
 from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 
@@ -509,3 +512,25 @@ class ChamberApiTests(TestCase):
         self.assertEqual(self.client.get(url, {"session": self.s5.id, "kind": "speeches"}).status_code,
                          422)
         self.assertEqual(self.client.get(url, {"kind": "votes"}).status_code, 422)
+
+
+# 網站的紀錄類別清單（web/news/src/lib/records.ts 的 RECORD_KIND_KEYS）。後端只部署 services/news 時
+# 沒有這個檔案，那時跳過
+WEB_RECORDS_TS = Path(__file__).resolve().parents[4] / "web" / "news" / "src" / "lib" / "records.ts"
+
+
+class RecordKindContractTests(SimpleTestCase):
+    """紀錄清單的類別（網址的 kind）是前後端的契約：後端叫 caucus_votes、網站叫 caucus 的時候，
+    一致率的「看這 n 次表決」連到網站認不得的類別，點進去變成院會出席。"""
+
+    def test_the_evidence_urls_use_exactly_the_record_kinds(self):
+        kinds = [dict(parse_qsl(urlsplit(chamber.evidence_url(1, 2, i.key)).query))["kind"]
+                 for i in chamber.INDICATORS]
+        self.assertEqual(kinds, list(chamber.KIND_KEYS))
+
+    @unittest.skipUnless(WEB_RECORDS_TS.exists(), "沒有網站的原始碼")
+    def test_the_website_knows_the_same_record_kinds_in_the_same_order(self):
+        source = WEB_RECORDS_TS.read_text(encoding="utf-8")
+        match = re.search(r"export const RECORD_KIND_KEYS = \[(.*?)\] as const", source, re.S)
+        self.assertIsNotNone(match, "records.ts 要有 RECORD_KIND_KEYS（後端 chamber.KIND_KEYS 的對照）")
+        self.assertEqual(tuple(re.findall(r"'([a-z_]+)'", match.group(1))), chamber.KIND_KEYS)

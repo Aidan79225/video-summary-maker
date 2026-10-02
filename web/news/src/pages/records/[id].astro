@@ -81,13 +81,13 @@ const itemCount = list?.items.length ?? 0;
 const dropped = list?.dropped ?? 0;
 // 三種形狀分開拿出來，底下各畫各的；同一時間只會有一種不是空的
 const meetings = list && (list.kind === 'plenary' || list.kind === 'committee') ? list.items : [];
-const votes = list && (list.kind === 'votes' || list.kind === 'caucus' || list.kind === 'defections') ? list.items : [];
+const votes = list && (list.kind === 'votes' || list.kind === 'caucus_votes' || list.kind === 'defections') ? list.items : [];
 const bills = list && (list.kind === 'proposed' || list.kind === 'cosigned' || list.kind === 'passed') ? list.items : [];
 const noCaucus = indicatorOf('caucus_agreement')?.reason === 'no_caucus';
 // 沒有參加黨團時，黨團的兩類清單是空的；寫原因，不寫成「他從不跨黨」
 const emptyText =
-  noCaucus && (kind === 'caucus' || kind === 'defections')
-    ? `他這個會期沒有參加黨團，不算${kind === 'caucus' ? '與黨團一致率' : '跨黨投票'}。`
+  noCaucus && (kind === 'caucus_votes' || kind === 'defections')
+    ? `他這個會期沒有參加黨團，不算${kind === 'caucus_votes' ? '與黨團一致率' : '跨黨投票'}。`
     : info.empty;
 const retryHref = `${url.pathname}${url.search}`;
 const inlineLink = 'text-accent underline decoration-accent/40 underline-offset-4 hover:decoration-accent';
@@ -232,7 +232,7 @@ const pageTitle = profile && session ? `${name}・${info.title}・${session.name
                     共 {itemCount} {info.unit}
                     {/* 中文的連結前後不留空白，所以寫成一行 */}
                     {kind === 'votes' && !noCaucus && (
-                      <>：與所屬黨團一致率只算他有投票、黨團也有多數的那幾次，見<a href={kindHref('caucus')} class={inlineLink}>黨團有多數</a>。</>
+                      <>：與所屬黨團一致率只算他有投票、黨團也有多數的那幾次，見<a href={kindHref('caucus_votes')} class={inlineLink}>黨團有多數</a>。</>
                     )}
                   </p>
                   {/* 讀不懂的筆沒有畫出來：清單會比指標的 n 少，照實說，不讓讀者以為數字算錯了 */}

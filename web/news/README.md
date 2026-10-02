@@ -95,7 +95,7 @@ node ./dist/server/entry.mjs       # 等同 npm run preview / npm start
 | `/article/[slug]` | 單篇報導。逐段排版（截圖＋小標＋條列＋完整敘述），每段可點時間戳連回 IVOD 原片，最後是可折疊的完整逐字稿。 |
 | `/speaker/[name]` | 某位委員的報導列表（含分頁與其他委員快捷鍵）。有 `person_id` 且側寫 API 成功時，清單上方是人物側寫；側寫失敗或 404 就整段不顯示。支援 `?source=`、`?session=`（會期 id）、`?solo=1`（只看單獨發言）、`?brief=1`（只看有摘要卡的）、`?topic=`（主領域代碼，只認 `src/lib/topics.ts` 列舉裡的；`any` 是不限領域、只要分過類，議題指標的「看這 N 篇」帶的是它），有篩選時清單上方顯示條件與「清除」，翻頁時條件跟著走。 |
 | `/method` | 方法說明。`#profile` 寫人物側寫的原則、公式、會期與同儕、百分位、最小樣本、資料限制與還沒做的指標；`#profile-topics` 寫議題分布的 12 個領域、分類的輸入、人工標註與門檻、上線條件、公式、委員會對照與限制；`#profile-followups` 寫追問率的期限換算表、候選與篩選、判斷與落地檢查、四種狀態、公式、標註集與門檻、限制（規則與門檻在 `src/lib/followups.ts`）。改後端的計算時這一頁要跟著改。 |
-| `/records/[id]` | 院內紀錄清單（只有立委），側寫「院內紀錄」每張卡的證據。`[id]` 是 person_id；`?session=`（會期 id，沒帶就用側寫預設的會期）、`?kind=`（`plenary`、`committee`、`proposed`、`cosigned`、`passed`、`votes`、`caucus`、`defections`，不認得的當成 `plenary`；`caucus` 是與所屬黨團一致率的分母——他有投票、黨團也有多數的表決，設計只列了七類，但一致率的 n 跟投票出席率不同，要有自己的清單筆數才對得上）。標題寫是誰、哪個會期、哪一類，上方是類別切換列與那一類的指標，底下每一筆附官方連結，另有回發言者頁的連結。那個會期沒有院內紀錄（側寫沒有 `chamber` 區塊）時回 404。公式與資料限制寫在 `/method#profile-chamber`。 |
+| `/records/[id]` | 院內紀錄清單（只有立委），側寫「院內紀錄」每張卡的證據。`[id]` 是 person_id；`?session=`（會期 id，沒帶就用側寫預設的會期）、`?kind=`（`plenary`、`committee`、`proposed`、`cosigned`、`passed`、`votes`、`caucus_votes`、`defections`，跟後端的 `chamber.KIND_KEYS` 一樣，清單在 `lib/records.ts` 的 `RECORD_KIND_KEYS`；不認得的當成 `plenary`；`caucus_votes` 是與所屬黨團一致率的分母——他有投票、黨團也有多數的表決，設計只列了七類，但一致率的 n 跟投票出席率不同，要有自己的清單筆數才對得上）。標題寫是誰、哪個會期、哪一類，上方是類別切換列與那一類的指標，底下每一筆附官方連結，另有回發言者頁的連結。那個會期沒有院內紀錄（側寫沒有 `chamber` 區塊）時回 404。公式與資料限制寫在 `/method#profile-chamber`。 |
 | 其他 | `src/pages/404.astro` |
 
 IVOD 的網址不吃時間參數，所以時間戳只顯示 `mm:ss` 並連到 `ivod_url`（從頭播放），

@@ -27,6 +27,14 @@ import fixture from '../fixtures/records.json';
    類別與指標
    ------------------------------------------------------------------ */
 
+/**
+ * 紀錄的類別，也是網址與 API 的 kind。跟後端 chamber.KIND_KEYS 一字不差、順序也一樣：
+ * 後端的測試（test_chamber 的 RecordKindContractTests）會讀這一行比對，型別 RecordKind
+ * 也從這裡來。以前網站把一致率的分母叫 'caucus'、後端叫 'caucus_votes'，「看這 n 次表決」
+ * 就連到網站認不得的類別，點進去變成院會出席。
+ */
+export const RECORD_KIND_KEYS = ['plenary', 'committee', 'proposed', 'cosigned', 'passed', 'votes', 'caucus_votes', 'defections'] as const;
+
 export type RecordKindInfo = {
   key: RecordKind;
   /** 切換列上的短名 */
@@ -43,10 +51,12 @@ export type RecordKindInfo = {
   indicator: string;
 };
 
-/** 順序就是切換列的順序：出席、提案、表決，跟側寫的分組一樣 */
-export const RECORD_KINDS: readonly RecordKindInfo[] = [
-  {
-    key: 'plenary',
+/**
+ * 每一類的說明。用 satisfies 對 RecordKind：少寫一類、多寫一類或打錯字都編譯不過，
+ * 不會再有一邊改名、另一邊沒跟上的情形
+ */
+const KIND_INFO = {
+  plenary: {
     label: '院會',
     title: '院會出席',
     description: '他在任期間的每一場院會，以及出席名單上有沒有他。',
@@ -54,8 +64,7 @@ export const RECORD_KINDS: readonly RecordKindInfo[] = [
     empty: '這個會期在他任期內沒有院會。',
     indicator: 'plenary_attendance',
   },
-  {
-    key: 'committee',
+  committee: {
     label: '委員會',
     title: '委員會出席',
     description: '他那個會期所屬委員會在他任期內的每一場會議（聯席會議只要單位裡有他的委員會就算），以及出席名單上有沒有他。',
@@ -63,8 +72,7 @@ export const RECORD_KINDS: readonly RecordKindInfo[] = [
     empty: '這個會期在他任期內，他所屬的委員會沒有開會的紀錄。',
     indicator: 'committee_attendance',
   },
-  {
-    key: 'proposed',
+  proposed: {
     label: '主提案',
     title: '主提案',
     description: '他列名提案人的委員提案。',
@@ -72,8 +80,7 @@ export const RECORD_KINDS: readonly RecordKindInfo[] = [
     empty: '他這個會期沒有列名提案人的委員提案。',
     indicator: 'bills_proposed',
   },
-  {
-    key: 'cosigned',
+  cosigned: {
     label: '連署',
     title: '連署',
     description: '他列名連署人的委員提案。',
@@ -81,8 +88,7 @@ export const RECORD_KINDS: readonly RecordKindInfo[] = [
     empty: '他這個會期沒有列名連署人的委員提案。',
     indicator: 'bills_cosigned',
   },
-  {
-    key: 'passed',
+  passed: {
     label: '三讀',
     title: '三讀的主提案',
     description: '他列名提案人、而且議案狀態寫著「三讀」的委員提案。',
@@ -90,8 +96,7 @@ export const RECORD_KINDS: readonly RecordKindInfo[] = [
     empty: '他這個會期主提案的議案，還沒有三讀的。',
     indicator: 'bills_passed',
   },
-  {
-    key: 'votes',
+  votes: {
     label: '記名表決',
     title: '記名表決',
     description: '他在任期間的每一次記名表決：他投了什麼，以及他所屬黨團多數投的選項。',
@@ -99,10 +104,9 @@ export const RECORD_KINDS: readonly RecordKindInfo[] = [
     empty: '這個會期在他任期內沒有記名表決。',
     indicator: 'vote_participation',
   },
-  {
-    // 一致率的分母跟投票出席率不同（少了他沒投的、黨團並列的），要有自己的清單，
-    // 「看這 n 次表決」點進去才剛好 n 筆
-    key: 'caucus',
+  // 一致率的分母跟投票出席率不同（少了他沒投的、黨團並列的），要有自己的清單，
+  // 「看這 n 次表決」點進去才剛好 n 筆
+  caucus_votes: {
     label: '黨團有多數',
     title: '他有投票、黨團有多數的表決',
     description:
@@ -111,8 +115,7 @@ export const RECORD_KINDS: readonly RecordKindInfo[] = [
     empty: '這個會期沒有「他有投票、黨團也有多數」的記名表決。',
     indicator: 'caucus_agreement',
   },
-  {
-    key: 'defections',
+  defections: {
     label: '跨黨投票',
     title: '跨黨投票',
     description: '他有投票、黨團也有多數，而他的票跟黨團多數不同的記名表決。',
@@ -120,11 +123,14 @@ export const RECORD_KINDS: readonly RecordKindInfo[] = [
     empty: '他這個會期沒有跟黨團多數不同的票。',
     indicator: 'caucus_defections',
   },
-];
+} satisfies Record<RecordKind, Omit<RecordKindInfo, 'key'>>;
+
+/** 順序就是切換列的順序（RECORD_KIND_KEYS 的順序）：出席、提案、表決，跟側寫的分組一樣 */
+export const RECORD_KINDS: readonly RecordKindInfo[] = RECORD_KIND_KEYS.map((key) => ({ key, ...KIND_INFO[key] }));
 
 export function isRecordKind(v: string | null | undefined): v is RecordKind {
   // 用清單比對而不是查物件：網址參數是訪客打的，?kind=constructor 會命中原型上的屬性
-  return v != null && RECORD_KINDS.some((k) => k.key === v);
+  return v != null && RECORD_KIND_KEYS.some((k) => k === v);
 }
 
 export function recordKindInfo(kind: RecordKind): RecordKindInfo {
@@ -154,7 +160,7 @@ export const CHAMBER_INDICATORS: readonly ChamberIndicatorInfo[] = [
   { key: 'bills_passed', label: '三讀數', unit: '件', n_unit: '件', kind: 'passed', group: 'bills', rate: false },
   // n_unit 跟後端（chamber.py）一樣寫「次」；連結文字另外照清單的單位寫成「次表決」
   { key: 'vote_participation', label: '投票出席率', unit: '%', n_unit: '次', kind: 'votes', group: 'votes', rate: true },
-  { key: 'caucus_agreement', label: '與所屬黨團一致率', unit: '%', n_unit: '次', kind: 'caucus', group: 'votes', rate: true },
+  { key: 'caucus_agreement', label: '與所屬黨團一致率', unit: '%', n_unit: '次', kind: 'caucus_votes', group: 'votes', rate: true },
   { key: 'caucus_defections', label: '跨黨投票數', unit: '次', n_unit: '次', kind: 'defections', group: 'votes', rate: false },
 ];
 
@@ -327,7 +333,7 @@ export function normalizeRecords(kind: RecordKind, raw: unknown): RecordList | n
     case 'passed':
       return { kind, ...normalizeRows(rows, normalizeBill) };
     case 'votes':
-    case 'caucus':
+    case 'caucus_votes':
     case 'defections':
       return { kind, ...normalizeRows(rows, (r) => normalizeVote(r, listCaucus)) };
   }
@@ -375,7 +381,7 @@ type FixtureLists = {
   cosigned: BillRecord[];
   passed: BillRecord[];
   votes: VoteRecord[];
-  caucus: VoteRecord[];
+  caucus_votes: VoteRecord[];
   defections: VoteRecord[];
 };
 
@@ -388,7 +394,7 @@ function fixtureLists(entry: FixtureChamber): FixtureLists {
     caucus_majority: entry.caucus ? v.caucus_majority : null,
   }));
   // 一致率的分母：他有投票、黨團有多數（並列就沒有）
-  const caucus = votes.filter((v) => v.vote && v.caucus_majority);
+  const caucusVotes = votes.filter((v) => v.vote && v.caucus_majority);
   const proposed = bills(entry.records.proposed);
   return {
     plenary: entry.records.plenary,
@@ -397,9 +403,9 @@ function fixtureLists(entry: FixtureChamber): FixtureLists {
     cosigned: bills(entry.records.cosigned),
     passed: proposed.filter((b) => b.status.includes('三讀')),
     votes,
-    caucus,
+    caucus_votes: caucusVotes,
     // 分母裡跟多數不同的
-    defections: caucus.filter((v) => v.vote !== v.caucus_majority),
+    defections: caucusVotes.filter((v) => v.vote !== v.caucus_majority),
   };
 }
 
@@ -419,8 +425,8 @@ function fixtureValue(key: string, lists: FixtureLists, caucus: string): Fixture
       return { value: share(lists.votes.filter((v) => v.vote).length, lists.votes.length), n: lists.votes.length };
     case 'caucus_agreement': {
       if (!caucus) return { value: null, n: 0, reason: 'no_caucus' };
-      const agreed = lists.caucus.length - lists.defections.length;
-      return { value: share(agreed, lists.caucus.length), n: lists.caucus.length };
+      const agreed = lists.caucus_votes.length - lists.defections.length;
+      return { value: share(agreed, lists.caucus_votes.length), n: lists.caucus_votes.length };
     }
     case 'caucus_defections':
       // 後端存成 null（不是 0）：沒有參加黨團與「從不跨黨」是兩回事
