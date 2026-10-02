@@ -49,6 +49,12 @@ class JobField(StrEnum):
     CREATED_AT = "created_at"
 
 
+class JobKind(StrEnum):
+    """POST /jobs 的 kind。省略就是 deck（摘要）：舊的請求不必改。協定的一部分，兩邊各留一份。"""
+    DECK = "deck"
+    TOPIC = "topic"
+
+
 class GpuApiError(Exception):
     """摘要 API 這次不能用。暫時性問題，下次排程會再試。"""
 
@@ -110,6 +116,17 @@ class GpuApiClient:
             body["max_slides"] = max_slides
         if speech_hint:
             body["speech_hint"] = speech_hint
+        return self._submit(body)
+
+    def submit_topic(self, text: str, labels: list[dict]) -> str:
+        """送一個議題分類工作：把一段文字分到 labels 裡的政策領域（`[{key, label, description}]`）。
+
+        跟摘要工作排同一個佇列，所以等待、錯誤分類都照舊用 wait() 與 _call()。領域清單每次都
+        帶過去：GPU 端不寫死，改清單只要改 Pi 這邊（topics.TOPICS）。
+        """
+        return self._submit({"kind": JobKind.TOPIC, "text": text, "labels": labels})
+
+    def _submit(self, body: dict) -> str:
         job = self._call("/jobs", "POST", body=body, timeout=_SUBMIT_TIMEOUT)
         job_id = job.get(JobField.ID)
         if not job_id:

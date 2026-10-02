@@ -62,6 +62,9 @@ class Membership(models.Model):
     # 黨團（國民黨團／民進黨團／無黨團結聯盟／空）。跟政黨不一定相同——新北有 4 人
     # 政黨與黨團不同。文章標的是政黨；黨團只用來判斷「黨團時段」裡誰不屬於該黨團。
     caucus = models.CharField(max_length=64, blank=True)
+    # 所屬委員會（只有立法院）：LYAPI 的原樣字串清單，「第11屆第5會期：財政委員會」，一個會期
+    # 可能有好幾個。存原樣而不拆表：只有議題分布的「委員會職掌」會讀它，每週同步整批覆寫。
+    committees = models.JSONField(default=list, blank=True)
     start_date = models.DateField(null=True, blank=True)
     end_date = models.DateField(null=True, blank=True)
     # 換黨自動切段後日期待補
@@ -223,6 +226,73 @@ class ProfileStat(models.Model):
 
     def __str__(self) -> str:
         return f"{self.person} {self.session} {self.indicator}={self.value}"
+
+
+class Topic(models.Model):
+    """一篇文章的政策領域，由 GPU 的 topic 工作分的（topics.classify_topics）。
+
+    代碼的清單在 topics.TOPICS，這裡刻意不設 choices：topics 要讀這張表，表再回頭 import
+    topics 就是循環；寫入只有 topics.parse_result 一個入口，它會擋掉清單外的代碼。
+    文章重產（ingest.save_result）時刪掉，下一輪重新分類。
+    """
+
+    article = models.OneToOneField(Article, related_name="topic", on_delete=models.CASCADE)
+    primary = models.CharField(max_length=16, db_index=True)
+    # 空字串＝沒有次領域
+    secondary = models.CharField(max_length=16, blank=True)
+    # GPU 回來的那串：模型＋提示詞版本（「qwen3:14b#topic-v1」）。指標只認通過評估的那個版本
+    classifier = models.CharField(max_length=200, db_index=True)
+    labeled_at = models.DateTimeField()
+
+    class Meta:
+        ordering = ["-labeled_at", "-id"]
+        verbose_name = verbose_name_plural = "議題分類（模型）"
+
+    def __str__(self) -> str:
+        return f"{self.article} → {self.primary}"
+
+
+class TopicLabel(models.Model):
+    """人工標註的主領域：議題分類器的標註集（topics.sample_labels 抽、admin 標、eval_topics 評）。
+
+    文章重產時不刪：發言講的是什麼議題，不會因為摘要重寫而改變。
+    """
+
+    article = models.OneToOneField(Article, related_name="topic_label", on_delete=models.CASCADE)
+    # 空字串＝還沒標
+    primary = models.CharField(max_length=16, blank=True, db_index=True)
+    note = models.CharField(max_length=300, blank=True)
+    labeled_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["article__source", "article_id"]
+        verbose_name = verbose_name_plural = "議題標註"
+
+    def __str__(self) -> str:
+        return f"{self.article} 標註：{self.primary or '還沒標'}"
+
+
+class TopicEvaluation(models.Model):
+    """一次評估、一個來源的成績。某來源的議題指標只用最新一筆 passed 的 classifier。"""
+
+    source = models.CharField(max_length=16, choices=ArticleSource.choices, db_index=True)
+    classifier = models.CharField(max_length=200)
+    labeled = models.PositiveIntegerField()
+    correct = models.PositiveIntegerField()
+    # 0～1
+    accuracy = models.FloatField()
+    passed = models.BooleanField(db_index=True)
+    # 判錯的每一筆：[{article, slug, speaker, human, model, error?}]，model 為 null 是分類失敗
+    mistakes = models.JSONField(default=list, blank=True)
+    ran_at = models.DateTimeField()
+
+    class Meta:
+        ordering = ["-ran_at", "-id"]
+        verbose_name = verbose_name_plural = "議題分類評估"
+
+    def __str__(self) -> str:
+        return (f"{self.get_source_display()} {self.classifier} "
+                f"{self.correct}/{self.labeled}{'（通過）' if self.passed else ''}")
 
 
 class Slide(models.Model):

@@ -146,3 +146,52 @@ class SpeechHintTests(SimpleTestCase):
         client.submit("https://x")
         self.assertEqual(transport.calls[0]["body"]["speech_hint"], "臺中市議會。發言者：楊啓邦")
         self.assertNotIn("speech_hint", transport.calls[1]["body"])
+
+
+class TopicJobTests(SimpleTestCase):
+    """議題分類工作：同一個 POST /jobs，多帶 kind、text 與 labels；等待與錯誤處理照舊。"""
+
+    LABELS = [{"key": "finance", "label": "財政經濟", "description": "預算、稅收"},
+              {"key": "local", "label": "地方建設／其他", "description": "以上都不是的"}]
+
+    def test_a_topic_job_sends_kind_text_and_labels_but_no_url(self):
+        client, transport, _ = _client([{"id": "t1", "status": "queued"}], key="secret")
+        self.assertEqual(client.submit_topic("一句話：預算", self.LABELS), "t1")
+        call = transport.calls[0]
+        self.assertEqual((call["method"], call["url"], call["key"]),
+                         ("POST", "http://gpu:8800/jobs", "secret"))
+        self.assertEqual(call["body"], {"kind": "topic", "text": "一句話：預算", "labels": self.LABELS})
+
+    def test_a_deck_job_still_goes_out_without_a_kind(self):
+        """摘要工作的請求一個欄位都沒多：GPU 端省略 kind 就是 deck，Pi 先升級、GPU 還沒升的
+        那段時間，摘要照樣送得出去（舊版 GPU 不認得 kind，帶了反而可能被拒）。"""
+        client, transport, _ = _client([{"id": "d1", "status": "queued"}])
+        client.submit("https://ivod/1")
+        self.assertEqual(transport.calls[0]["body"], {"url": "https://ivod/1", "detailed": True})
+
+    def test_the_result_is_waited_for_like_any_other_job(self):
+        client, _, _ = _client([
+            {"id": "t1", "status": "queued"},
+            {"status": "running"},
+            {"status": "done", "result": {"primary": "finance", "secondary": None,
+                                          "classifier": "qwen3:14b#topic-v1"}},
+        ])
+        job_id = client.submit_topic("一句話：預算", self.LABELS)
+        self.assertEqual(client.wait(job_id, timeout=60)["primary"], "finance")
+
+    def test_errors_are_classified_the_same_way(self):
+        import io
+        import urllib.error
+
+        def http_error(code):
+            return urllib.error.HTTPError("http://gpu/jobs", code, "boom", {}, io.BytesIO(b"x"))
+
+        client, _, _ = _client([http_error(422)])
+        with self.assertRaises(JobFailed):
+            client.submit_topic("x", self.LABELS)
+        client, _, _ = _client([http_error(500)])
+        with self.assertRaises(GpuApiError):
+            client.submit_topic("x", self.LABELS)
+        client, _, _ = _client([{"status": "queued"}])
+        with self.assertRaises(GpuApiError):
+            client.submit_topic("x", self.LABELS)

@@ -51,6 +51,7 @@ python -c "import secrets; print(secrets.token_urlsafe(64))"
 | `GPU_JOB_TIMEOUT_SECONDS` | `1800` | 等單一支影片的上限 |
 | `INGEST_DAILY_LIMIT` | `20` | **每次執行**最多處理幾段（一段約 3～5 分鐘）。回補多天只是多查幾天的清單，處理上限不變。 |
 | `INGEST_HOUR` | `4` | 常駐排程每天幾點跑 |
+| `TOPIC_DAILY_LIMIT` | `200` | 每晚最多替幾篇文章分政策領域（議題分布；一篇幾秒） |
 | `NTPC_ENABLED` | `True` | 每天也查新北市議會的質詢片段（`ingest_ivod --source ntpc` 不看這個設定） |
 | `NTPC_INCLUDE_MIXED` | `True` | 新北的多黨混合時段（市長施政報告、總預算報告、專案報告）也收 |
 | `NTPC_VOD_BASE` | `https://vod.ntp.gov.tw` | 新北市議會議事影音系統 |
@@ -103,11 +104,11 @@ uv run python manage.py ingest_ivod --retry-imageless --limit 5
 
 ```bash
 # 一、常駐排程（不想碰 systemd 的話）
-uv run python manage.py run_scheduler                   # 每天 04:10；每次都回補三天的清單，接著重算人物側寫
+uv run python manage.py run_scheduler                   # 每天 04:10；每次都回補三天的清單，接著分政策領域、重算人物側寫
 uv run python manage.py run_scheduler --backfill-days 0 # 不要回補
 
-# 二、系統排程（crontab -e）：匯入之後接著重算側寫；用 ; 而不是 &&，匯入失敗照樣重算
-10 4 * * * cd /home/pi/yt-downloader/services/news && /home/pi/.local/bin/uv run python manage.py ingest_ivod >> /var/log/ly-news-ingest.log 2>&1; /home/pi/.local/bin/uv run python manage.py compute_profiles >> /var/log/ly-news-ingest.log 2>&1
+# 二、系統排程（crontab -e）：匯入 → 分政策領域 → 重算側寫；用 ; 而不是 &&，前一步失敗後一步照跑
+10 4 * * * cd /home/pi/yt-downloader/services/news && /home/pi/.local/bin/uv run python manage.py ingest_ivod >> /var/log/ly-news-ingest.log 2>&1; /home/pi/.local/bin/uv run python manage.py classify_topics >> /var/log/ly-news-ingest.log 2>&1; /home/pi/.local/bin/uv run python manage.py compute_profiles >> /var/log/ly-news-ingest.log 2>&1
 ```
 
 ## 人物側寫（投入量、具體度）
@@ -142,15 +143,109 @@ uv run python manage.py backfill_meetings   # 逐篇向 LYAPI 查，一秒一個
 
 排程：`run_scheduler` 每晚匯入之後接著跑一次，包在自己的 try 裡，失敗只記 log、不影響匯入。部署這一版之後先手動跑一次，把既有的文章掛上會期。
 
+## 人物側寫：議題分布
+
+設計見 `docs/superpowers/specs/2026-10-03-profile-topics-step2-design.md`。模型只做一件事：把一篇報導分到 12 個固定政策領域的其中一個（主領域，外加可有可無的次領域）；篇數、占比、聚焦度、廣度都是程式算的。**模型參與的指標要有人工標註集，準確率不到門檻就不上線**——所以這一節有三段：每晚分類、標註與評估、上線條件。
+
+### 分類器
+
+- 政策領域寫在 `articles/topics.py`（`TOPICS`），是唯一的來源：代碼用在資料庫與網址，名稱給模型看、給讀者看。GPU 端不寫死，每次送工作時把清單帶過去（`POST /jobs`，`kind="topic"`、`text`、`labels`）。
+- 分類器讀的文字是摘要卡的**一句話＋各段小標**，**不放會議名稱**：「財政委員會」幾乎會直接決定答案，立委的委員會職掌比對就變成自己比自己。admin 的標註頁顯示的是同一段文字（同一個函式產生）。
+- 只分**基礎文章**：已完成、單獨發言、有摘要卡（跟具體度同一批）。聯合質詢分不出每個人講了哪個議題，沒有摘要卡就沒有一句話可讀。
+- 結果存在 `Topic`，連同 GPU 回來的 `classifier`（模型＋提示詞版本，例如 `qwen3:14b#topic-v1`）。文章重產時 `Topic` 會被刪掉，下一輪重分；人工標註不刪。
+- 分類失敗只記 log、不動文章；GPU 連不上就整輪停止（同摘要）。
+
+```bash
+uv run python manage.py classify_topics                # 只分還沒有 Topic 的，上限 TOPIC_DAILY_LIMIT（預設 200）
+uv run python manage.py classify_topics --limit 50
+uv run python manage.py classify_topics --reclassify   # 連已經有的也重分：沒有的先、再來是分得最久的
+```
+
+### 標註與評估
+
+1. **抽樣**：每個來源從基礎文章裡隨機抽，建立空白的標註。已經抽過的不重抽，只補到每個來源 N 篇；同樣的資料、同樣的種子抽到同樣的文章。
+
+   ```bash
+   uv run python manage.py sample_topic_labels                 # 每個來源補到 20 篇，種子 0
+   uv run python manage.py sample_topic_labels --per-source 30 --seed 7
+   ```
+
+2. **標註**：到 admin 的「議題標註」頁（`/admin/articles/topiclabel/`）。清單上直接顯示分類器會讀到的那段文字與文章連結（admin 的文章頁有完整的摘要與逐字稿，旁邊還有原始影片），主領域用下拉選單在清單上直接選，選完按最下面的「儲存」。右邊可以篩「還沒標」。這一頁**刻意不顯示模型的分類**（盲標）：看得到模型的答案，人就會跟著它標。標註只能靠抽樣產生，不能在 admin 手動新增——人手挑的文章會偏向好分的。
+
+3. **評估**：把已標註的文章用現在的模型與提示詞重分一次，逐來源比對主領域。
+
+   ```bash
+   uv run python manage.py eval_topics
+   ```
+
+   - 準確率 = 主領域相同的篇數 ÷ 已標註篇數（分類失敗的那篇算錯）。
+   - 通過 = 已標註至少 20 篇（`TOPIC_MIN_LABELS`），而且準確率 ≥ 80%（`TOPIC_MIN_ACCURACY`）。
+   - 每個有標註的來源存一筆 `TopicEvaluation`，印出各來源的結果與每一筆判錯的（文章、人工、模型）。
+   - 一次評估裡 GPU 回來的分類器必須都一樣，不一樣就中止、什麼都不存（中途換了模型）。GPU 連不上也一樣。
+   - 評估不會改動任何文章的 `Topic`。上線的分類器因此換了的話，會立刻重算一次人物側寫，分布與證據清單才不會兜不攏。
+
+### 上線條件
+
+某來源的議題指標**只用**「該來源最新一筆**通過的**評估」的分類器分出來的 `Topic`。沒有通過的評估，這個來源完全沒有議題指標、API 不給這個區塊。之後試一個新模型沒通過，不會讓已經驗過的舊版本下架；但新分出來的 `Topic` 版本對不上，就不算，直到重新評估通過。
+
+所以**換模型或提示詞**（GPU 端的提示詞改了就要升 `topic-vN`）的順序是：
+
+```bash
+uv run python manage.py eval_topics                                 # 先用新版本評估，不動既有的 Topic
+uv run python manage.py classify_topics --reclassify --limit 100000 # 通過了才把全部重分成新版本
+uv run python manage.py compute_profiles
+```
+
+新版本評估通過的那一刻起，舊版本分的 `Topic` 就不算了（`eval_topics` 會當場重算）：重分跑完之前，側寫上的議題分布是每個領域 0 篇、n＝0。所以重分要一口氣跑完，不要交給每晚 200 篇的排程慢慢補——那樣每晚重算出來的都是只算了一部分的分布。反過來先重分更糟：重分過的那幾篇被蓋成還沒通過的新版本，就不算了，重分到一半時排程重算，出來的是只算了一部分、看起來卻像完整的分布，直到新版本評估通過為止。
+
+在 admin 刪掉通過的評估（例如發現標註有誤）：上線條件因此變了——退回較舊的通過版本，或整個下架——的話，也會當場重算側寫。
+
+### 指標（區塊 `topics`）
+
+基礎文章：該會期、已完成、單獨發言、有摘要卡、而且有「通過版本」的 `Topic`。
+
+| 指標 | 公式 | n |
+|---|---|---|
+| 分布（`topic:<代碼>` 共 12 列） | 各領域的篇數；占比 = 篇數 ÷ 基礎文章數 × 100。不給百分位 | 基礎文章數 |
+| 聚焦度 `topic_focus` | 最大占比 × 100（%） | 基礎文章數 |
+| 廣度 `topic_breadth` | 占比 ≥ 10% 的領域數（個；用整數比較，剛好 10% 的算） | 基礎文章數 |
+| 委員會職掌內的比例 `committee_alignment`（只有立法院） | 主領域落在他「那個會期」所屬委員會職掌的篇數 ÷ 有委員會資料的基礎文章數 × 100（%） | 有委員會資料的基礎文章數 |
+
+最小樣本（n < 5 不給百分位）、同儕不足 5 人誰都不比、mid-rank 百分位，都跟投入量與具體度一樣。
+
+委員會職掌對照（`topics.COMMITTEE_AREAS`，方法頁公開）。委員會資料來自 LYAPI `/legislators` 的「委員會」（「第11屆第5會期：財政委員會」），`sync_members` 每週同步時存進任期的 `committees`；一個會期可能同時在好幾個委員會，職掌取聯集。程序、修憲、經費稽核委員會沒有政策職掌；那個會期沒有委員會資料（或只有這三個）的，不算進分母。
+
+| 委員會 | 領域 |
+|---|---|
+| 內政委員會 | 內政治安 |
+| 外交及國防委員會 | 國防外交 |
+| 經濟委員會 | 財政經濟、農業、環境能源 |
+| 財政委員會 | 財政經濟 |
+| 教育及文化委員會 | 教育文化、數位科技 |
+| 交通委員會 | 交通建設、數位科技 |
+| 司法及法制委員會 | 司法法制 |
+| 社會福利及衛生環境委員會 | 衛生福利、勞動、環境能源 |
+
+### 部署這一版之後
+
+```bash
+uv run python manage.py migrate
+uv run python manage.py sync_members --source ly   # 補上立委的委員會（不然要等週日）
+uv run python manage.py classify_topics            # 積壓很多的話每晚的排程會分批補完
+uv run python manage.py sample_topic_labels
+# 到 admin 標完之後
+uv run python manage.py eval_topics
+```
+
 ## API
 
 | 端點 | 說明 |
 |---|---|
 | `GET /api/health` | 文章數與最新日期 |
-| `GET /api/articles?date=&speaker=&q=&source=&party=&session=&solo=&has_brief=&page=&page_size=` | 已完成的文章清單。`session`（會期 id）、`solo=1`（只要單獨發言）、`has_brief=1`（只要有摘要卡）是側寫的證據篩選：證據網址查出來的篇數等於指標的 n |
+| `GET /api/articles?date=&speaker=&q=&source=&party=&session=&solo=&has_brief=&topic=&page=&page_size=` | 已完成的文章清單。`session`（會期 id）、`solo=1`（只要單獨發言）、`has_brief=1`（只要有摘要卡）、`topic`（領域代碼，或 `any`＝哪個領域都可以）是側寫的證據篩選：證據網址查出來的篇數等於指標的 n。`topic` 只認各來源通過評估的那個分類器分出來的領域；打錯的代碼回 422 |
 | `GET /api/articles/{slug}` | 單篇，含摘要卡（`brief`：一句話、關鍵數字、要求與回應；GPU 端產不出來時為 `null`）、每段的條列與完整敘述、完整逐字稿 |
 | `GET /api/speakers` | 委員與篇數；`person_id` 是同來源、同名任期所屬的人（查無任期為 `null`） |
-| `GET /api/people/{person_id}/profile?source=&session=` | 人物側寫：一個會期的投入量與具體度，每項附 n、百分位、同儕人數與證據網址（網站的相對路徑）。省略 `source` 用他最近一個有統計的會期的來源；省略 `session` 用他有發言的最近一個會期。沒有統計回 404 |
+| `GET /api/people/{person_id}/profile?source=&session=` | 人物側寫：一個會期的投入量與具體度，每項附 n、百分位、同儕人數與證據網址（網站的相對路徑）。那個來源有通過的議題評估時多一個 `topics` 區塊：`distribution`（12 個領域都列，依篇數由多到少、同數依領域表的順序；`share` 是 0～100）、`classifier`（`name`、`accuracy` 是 0～1、`labeled`、`evaluated_at`）。省略 `source` 用他最近一個有統計的會期的來源；省略 `session` 用他有發言的最近一個會期。沒有統計回 404 |
 
 清單裡每張卡片的 `teaser` 優先用摘要卡的一句話，沒有卡片才退回第一段的完整敘述。
 
@@ -206,15 +301,19 @@ WantedBy=multi-user.target
 
 ```
 articles/
-├─ models.py        實體：Article / Slide / Person / Membership / Session / ProfileStat
+├─ models.py        實體：Article / Slide / Person / Membership / Session / ProfileStat / Topic / TopicLabel / TopicEvaluation
 ├─ ivod_source.py   adapter：立法院開放資料
 ├─ gpu_client.py    adapter：GPU 主機上的摘要 API
 ├─ ingest.py        use case：發現 → 處理 → 落地（相依都用注入的）
 ├─ profiles.py      use case：會期解析、人物側寫指標的計算與快取
+├─ topics.py        use case：政策領域、分類、標註集與評估、上線條件、委員會職掌
 ├─ api.py           presentation：django-ninja 端點
 └─ management/commands/
    ├─ ingest_ivod.py    composition root：從 settings 組出 adapter 再注入
    ├─ compute_profiles.py
+   ├─ classify_topics.py
+   ├─ sample_topic_labels.py
+   ├─ eval_topics.py
    ├─ backfill_meetings.py
    └─ run_scheduler.py
 ```

@@ -472,3 +472,49 @@ class TermChangeEdgeTests(TestCase):
         for week in range(3):
             sync([record], today=date(2026, 5, 3 + 7 * week))
         self.assertEqual(Membership.objects.filter(name="李貞秀").count(), 1)
+
+
+class LyCommitteeTests(TestCase):
+    """立委的委員會：議題分布的「委員會職掌內的比例」靠它。LYAPI 給的是這一屆累計的清單。"""
+
+    ROW = {"屆": 11, "委員姓名": "吳春城", "黨籍": "台灣民眾黨", "歷屆立法委員編號": 1261,
+           "到職日": "2024/02/01",
+           "委員會": ["第11屆第1會期：教育及文化委員會", "", "第11屆第2會期：程序委員會",
+                   "第11屆第2會期：教育及文化委員會", 3]}
+
+    def _fetch(self, *rows):
+        return FakeFetch({"/legislators": json.dumps(
+            {"total_page": 1, "legislators": list(rows)}, ensure_ascii=False)})
+
+    def test_committees_are_read_as_given_without_blanks(self):
+        records = LyMemberSource("https://api.example/v2", term=11, fetch=self._fetch(self.ROW)).fetch()
+        self.assertEqual(records[0].committees, ("第11屆第1會期：教育及文化委員會",
+                                                 "第11屆第2會期：程序委員會",
+                                                 "第11屆第2會期：教育及文化委員會"))
+
+    def test_a_row_without_committees_has_none(self):
+        row = {k: v for k, v in self.ROW.items() if k != "委員會"}
+        records = LyMemberSource("https://api.example/v2", term=11, fetch=self._fetch(row)).fetch()
+        self.assertEqual(records[0].committees, ())
+
+    def test_sync_stores_them_and_the_next_sync_replaces_them(self):
+        sync([_rec("甲", "民主進步黨", committees=("第11屆第1會期：財政委員會",))])
+        self.assertEqual(Membership.objects.get().committees, ["第11屆第1會期：財政委員會"])
+        sync([_rec("甲", "民主進步黨", committees=("第11屆第1會期：財政委員會",
+                                               "第11屆第2會期：內政委員會"))])
+        self.assertEqual(Membership.objects.get().committees,
+                         ["第11屆第1會期：財政委員會", "第11屆第2會期：內政委員會"])
+
+    def test_a_party_change_keeps_the_old_terms_committees_and_gives_the_new_one_the_full_list(self):
+        sync([_rec("甲", "台灣民眾黨", committees=("第11屆第1會期：財政委員會",))])
+        with self.assertLogs("articles.members_sync", level="WARNING"):
+            sync([_rec("甲", "無黨籍", committees=("第11屆第1會期：財政委員會",
+                                                "第11屆第2會期：內政委員會"))],
+                 today=date(2026, 9, 28))
+        old, new = Membership.objects.order_by("id")
+        self.assertEqual(old.committees, ["第11屆第1會期：財政委員會"])
+        self.assertEqual(new.committees, ["第11屆第1會期：財政委員會", "第11屆第2會期：內政委員會"])
+
+    def test_councils_have_no_committees(self):
+        sync([_rec("乙", "中國國民黨", source="tccc")])
+        self.assertEqual(Membership.objects.get().committees, [])
