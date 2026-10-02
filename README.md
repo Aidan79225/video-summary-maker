@@ -366,7 +366,7 @@ python manage.py ingest_ivod --source ntpc --date 2026-09-17 --days 400 --discov
 
 文章會標上講者**當時**的政黨，可依政黨篩選。資料分成 `Person`（真人）與 `Membership`（一段任期：哪個議會、哪個黨、選區、屆次、起訖），同一個人先當議員後當立委是同一個 Person 底下的兩筆任期。
 
-- `sync_members` 每週日 03:30 自動跑（啟動時任何一個啟用中的來源還沒有名單，也會先跑一次）：立法院從 LYAPI `/legislators?屆=LY_TERM` 拿黨籍、選區、到職與離職日；臺中抓官網 `wb_introduction02.asp` 的「黨藉」與選區（官網與影音系統的議員編號不同，用姓名對）；新北抓官網的議員總覽、個人頁與三個黨團頁，另外記下議長／副議長與黨團（`Membership.role`、`Membership.caucus`，其他來源留空）。
+- `sync_members` 每週日 03:30 自動跑（啟動時任何一個啟用中的來源還沒有名單，也會先跑一次）：立法院從 LYAPI `/legislators?屆=LY_TERM` 拿黨籍、選區、到職與離職日；臺中抓官網 `wb_introduction02.asp` 的「黨藉」與選區（官網與影音系統的議員編號不同，用姓名對）；新北抓官網的議員總覽、個人頁與三個黨團頁，另外記下議長／副議長（`Membership.role`，只有新北有）。黨團存在 `Membership.caucus`：立法院用 LYAPI 名冊的「黨團」（院內紀錄的黨團一致率靠它），新北用官網的黨團頁，臺中留空。
 - 認人只靠姓名與別名：同名恰一個就連上、沒有就建、同名多個就另建一個並標 `needs_review`，到 admin 的「人物」用「合併」處理。
 - 換黨：來源只給目前黨籍，同步偵測到不同就把舊任期結束在當天、新開一筆，兩筆都標 `needs_review`，日期要人到 admin 補。
 - 合併後第一次部署要回填既有文章：`python manage.py sync_members --relink`。

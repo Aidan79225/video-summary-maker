@@ -206,11 +206,10 @@ web/news/
 │  ├─ layouts/Base.astro     # <head>、頁首頁尾、圖片載入失敗的全域 fallback
 │  ├─ components/            # SiteHeader / SiteFooter / ArticleCard / Filters /
 │  │                         # Pagination / SlideBlock / Transcript / Figure / Notice /
-│  │                         # ProfilePanel / ProfileIndicator / ProfileTopics（人物側寫）
-│  │                         # ProfileChamber / RecordMeeting / RecordBill / RecordVote /
-│  │                         # OfficialLink（院內紀錄）
 │  │                         # ProfilePanel / ProfileIndicator / ProfileTopics /
 │  │                         # ProfileFollowups / FollowupItem（人物側寫）/ MethodFollowups（方法頁）
+│  │                         # ProfileChamber / RecordMeeting / RecordBill / RecordVote /
+│  │                         # OfficialLink（院內紀錄）
 │  ├─ lib/
 │  │  ├─ api.ts              # 所有 API 呼叫、逾時、錯誤分類、假資料模式
 │  │  ├─ types.ts            # 對應後端契約的型別

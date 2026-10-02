@@ -16,6 +16,9 @@ from articles import ly_records
 
 ROOT = Path(__file__).resolve().parents[4]
 METHOD = ROOT / "web" / "news" / "src" / "pages" / "method.astro"
+WEB_README = ROOT / "web" / "news" / "README.md"
+NEWS_README = ROOT / "services" / "news" / "README.md"
+ROOT_README = ROOT / "README.md"
 
 
 def _read(path: Path) -> str:
@@ -76,3 +79,29 @@ class MethodPageTests(SimpleTestCase):
     def test_attendance_is_read_from_the_minutes(self):
         """parse_meeting：出席以議事錄為準，請假的委員不算出席。"""
         self._mentions("議事錄", "請假")
+
+
+@unittest.skipUnless(NEWS_README.exists() and ROOT_README.exists() and WEB_README.exists(),
+                     "沒有根目錄或網站的 README")
+class ReadmeTests(SimpleTestCase):
+    def test_the_profile_api_row_mentions_the_chamber_block(self):
+        """合併時 /people/{id}/profile 那一列掉了院內紀錄區塊的那句。"""
+        row = next(line for line in _read(NEWS_README).splitlines()
+                   if line.startswith("| `GET /api/people/{person_id}/profile"))
+        self.assertIn("`chamber` 區塊", row)
+        self.assertIn("不給投入量與具體度", row)
+
+    def test_the_legislative_caucus_comes_from_lyapi(self):
+        """sync_members 也把立法院的黨團（LYAPI 的「黨團」）存進 Membership.caucus。"""
+        bullet = next(line for line in _read(ROOT_README).splitlines()
+                      if line.startswith("- `sync_members`"))
+        sentence = next(s for s in bullet.split("。") if "Membership.caucus" in s)
+        self.assertIn("立法院", sentence)
+        self.assertIn("「黨團」", sentence)
+
+    def test_each_component_is_listed_once_in_the_tree(self):
+        text = _read(WEB_README)
+        tree = _between(text, "components/", "lib/")
+        names = re.findall(r"\b([A-Z][A-Za-z]+)\b", tree)
+        self.assertIn("ProfileChamber", names)
+        self.assertEqual([n for n in set(names) if names.count(n) > 1], [])
