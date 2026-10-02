@@ -1,15 +1,29 @@
-"""摘要工作的佇列與狀態機。
+"""摘要與分類工作的佇列與狀態機。
 
-純資料與規則：不碰 HTTP、不碰 slidebox、不開執行緒。所以整套排隊與狀態
-轉換都能用單元測試釘住，工作執行緒只負責照著它說的做。
+純資料與規則：不碰 HTTP、不跑 slidebox 的 pipeline（只借用它的領域實體）、
+不開執行緒。所以整套排隊與狀態轉換都能用單元測試釘住，工作執行緒只負責
+照著它說的做。
 """
 from __future__ import annotations
 
 import threading
 import time
 import uuid
+from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
 from enum import StrEnum
+
+from slidebox.domain.entities import TopicLabel
+
+
+class JobKind(StrEnum):
+    """工作種類。
+
+    兩種排在同一個佇列、由同一條執行緒跑：都要用 Ollama，而 GPU 主機只有
+    一張卡，分類跟摘要同時跑會互搶。
+    """
+    DECK = "deck"      # 影片網址 → 摘要材料
+    TOPIC = "topic"    # 一段文字 → 政策領域
 
 
 class JobStatus(StrEnum):
@@ -33,8 +47,9 @@ _MAX_JOBS = 50
 
 @dataclass(eq=False)
 class Job:
-    """一次摘要工作。eq=False：這是 identity 物件，不是值。"""
+    """一次工作。eq=False：這是 identity 物件，不是值。"""
     id: str
+    # 分類工作沒有網址，是空字串
     url: str
     detailed: bool = True
     min_slides: int | None = None
@@ -42,6 +57,10 @@ class Job:
     model: str | None = None
     # 語音辨識的專有名詞提示（講者姓名、機關名）；有逐字稿的來源用不到
     speech_hint: str | None = None
+    kind: JobKind = JobKind.DECK
+    # 只有分類工作用得到：要分類的文字與可選的領域
+    text: str = ""
+    labels: tuple[TopicLabel, ...] = ()
 
     status: JobStatus = JobStatus.QUEUED
     progress_fraction: float | None = None
@@ -103,12 +122,14 @@ class JobStore:
 
     # --- 轉換 ---
 
-    def submit(self, url: str, detailed: bool = True, min_slides: int | None = None,
+    def submit(self, url: str = "", detailed: bool = True, min_slides: int | None = None,
                max_slides: int | None = None, model: str | None = None,
-               speech_hint: str | None = None) -> Job:
+               speech_hint: str | None = None, kind: JobKind = JobKind.DECK,
+               text: str = "", labels: Sequence[TopicLabel] = ()) -> Job:
         job = Job(id=uuid.uuid4().hex, url=url, detailed=detailed,
                   min_slides=min_slides, max_slides=max_slides, model=model,
-                  speech_hint=speech_hint)
+                  speech_hint=speech_hint, kind=kind, text=text,
+                  labels=tuple(labels))
         with self._lock:
             self._jobs[job.id] = job
             self._order.append(job.id)

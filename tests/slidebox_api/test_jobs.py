@@ -3,7 +3,8 @@ from __future__ import annotations
 
 import pytest
 
-from slidebox_api.jobs import JobStatus, JobStore
+from slidebox.domain.entities import TopicLabel
+from slidebox_api.jobs import JobKind, JobStatus, JobStore
 
 
 def _store() -> JobStore:
@@ -159,3 +160,31 @@ def test_a_running_job_is_never_forgotten_even_when_the_cap_is_reached():
     for i in range(5):
         store.submit(f"u{i}")
     assert store.get(job.id) is job
+
+
+# --- 工作種類 ---
+
+LABELS = (TopicLabel("defense", "國防外交"), TopicLabel("welfare", "衛生福利"))
+
+
+def test_a_job_without_a_kind_is_a_deck_job():
+    """沒帶 kind 的舊客戶端：行為跟加這個欄位之前一樣。"""
+    assert _store().submit("a").kind == JobKind.DECK
+
+
+def test_a_topic_job_keeps_its_text_and_labels():
+    job = _store().submit(kind=JobKind.TOPIC, text="一句話：長照", labels=list(LABELS))
+    assert (job.kind, job.url, job.text, job.labels) == (
+        JobKind.TOPIC, "", "一句話：長照", LABELS)
+
+
+def test_topic_and_deck_jobs_share_one_queue_and_one_slot():
+    """攔的 bug：分類另開一個佇列或一條執行緒，就會跟摘要同時搶 Ollama——
+    GPU 只有一張卡。分類要排在正在跑的摘要後面，不插隊、不並行。"""
+    store = _store()
+    deck = store.submit("a")
+    topic = store.submit(kind=JobKind.TOPIC, text="一句話：長照", labels=LABELS)
+    assert store.take_next() is deck
+    assert store.take_next() is None
+    store.finish(deck.id, {})
+    assert store.take_next() is topic

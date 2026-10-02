@@ -6,17 +6,18 @@ Ollama、不需要網路。
 from __future__ import annotations
 
 import threading
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import replace
 
 from slidebox.domain.entities import Settings
 from slidebox.domain.errors import OperationCancelled
+from slidebox.domain.ports import TopicClassifier
 from slidebox.usecases.build_deck import BuildDeckUseCase
 from slidebox.usecases.queue import video_key
 from slidebox.usecases.sources import ivod_id, ntpc_id, tccc_id
 
-from .jobs import Job, JobStore
-from .payload import deck_payload
+from .jobs import Job, JobKind, JobStore
+from .payload import deck_payload, topic_payload
 
 ProgressCallback = Callable[[float | None, str], None]
 CancelCheck = Callable[[], bool]
@@ -138,3 +139,44 @@ class SlideboxExecutor:
             setattr(self._settings, name,
                     value if value is not None else getattr(self._base, name))
         return self._settings
+
+
+class TopicExecutor:
+    """把一段文字分到呼叫端帶來的政策領域。
+
+    預設模型在建構時就記下來，不讀共用的 Settings：SlideboxExecutor 會把摘要
+    工作指定的模型寫進那個共用實例，要到下一個摘要工作才還原。讀它的話，
+    有人手動送過一次 model=llama3 的摘要，之後的分類都會悄悄換成 llama3——
+    classifier 名稱跟著變，新聞服務會把這些結果全部當成沒評估過的版本。
+    """
+
+    def __init__(self, classifier_for: Callable[[str], TopicClassifier], model: str):
+        # classifier_for(模型名稱) → 分類器；host、num_ctx 由組裝的地方決定
+        self._classifier_for = classifier_for
+        self._model = model
+
+    def __call__(self, job: Job, progress: ProgressCallback,
+                 is_cancelled: CancelCheck) -> dict:
+        classifier = self._classifier_for(job.model or self._model)
+        result = classifier.classify(job.text, job.labels, progress, is_cancelled)
+        return topic_payload(result)
+
+
+class ByKindExecutor:
+    """依工作種類交給對應的執行函式。
+
+    分派放在執行函式這一層，而不是每種工作各開一條執行緒：兩種工作都要用
+    Ollama，一次只跑一個才不會互搶顯示卡。JobWorker 因此完全不必知道有幾種
+    工作。
+    """
+
+    def __init__(self, executors: Mapping[JobKind, Executor]):
+        self._executors = dict(executors)
+
+    def __call__(self, job: Job, progress: ProgressCallback,
+                 is_cancelled: CancelCheck) -> dict:
+        execute = self._executors.get(job.kind)
+        if execute is None:
+            # 走 JobWorker 的一般失敗路徑：這個工作失敗、佇列照常往下跑
+            raise ValueError(f"不支援的工作種類：{job.kind}")
+        return execute(job, progress, is_cancelled)

@@ -10,13 +10,14 @@
     SLIDEBOX_API_PORT        監聽埠，預設 8800
     SLIDEBOX_API_KEY         設了就強制 X-API-Key；沒設則不驗（區網自用）
     SLIDEBOX_API_OUTPUT_DIR  成品落點，預設 ~/slidebox_api_output
-    SLIDEBOX_MODEL           Ollama 模型，預設同桌面 app
+    SLIDEBOX_MODEL           Ollama 模型（摘要與議題分類共用），預設同桌面 app
     SLIDEBOX_OLLAMA_HOST     Ollama 位址，預設 http://localhost:11434
     SLIDEBOX_WHISPER_DEVICE  語音辨識裝置：auto（預設）／cpu／cuda
 """
 import os
 import sys
 import urllib.request
+from functools import partial
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "src"))
 
@@ -24,9 +25,15 @@ from fastapi import FastAPI
 
 from slidebox.composition import build_usecase
 from slidebox.domain.entities import Settings
+from slidebox.infrastructure.ollama_summarizer import OllamaTopicClassifier
 from slidebox_api.app import create_app
-from slidebox_api.jobs import JobStore
-from slidebox_api.runner import JobWorker, SlideboxExecutor
+from slidebox_api.jobs import JobKind, JobStore
+from slidebox_api.runner import (
+    ByKindExecutor,
+    JobWorker,
+    SlideboxExecutor,
+    TopicExecutor,
+)
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8800
@@ -68,13 +75,25 @@ def warn_if_exposed_without_key() -> None:
               "都能佔用你的 GPU。", file=sys.stderr)
 
 
+def build_executor(settings: Settings) -> ByKindExecutor:
+    # use case 只建一次：它會連帶建立語音辨識器，模型載入要 40 秒並佔著
+    # VRAM，每個工作重建一次等於每次重付。
+    deck = SlideboxExecutor(build_usecase(settings), settings)
+    # 分類器的 host、num_ctx 與預設模型在這裡就取值定下來：SlideboxExecutor 會
+    # 把摘要工作指定的模型寫進共用的 settings，分類不能跟著它變。num_ctx 跟
+    # 摘要同一個，Ollama 才不會在兩種工作之間重新載入模型。
+    topic = TopicExecutor(
+        partial(OllamaTopicClassifier, settings.ollama_host, num_ctx=settings.num_ctx),
+        settings.model,
+    )
+    return ByKindExecutor({JobKind.DECK: deck, JobKind.TOPIC: topic})
+
+
 def build() -> FastAPI:
     warn_if_exposed_without_key()
     settings = build_settings()
     store = JobStore()
-    # use case 只建一次：它會連帶建立語音辨識器，模型載入要 40 秒並佔著
-    # VRAM，每個工作重建一次等於每次重付。
-    executor = SlideboxExecutor(build_usecase(settings), settings)
+    executor = build_executor(settings)
     return create_app(
         store=store,
         worker=JobWorker(store, executor),
