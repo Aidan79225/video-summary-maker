@@ -56,13 +56,33 @@ export const TOPIC_MIN_ACCURACY = 0.8;
 /** 廣度的門檻：占比至少這麼多的領域才算一個（後端同一個數字） */
 export const TOPIC_BREADTH_SHARE = 10;
 
+/**
+ * ?topic=any：主領域是哪一個都可以，但要是評估通過的分類器分過的（後端的 ANY_TOPIC）。
+ *
+ * 聚焦度、廣度的 n 是「分過類的基礎報導」，比「單獨發言、有摘要卡」少——每晚有分類上限、
+ * 分類也會失敗。指標的「看這 N 篇」只帶 solo＋brief 的話會多列出還沒分類的，篇數就跟 n
+ * 對不上，所以後端給這幾個指標的證據網址多帶 topic=any。
+ */
+export const ANY_TOPIC = 'any';
+
 const BY_KEY = new Map(TOPIC_AREAS.map((t) => [t.key, t]));
+const ORDER = new Map(TOPIC_AREAS.map((t, i) => [t.key, i]));
 
 /** 網址上的 ?topic= 只認列舉裡的代碼：亂打的當成沒篩，不把後端的 422 傳染給整頁 */
 export function isTopicKey(key: string): boolean {
   return BY_KEY.has(key);
 }
 
+/** 篩選用的 ?topic=：列舉裡的代碼，或 any（分過類就好） */
+export function isTopicFilter(key: string): boolean {
+  return key === ANY_TOPIC || isTopicKey(key);
+}
+
 export function topicLabel(key: string): string {
   return BY_KEY.get(key)?.label ?? key;
+}
+
+/** 列舉裡的位置：分布同篇數時照這個排。列舉外的代碼排最後，不讓它插到中間 */
+export function topicOrder(key: string): number {
+  return ORDER.get(key) ?? TOPIC_AREAS.length;
 }

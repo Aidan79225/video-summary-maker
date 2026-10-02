@@ -7,7 +7,7 @@ import ProfilePanel from '../../components/ProfilePanel.astro';
 import { getArticles, getProfile, getSpeakers, statusFor } from '../../lib/api';
 import { buildQuery, formatDateWithWeekday } from '../../lib/format';
 import { isSource, memberKicker, memberTitle, sourceLabel } from '../../lib/sources';
-import { isTopicKey, topicLabel } from '../../lib/topics';
+import { ANY_TOPIC, isTopicFilter, topicLabel } from '../../lib/topics';
 import PartyBadge from '../../components/PartyBadge.astro';
 
 const PAGE_SIZE = 12;
@@ -26,7 +26,7 @@ const rawSource = url.searchParams.get('source')?.trim() ?? '';
 const source = isSource(rawSource) ? rawSource : '';
 
 // 側寫的「看這 N 篇」帶這幾個參數過來。會期只認正整數、開關只認 1／true、
-// 領域只認列舉裡的代碼：亂打的當成沒篩，不要把後端的 422 傳染給整頁（跟 ?source= 同一個做法）。
+// 領域只認列舉裡的代碼或 any：亂打的當成沒篩，不要把後端的 422 傳染給整頁（跟 ?source= 同一個做法）。
 const rawSession = url.searchParams.get('session')?.trim() ?? '';
 const session = /^\d{1,9}$/.test(rawSession) && Number(rawSession) > 0 ? Number(rawSession) : 0;
 const flag = (key: string) =>
@@ -34,7 +34,7 @@ const flag = (key: string) =>
 const solo = flag('solo');
 const brief = flag('brief');
 const rawTopic = url.searchParams.get('topic')?.trim() ?? '';
-const topic = isTopicKey(rawTopic) ? rawTopic : '';
+const topic = isTopicFilter(rawTopic) ? rawTopic : '';
 const hasFilter = Boolean(session || solo || brief || topic);
 
 // 側寫要等名單回來才知道 person_id；文章清單先送出去，兩邊不必排隊
@@ -96,15 +96,18 @@ const clearHref = `${basePath}${buildQuery({ source: source || undefined }, {})}
 const sessionName =
   profile?.sessions.find((s) => s.id === session)?.name ?? (session ? `會期 #${session}` : '');
 // 領域名稱以側寫給的為準（後端是唯一的來源）；側寫沒載入時退回網站留的那份列舉
-const topicName = topic
-  ? (profile?.blocks.flatMap((b) => b.distribution ?? []).find((t) => t.key === topic)?.label ??
-    topicLabel(topic))
-  : '';
+const topicName =
+  topic && topic !== ANY_TOPIC
+    ? (profile?.blocks.flatMap((b) => b.distribution ?? []).find((t) => t.key === topic)?.label ??
+      topicLabel(topic))
+    : '';
+// any 是議題指標的「看這 N 篇」：不限領域、只要分過類，標籤不能寫成「主領域：any」
+const topicChip = topic === ANY_TOPIC ? '只看分過主領域的' : `主領域：${topicName}`;
 const chips = [
   session ? { key: 'session', label: `會期：${sessionName}` } : null,
   solo ? { key: 'solo', label: '只看單獨發言' } : null,
   brief ? { key: 'brief', label: '只看有摘要卡的' } : null,
-  topic ? { key: 'topic', label: `主領域：${topicName}` } : null,
+  topic ? { key: 'topic', label: topicChip } : null,
 ].filter(Boolean) as { key: string; label: string }[];
 ---
 
@@ -182,12 +185,13 @@ const chips = [
           </a>
           {solo && brief && !topic && (
             <p class="w-full text-[0.72rem] leading-relaxed text-muted">
-              具體度與議題分布只用這些報導計算：聯合質詢的摘要卡分不出是誰講的，沒有摘要卡的報導沒有可數的東西。
+              具體度只用這些報導計算：聯合質詢的摘要卡分不出是誰講的，沒有摘要卡的報導沒有可數的東西。
             </p>
           )}
           {topic && (
             <p class="w-full text-[0.72rem] leading-relaxed text-muted">
-              主領域是模型分的，可能分錯；只列評估通過的分類器分過的報導。
+              {topic === ANY_TOPIC && '議題分布的指標只用這些報導計算。'}
+              主領域是模型分的，可能分錯；只列評估通過的分類器分過的報導，還沒分類的不在裡面。
               <a
                 href="/method#profile-topics"
                 class="text-accent underline decoration-accent/40 underline-offset-4 hover:decoration-accent"

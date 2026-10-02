@@ -20,7 +20,7 @@ import type {
   TopicShare,
 } from './types';
 import { toSource } from './sources';
-import { TOPIC_AREAS, TOPIC_MIN_ACCURACY, TOPIC_MIN_LABELS } from './topics';
+import { ANY_TOPIC, TOPIC_AREAS, TOPIC_MIN_ACCURACY, TOPIC_MIN_LABELS, topicOrder } from './topics';
 import fixture from '../fixtures/sample.json';
 
 /* ------------------------------------------------------------------
@@ -336,7 +336,8 @@ function fixtureList(query: ArticleQuery): ArticleList {
     // 「甲、」這種殘缺的欄位後端算聯合質詢，這裡也要算，假資料的 count 才會等於 n
     if (query.solo && a.speaker.includes('、')) return false;
     if (query.has_brief && a.brief == null) return false;
-    if (query.topic && a.topic !== query.topic) return false;
+    // any：分過類就好（哪個領域都可以）——議題指標的 n 就是這些，不含還沒分類的
+    if (query.topic === ANY_TOPIC ? a.topic == null : query.topic && a.topic !== query.topic) return false;
     if (query.party && !(a.party ?? '').split('、').includes(query.party)) return false;
     if (q) {
       const hay = `${a.title} ${a.teaser} ${a.meeting} ${a.speaker} ${a.transcript_text}`;
@@ -405,41 +406,51 @@ function normalizeIndicator(raw: unknown): ProfileIndicator | null {
   };
 }
 
-function normalizeTopicShare(raw: unknown): TopicShare | null {
+/** share 沒給時是 null，由 normalizeDistribution 用篇數補——不能當成 0，否則有篇數的領域畫成 0% */
+type RawTopicShare = Omit<TopicShare, 'share'> & { share: number | null };
+
+function normalizeTopicShare(raw: unknown): RawTopicShare | null {
   if (!raw || typeof raw !== 'object') return null;
   const o = raw as Record<string, unknown>;
   const key = str(o.key);
   const label = str(o.label).trim();
   if (!key || !label) return null;
+  const share = num(o.share);
   return {
     key,
     label,
     count: Math.max(0, Math.round(num(o.count) ?? 0)),
-    share: Math.min(100, Math.max(0, num(o.share) ?? 0)),
+    share: share === null ? null : Math.min(100, Math.max(0, share)),
     evidence_url: str(o.evidence_url),
   };
 }
 
-/** 依篇數由多到少。後端已經排好；sort 是穩定的，同篇數保留後端給的（領域列舉的）順序 */
+/**
+ * 依篇數由多到少、同篇數照領域列舉的順序（spec：「同數依上表順序」）。後端已經排好，
+ * 這裡明確再排一次，不靠後端給的順序剛好對。
+ *
+ * 占比缺了就用篇數 ÷ 各領域篇數的總和補：每篇基礎報導剛好一個主領域，總和就是分母。
+ */
 function normalizeDistribution(raw: unknown): TopicShare[] {
-  return (Array.isArray(raw) ? raw : [])
+  const rows = (Array.isArray(raw) ? raw : [])
     .map(normalizeTopicShare)
-    .filter((t): t is TopicShare => t !== null)
-    .sort((a, b) => b.count - a.count);
+    .filter((t): t is RawTopicShare => t !== null);
+  const total = rows.reduce((sum, t) => sum + t.count, 0);
+  return rows
+    .map((t) => ({ ...t, share: t.share ?? (total > 0 ? (t.count / total) * 100 : 0) }))
+    .sort((a, b) => b.count - a.count || topicOrder(a.key) - topicOrder(b.key));
 }
 
 function normalizeClassifier(raw: unknown): TopicClassifier | null {
   if (!raw || typeof raw !== 'object') return null;
   const o = raw as Record<string, unknown>;
-  let accuracy = num(o.accuracy);
-  if (accuracy === null) return null;
-  // spec 的準確率是 0～1（門檻寫成 0.8）。萬一後端給的是 0～100 也讀得對：
-  // 大於 1 的只可能是百分比；而 0～1 之間的百分比（不到 1%）本來就過不了門檻，
-  // 兩種讀法不會讓同一個數字一個上線、一個不上線。
-  if (accuracy > 1) accuracy /= 100;
+  const accuracy = num(o.accuracy);
+  // 契約是 0～1（TopicEvaluation 存的、門檻寫成 0.8）。超出範圍的不猜它是不是百分比：
+  // 「85」讀成 85% 就讓一個格式錯的回應通過了門檻。讀不懂就當作沒有通過，整塊不上線
+  if (accuracy === null || accuracy < 0 || accuracy > 1) return null;
   return {
     name: str(o.name),
-    accuracy: Math.min(1, Math.max(0, accuracy)),
+    accuracy,
     labeled: Math.max(0, Math.round(num(o.labeled) ?? 0)),
     evaluated_at: str(o.evaluated_at),
   };
@@ -565,9 +576,11 @@ function fixtureProfile(personId: number, query: ProfileQuery): Result<unknown> 
       blocks: picked.p.blocks.map((b) => {
         // 具體度與議題分布只算單獨發言、有摘要卡的文章，證據清單也要用同一組篩選
         const base = b.key === 'specificity' || b.key === 'topics' ? `${evidence}&solo=1&brief=1` : evidence;
+        // 議題的指標只算分過類的，再多帶 topic=any（跟後端一樣），篇數才等於 n
+        const indicatorUrl = b.key === 'topics' ? `${base}&topic=${ANY_TOPIC}` : base;
         return {
           ...b,
-          indicators: b.indicators.map((i) => ({ ...i, evidence_url: base })),
+          indicators: b.indicators.map((i) => ({ ...i, evidence_url: indicatorUrl })),
           ...(b.distribution ? { distribution: fixtureDistribution(b.distribution, base) } : {}),
         };
       }),
