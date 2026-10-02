@@ -263,7 +263,7 @@ uv run --group api serve_api.py
 | 端點 | 說明 |
 |---|---|
 | `GET /health` | Ollama 是否連得上、目前忙不忙 |
-| `POST /jobs` | `{url, detailed, min_slides, max_slides}` → `202 {id}`（議題分類工作見下） |
+| `POST /jobs` | `{url, detailed, min_slides, max_slides}` → `202 {id}`（議題分類與追問判斷工作見下） |
 | `GET /jobs/{id}` | 進度與結果（`kind` 是工作種類） |
 | `DELETE /jobs/{id}` | 取消 |
 
@@ -286,6 +286,25 @@ uv run --group api serve_api.py
 - `classifier` 是「模型#提示詞版本#提示指紋」，新聞服務靠它分辨哪些結果是評估過的版本分的。指紋從模型實際看到的提示（提示詞範本、領域的名稱與說明、schema）和代碼算出來：新聞服務那邊改了任何一個領域的說明，名稱就跟著變，舊的評估不會被當成新清單的評估。指紋看不到的改動——解析規則、溫度、思考開關——**要手動升 `PROMPT_VERSION`**（`src/slidebox/usecases/topics.py`）
 - 主領域不在清單裡（或回應解析不出來）時工作失敗，不猜
 - 跟摘要排同一個佇列、一次只跑一個；溫度 0、關掉模型的思考，一篇約 3 秒
+
+### 追問判斷（`kind: "followup"`）
+
+同一個 `POST /jobs` 也收追問判斷工作：給一項先前的要求與同一個人後來的一篇發言，判斷後來那篇有沒有再提**同一件具體的事**（同一個要求、同一個案子；同一個領域的別件事不算），有的話從逐字稿片段抄一句當證據。哪些要求算、哪篇是候選、逐字稿取哪一段、追問率怎麼算，都是新聞服務的程式決定。
+
+```json
+{"kind": "followup",
+ "request": "要求衛福部一個月內提出長照人力補助方案",
+ "response": "部長允諾一個月內提出",
+ "card": "一句話：……\n要求：\n- ……\n各段小標：\n- ……",
+ "excerpt": "後來那篇逐字稿裡跟要求最相關的一段"}
+```
+
+- `request`（舊的要求）與 `card`（後來那篇的一句話＋要求＋各段小標）必填；`response`（官員當時的回應）與 `excerpt`（逐字稿片段）可以空；`url` 不需要（帶了就要是 http／https）
+- 上限：`excerpt` 1500 字（新聞服務挑的是一段視窗，不是整份逐字稿）、`request` 與 `response` 各 500 字、`card` 4000 字
+- 成品：`{"followed_up": true, "quote": "……", "classifier": "qwen3.5:9b#followup-v1#1a2b3c4d"}`。沒有追問時 `quote` 一律是空字串；有追問卻沒抄出引用就照實回傳——**引用是不是真的在逐字稿裡由新聞服務檢查**（落地檢查），GPU 端不改判
+- `classifier` 的做法同議題分類：「模型#提示詞版本#提示指紋」，指紋涵蓋提示詞與 schema；解析規則、溫度、思考開關改了要手動升 `PROMPT_VERSION`（`src/slidebox/usecases/followups.py`）
+- `followed_up` 不是布林值（或回應解析不出來）時工作失敗，不猜
+- 跟摘要、分類排同一個佇列、一次只跑一個；溫度 0、關掉思考、`num_ctx` 跟摘要同一個。GPU 端保留最近 1000 個判斷工作，跟分類與摘要各自計算，誰也擠不掉誰的成品
 
 **要讓 Pi 連得到這個服務，兩件事都要做**（預設只綁 loopback，所以預設狀態下 Pi 是連不到的）：
 

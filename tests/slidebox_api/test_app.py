@@ -1,16 +1,22 @@
 """HTTP 介面：用假的執行函式，不碰 Ollama 也不碰網路。"""
 from __future__ import annotations
 
+import io
+import json
 import threading
+from functools import partial
 
 import pytest
 from fastapi.testclient import TestClient
 
-from slidebox.domain.entities import TopicLabel
+from slidebox.domain.entities import FollowUpPair, TopicLabel
 from slidebox.domain.errors import OperationCancelled
+from slidebox.infrastructure import ollama_summarizer
+from slidebox.infrastructure.ollama_summarizer import OllamaFollowUpJudge
+from slidebox.usecases.followups import classifier_name as followup_classifier
 from slidebox_api.app import create_app
 from slidebox_api.jobs import JobKind, JobStatus, JobStore
-from slidebox_api.runner import JobWorker
+from slidebox_api.runner import ByKindExecutor, FollowUpExecutor, JobWorker
 
 IVOD = "https://ivod.ly.gov.tw/Play/Clip/1M/171180"
 
@@ -323,3 +329,138 @@ def test_a_topic_job_may_carry_a_url_but_only_an_http_one(kit):
     client, *_ = kit
     assert client.post("/jobs", json=_topic(url=IVOD)).status_code == 202
     assert client.post("/jobs", json=_topic(url="file:///C:/Windows/win.ini")).status_code == 422
+
+
+# --- 追問工作（kind=followup）---
+
+REQUEST = "要求衛福部一個月內提出長照人力補助方案"
+CARD = "一句話：追問長照人力補助方案進度\n各段小標：\n- 長照人力缺口"
+EXCERPT = "委員：上次要求的長照人力補助方案到現在還沒看到。"
+
+
+def _followup(**overrides) -> dict:
+    body = {"kind": "followup", "request": REQUEST, "response": "部長允諾一個月內提出",
+            "card": CARD, "excerpt": EXCERPT}
+    body.update(overrides)
+    return body
+
+
+def _without(body: dict, field: str) -> dict:
+    return {k: v for k, v in body.items() if k != field}
+
+
+def test_a_followup_job_needs_no_url(kit):
+    client, *_ = kit
+    response = client.post("/jobs", json=_followup())
+    assert response.status_code == 202
+    assert (response.json()["kind"], response.json()["url"]) == ("followup", "")
+
+
+def test_a_followup_job_carries_its_pair_to_the_worker(kit):
+    client, store, *_ = kit
+    job_id = client.post("/jobs", json=_followup()).json()["id"]
+    assert store.get(job_id).followup == FollowUpPair(
+        request=REQUEST, response="部長允諾一個月內提出", card=CARD, excerpt=EXCERPT)
+
+
+def test_deck_and_topic_jobs_carry_no_pair(kit):
+    """摘要與分類工作不會多帶一份用不到的判斷內容，送了也一樣。"""
+    client, store, *_ = kit
+    deck = client.post("/jobs", json={"url": IVOD, "request": REQUEST, "card": CARD}).json()
+    topic = client.post("/jobs", json=_topic(request=REQUEST, card=CARD)).json()
+    assert store.get(deck["id"]).followup is None
+    assert store.get(topic["id"]).followup is None
+
+
+@pytest.mark.parametrize("field", ["request", "card"])
+@pytest.mark.parametrize("value", ["", "  \n"])
+def test_a_followup_job_without_a_request_or_a_card_is_refused(kit, field, value):
+    """沒有舊的要求就沒有東西可追；沒有新文章的摘要卡，模型只能憑一段逐字稿猜。"""
+    client, *_ = kit
+    assert client.post("/jobs", json=_followup(**{field: value})).status_code == 422
+
+
+@pytest.mark.parametrize("field", ["request", "card"])
+def test_a_followup_job_that_omits_a_required_field_is_refused(kit, field):
+    client, *_ = kit
+    assert client.post("/jobs", json=_without(_followup(), field)).status_code == 422
+
+
+@pytest.mark.parametrize("field", ["response", "excerpt"])
+def test_the_response_and_the_excerpt_may_be_left_out(kit, field):
+    """官員當場可能沒回應；逐字稿可能挑不出片段——那一對照樣要判。"""
+    client, store, *_ = kit
+    response = client.post("/jobs", json=_without(_followup(), field))
+    assert response.status_code == 202
+    assert getattr(store.get(response.json()["id"]).followup, field) == ""
+
+
+def test_the_excerpt_is_capped_at_1500_characters(kit):
+    """新聞服務挑的是一段視窗，不是整份逐字稿；長輸入判出來的結果沒有人評估過。"""
+    client, *_ = kit
+    assert client.post("/jobs", json=_followup(excerpt="字" * 1500)).status_code == 202
+    assert client.post("/jobs", json=_followup(excerpt="字" * 1501)).status_code == 422
+
+
+@pytest.mark.parametrize("field,limit", [("request", 500), ("response", 500),
+                                         ("card", 4000)])
+def test_the_other_fields_are_capped_too(kit, field, limit):
+    """擋的是誤送整份逐字稿的請求，不是正常的要求或摘要卡（那些只有幾十到幾百字）。"""
+    client, *_ = kit
+    assert client.post("/jobs", json=_followup(**{field: "字" * limit})).status_code == 202
+    assert client.post("/jobs", json=_followup(**{field: "字" * (limit + 1)})).status_code == 422
+
+
+def test_a_followup_job_may_carry_a_url_but_only_an_http_one(kit):
+    client, *_ = kit
+    assert client.post("/jobs", json=_followup(url=IVOD)).status_code == 202
+    assert client.post("/jobs", json=_followup(url="file:///C:/Windows/win.ini")).status_code == 422
+
+
+def test_the_listing_shows_followup_jobs_by_kind(kit):
+    client, *_ = kit
+    client.post("/jobs", json={"url": IVOD})
+    client.post("/jobs", json=_topic())
+    client.post("/jobs", json=_followup())
+    assert [item["kind"] for item in client.get("/jobs").json()] == ["followup", "topic", "deck"]
+
+
+def test_a_deck_job_with_followup_fields_still_requires_a_url(kit):
+    """判斷工作可以不帶網址，不代表摘要工作也可以。"""
+    client, *_ = kit
+    body = _without(_followup(), "kind")
+    assert client.post("/jobs", json=body).status_code == 422
+
+
+def test_a_topic_job_is_validated_as_before_even_with_followup_fields(kit):
+    client, *_ = kit
+    assert client.post("/jobs", json=_topic(text="", request=REQUEST, card=CARD)).status_code == 422
+
+
+def test_a_followup_job_round_trips_from_post_to_result(monkeypatch):
+    """從 POST 到 GET 走一遍真正的分派、執行函式、Ollama 判斷器與成品格式，只把
+    送給 Ollama 的那一個 HTTP 請求換掉：新聞服務讀的就是這一份 JSON。"""
+    reply = json.dumps({"followed_up": True, "quote": " 上次要求的長照人力補助方案到現在還沒看到 "},
+                       ensure_ascii=False)
+    sent = {}
+
+    def fake_post(url, body, timeout):
+        sent["body"] = body
+        line = json.dumps({"message": {"content": reply}, "done": True}, ensure_ascii=False)
+        return io.BytesIO(line.encode("utf-8") + b"\n")
+
+    monkeypatch.setattr(ollama_summarizer, "_post_json", fake_post)
+    store = JobStore()
+    judge = FollowUpExecutor(partial(OllamaFollowUpJudge, "http://gpu:11434", num_ctx=32768),
+                             "qwen3.5:9b")
+    worker = JobWorker(store, ByKindExecutor({JobKind.FOLLOWUP: judge}))
+    with TestClient(_app(store, worker)) as client:
+        worker.stop()
+        job_id = client.post("/jobs", json=_followup()).json()["id"]
+        worker.run_once()
+        body = client.get(f"/jobs/{job_id}").json()
+    assert body["status"] == "done"
+    assert body["result"] == {"followed_up": True,
+                              "quote": "上次要求的長照人力補助方案到現在還沒看到",
+                              "classifier": followup_classifier("qwen3.5:9b")}
+    assert EXCERPT in sent["body"]["messages"][1]["content"]
