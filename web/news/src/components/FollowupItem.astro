@@ -1,0 +1,60 @@
+---
+/**
+ * 追問清單的一項：期限、要求、到期日、出自哪一篇；已追問的再附上再提的那篇與引用。
+ *
+ * 期限的小框跟報導頁摘要卡的「要求與回應」同一個樣子：讀者在報導頁看過「一個月內」那個框，
+ * 到這裡一眼就認得是同一項要求。狀態不在每一項上重寫（分組的標題已經寫了），也不上顏色。
+ */
+import type { FollowupArticle, FollowupAsk } from '../lib/types';
+import { displayTitle, formatDate } from '../lib/format';
+import { articleHref } from '../lib/followups';
+
+interface Props {
+  ask: FollowupAsk;
+}
+
+const { ask } = Astro.props;
+
+// 連結的字寫日期就好：同一個人的報導，標題都是「姓名－第幾次會議」，日期才分得出是哪一次。
+// 完整標題放在 title，滑過看得到
+const linkText = (ref: FollowupArticle) => (ref.date ? `${formatDate(ref.date)}的質詢` : displayTitle(ref.title) || '那篇報導');
+const link = 'text-accent underline decoration-accent/40 underline-offset-4 transition-colors hover:decoration-accent';
+const followed = ask.followed_by;
+---
+
+<li class="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 py-3">
+  <span
+    class="mt-[3px] max-w-[7.5em] self-start rounded-md border border-line px-1.5 text-center text-[0.68rem] leading-[1.6] tracking-[0.1em] text-muted"
+  >
+    <span class="sr-only">期限：</span>{ask.deadline || '有期限'}
+  </span>
+  <div class="min-w-0">
+    <p class="text-[0.88rem] leading-relaxed text-ink-2">{ask.request}</p>
+    <p class="mt-1 flex flex-wrap gap-x-2 gap-y-0.5 text-[0.72rem] text-muted">
+      <span class="tabular">到期 {formatDate(ask.due_date)}</span>
+      {/* 手機上兩段一定各佔一行，點會掛在行尾，只在寬一點的螢幕顯示（同側寫的「資料涵蓋 · 計算於」） */}
+      <span aria-hidden="true" class="hidden text-line sm:inline">·</span>
+      <span>
+        出自
+        <a href={articleHref(ask.article)} class={link} title={displayTitle(ask.article.title) || undefined}>
+          {linkText(ask.article)}
+        </a>
+      </span>
+    </p>
+    {
+      followed && (
+        <div class="mt-2 rounded-lg border-l-2 border-line bg-bg-soft/70 px-3 py-2">
+          <p class="text-[0.72rem] text-muted">
+            <a href={articleHref(followed)} class={link} title={displayTitle(followed.title) || undefined}>
+              {linkText(followed)}
+            </a>
+            {ask.quote ? '再提到這件事：' : '再提到這件事。'}
+          </p>
+          {ask.quote && (
+            <blockquote class="mt-1 text-[0.82rem] leading-relaxed text-ink-2">「{ask.quote}」</blockquote>
+          )}
+        </div>
+      )
+    }
+  </div>
+</li>
