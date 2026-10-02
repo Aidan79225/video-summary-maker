@@ -601,13 +601,31 @@ def session_rows(session: Session, legislators: Legislators, now: datetime,
         rows: list[ProfileStat] = []
         for indicator in INDICATORS:
             rows.extend(profiles._rank(indicator, session, tallies, now))
+        summary = records.summary()
         if alignment is not None:
-            rows.extend(_alignment_rows(records, tallies, alignment, now))
-        return rows, records.summary()
+            alignment_rows, problem = _alignment_or_nothing(records, tallies, alignment, now)
+            rows.extend(alignment_rows)
+            summary += problem
+        return rows, summary
     except Exception:  # noqa: BLE001
         # 重算是整批的：這裡出錯不能讓後面的會期（包括市議會的）也停在昨天。這個會期先不給院內紀錄
         logger.exception("%s 的院內紀錄算不出來，這個會期先不給院內紀錄區塊", session.name)
         return [], f"{session.name} 院內紀錄：計算失敗（見 log），這次不給院內紀錄區塊"
+
+
+def _alignment_or_nothing(records: SessionRecords, tallies: dict[int, _Tally], alignment: Alignment,
+                          now: datetime) -> tuple[list[ProfileStat], str]:
+    """一致率的列，與報告那一行要補的字（沒事是空字串）。
+
+    一致率是院內紀錄裡唯一靠模型的卡，多讀一張 BillTopic 表：它出錯時只少這一張，不能連另外八張
+    只靠紀錄計數的卡也一起拿掉。這個會期沒有一致率列，API 就不給這張卡（同門檻沒過）；
+    eval_bill_topics 的 alignment_stats_stale 也看得出「有院內紀錄、卻沒有一致率列」要重算。
+    """
+    try:
+        return _alignment_rows(records, tallies, alignment, now), ""
+    except Exception:  # noqa: BLE001
+        logger.exception("%s 的提案與質詢一致率算不出來，這個會期先不給這張卡", records.session.name)
+        return [], "；提案與質詢一致率計算失敗（見 log），這次不給這張卡"
 
 
 def _alignment_rows(records: SessionRecords, tallies: dict[int, _Tally], alignment: Alignment,

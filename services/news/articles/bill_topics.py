@@ -274,7 +274,10 @@ def evaluate(client: GpuApiClient, timeout: float | None = None,
     usable = [label for label in labelled if label.bill.name.strip()]
     report = EvaluationReport(skipped=len(labelled) - len(usable))
     if not usable:
-        raise EvaluationAborted("還沒有任何已標註的議案：先跑 sample_bill_topic_labels，再到 admin 標註")
+        # 中止時報告印不出來：有標註、只是名稱全是空的，要在訊息裡講，不然看起來像「還沒標」
+        blank = f"（已標註的 {report.skipped} 件議案名稱都是空的）" if report.skipped else ""
+        raise EvaluationAborted(f"還沒有任何可評估的已標註議案{blank}：先跑 sample_bill_topic_labels，"
+                                "再到 admin 標註")
 
     outcomes: list[_Outcome] = []
     classifiers: set[str] = set()

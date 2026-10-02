@@ -11,8 +11,9 @@ from unittest import mock
 
 from django.core.management import call_command
 from django.core.management.base import CommandError
-from django.db import OperationalError
+from django.db import OperationalError, connection
 from django.test import SimpleTestCase, TestCase
+from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 
 from articles import bill_topics
@@ -211,6 +212,17 @@ class RenamedBillTests(TestCase):
         self.assertEqual(gpu.texts, ["議案名稱：welfare 長照法"])
         self.assertEqual(BillTopic.objects.get(bill=renamed).primary, "welfare")
 
+    def test_forgetting_many_bills_goes_in_chunks(self):
+        """一屆七千多件：SQLite 的綁定參數有上限，一次 DELETE 只帶 _ID_CHUNK 個 id。"""
+        bills = [_bill() for _ in range(5)]
+        for bill in bills:
+            BillTopic.objects.create(bill=bill, primary="finance", classifier=CLASSIFIER, labeled_at=NOW)
+        with mock.patch.object(bill_topics, "_ID_CHUNK", 2), CaptureQueriesContext(connection) as ctx:
+            self.assertEqual(bill_topics.forget(b.id for b in bills[:4]), 4)
+        deletes = [q for q in ctx.captured_queries if q["sql"].lstrip().upper().startswith("DELETE")]
+        self.assertEqual(len(deletes), 2)
+        self.assertEqual(list(BillTopic.objects.values_list("bill_id", flat=True)), [bills[4].id])
+
     def test_a_result_for_a_name_that_changed_while_waiting_is_not_saved(self):
         bill = _bill("finance 舊的名稱")
         gpu = FakeTopicGpu()
@@ -362,6 +374,22 @@ class EvaluateTests(TestCase):
             evaluate(FakeTopicGpu(answer=lambda text: JobFailed("回 422")))
         self.assertIn("422", str(ctx.exception))
         self.assertFalse(BillTopicEvaluation.objects.exists())
+
+    def test_labels_whose_bill_name_became_blank_are_skipped_and_reported(self):
+        """LYAPI 把名稱改成空的：沒有輸入可以分類，不送 GPU、不進分母，報告講出略過幾件。"""
+        kept = self._labelled(2)
+        blank = self._labelled(1)[0]
+        LyBill.objects.filter(pk=blank.pk).update(name="  ")
+        gpu = FakeTopicGpu()
+        report = evaluate(gpu)
+        self.assertEqual(gpu.texts, [bill_input(b.name) for b in kept])
+        self.assertEqual((report.skipped, report.evaluation.labeled), (1, 2))
+        self.assertIn("略過 1 件已標註、但議案名稱是空的", str(report))
+        # 全都是空的：中止，訊息要講出原因，不是「還沒標」
+        LyBill.objects.filter(pk__in=[b.pk for b in kept]).update(name="")
+        with self.assertRaises(EvaluationAborted) as ctx:
+            evaluate(FakeTopicGpu())
+        self.assertIn("3 件議案名稱都是空的", str(ctx.exception))
 
     def test_evaluating_does_not_touch_the_bills_topics(self):
         bill = self._labelled(1)[0]

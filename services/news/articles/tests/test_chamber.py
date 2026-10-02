@@ -13,7 +13,7 @@ from unittest import mock
 from urllib.parse import parse_qsl, urlsplit
 
 from django.core.management import call_command
-from django.db import connection
+from django.db import OperationalError, connection
 from django.test import SimpleTestCase, TestCase
 from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
@@ -735,6 +735,24 @@ class AlignmentTests(TestCase):
         compute_profiles()
         self.assertFalse(chamber.alignment_stats_stale())
 
+    def test_a_failure_in_the_alignment_keeps_the_other_eight_cards(self):
+        """一致率是唯一靠模型、多讀 BillTopic 的卡：它出錯時只少這一張，出席與提案的卡照給。"""
+        self._both_gates()
+        _speeches("甲", *["finance"] * 5)
+        _proposals("甲", *["finance"] * 5)
+        locked = OperationalError("database is locked")
+        with mock.patch.object(chamber, "_alignment_rows", side_effect=locked), \
+                self.assertLogs("articles.chamber", "ERROR"):
+            report = compute_profiles()
+        self.assertEqual(_values("bills_proposed")["甲"], (5.0, 5))
+        self.assertFalse(ProfileStat.objects.filter(indicator="proposal_alignment").exists())
+        self.assertIn("提案與質詢一致率計算失敗", str(report))
+        self.assertNotIn("院內紀錄：計算失敗", str(report))
+        # 有院內紀錄、卻沒有一致率列：eval_bill_topics 看得出要重算
+        self.assertTrue(chamber.alignment_stats_stale())
+        compute_profiles()
+        self.assertEqual(_values("proposal_alignment")["甲"], (100.0, 5))
+
     def test_the_query_count_does_not_grow_with_the_number_of_bills(self):
         """議案的領域一個會期查一次，不逐件查（SD 卡上的 SQLite）。"""
         self._both_gates()
@@ -856,3 +874,20 @@ class AlignmentApiTests(TestCase):
         self.assertIsNone(self._card("甲"))
         ProfileStat.objects.filter(indicator="proposal_alignment").update(classifier=STAMP)
         self.assertIsNotNone(self._card("甲"))
+
+    def test_no_card_when_the_session_has_no_alignment_row(self):
+        """兩道門檻都過，但這個會期沒有一致率列（例如那次一致率算失敗）：不給卡，其他院內紀錄照給。"""
+        ProfileStat.objects.filter(indicator="proposal_alignment").delete()
+        self.assertIsNone(self._card("甲"))
+        self.assertIn("bills_proposed", [i["key"] for i in self._chamber("甲")["indicators"]])
+
+    def test_a_session_with_records_but_no_articles_says_too_few_speeches(self):
+        """剛開議、只有院內紀錄的會期：沒有議題分布（也就沒有聚焦度那一列），質詢是 0 篇、不是沒算。"""
+        s6 = _session("第11屆第6會期")
+        _proposals("甲", "finance", "welfare", session=6)
+        compute_profiles()
+        res = self.client.get(f"/api/people/{self.m['甲'].person_id}/profile", {"session": s6.id}).json()
+        self.assertEqual([b["key"] for b in res["blocks"]], ["chamber", "followup"])
+        card = next(i for i in res["blocks"][0]["indicators"] if i["key"] == "proposal_alignment")
+        self.assertEqual((card["value"], card["n"], card["speech_n"], card["reason"]),
+                         (None, 2, 0, "few_speeches"))

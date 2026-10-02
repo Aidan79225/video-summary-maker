@@ -493,6 +493,8 @@ uv run python manage.py classify_bill_topics --reclassify   # 連已經有的也
 - **兩道門檻都過**才算：立法院的議題分類（`eval_topics`，質詢摘要）與議案分類（`eval_bill_topics`）。兩個分類器的名字可以不同。任何一道沒過，就沒有一致率。
 - 指標在 `chamber` 區塊、提案組（主提案、連署、三讀）的最後一張：`proposal_alignment`「提案與質詢一致率」（%），n 的單位是件，另有 `speech_n`（質詢的基礎文章數，卡片說明寫「提案 n 件、質詢 speech_n 篇」；其他指標是 `null`）。兩道門檻沒過時這張卡整個不出現。
 - 存進 `ProfileStat` 時 `classifier` 記「議案分類器｜質詢分類器」，API 只在兩個都等於現在上線的版本時給這張卡：評估剛換版本、還沒重算的空窗裡，不把舊版本的數字掛上新版本的名字。
+- 重算時一致率算不出來（例如 SD 卡上的 SQLite 鎖住）只少這一張卡，院內紀錄的另外八張照給；重算報告那個會期的一行會寫「提案與質詢一致率計算失敗」，下一次重算（每晚，或 `eval_bill_topics` 看到少了一致率列時）補回來。
+- 只有院內紀錄、還沒有任何文章的會期，質詢是 0 篇：卡片照給，值是 `null`、`reason` 是 `few_speeches`。
 - 證據網址是 `/records/{person_id}?session={id}&kind=proposed`：主提案清單上每件分過類的議案標出領域（`topic`），標了領域的筆數就是 n；回應另有 `bill_classifier`（`{name, accuracy, labeled, evaluated_at}`）。標領域只要議案分類通過就給，不看議題分類。
 - **限制**：議案名稱很短，「○○法部分條文修正草案」只看得出是哪一部法；委員常一次提一系列同領域的案，提案的分布會被同一件事撐大；質詢只算有通過版本分類的單獨發言。
 
