@@ -491,6 +491,22 @@ class SaveTests(TestCase):
         save(self._fetched(session=2), now=NOW)
         self.assertEqual(LyVote.objects.get(code="1141921_00002_591").date, date(2025, 1, 21))
 
+    def test_a_vote_without_any_ballot_is_kept_and_reported(self):
+        """第 11 屆有一筆表決的投票委員是空的（2026-10-03 實測，原樣存成 fixture）：照樣存，報告點出來；
+        指標那邊不算進任何人的分母（test_chamber）。"""
+        routes = _real_routes()
+        votes = _rows("lyapi_votes_11.json", "votes") + _rows("lyapi_votes_11_without_ballots.json",
+                                                              "votes")
+        routes[("votes", None, 1)] = _payload("votes", votes)
+        source, _, _ = _source(routes)
+        report = save(source.fetch(), now=NOW)
+        vote = LyVote.objects.get(code="1139101_00002_466")
+        self.assertEqual((vote.yes, vote.no, vote.abstain, vote.voters, vote.date),
+                         ([], [], [], [], date(2024, 11, 8)))
+        self.assertEqual(report.without_ballots, 1)
+        self.assertIn("沒有任何人的票的表決 1 次", str(report))
+        self.assertNotIn("沒有任何人的票", str(save(self._fetched(), now=NOW)))
+
     def test_names_that_match_no_term_are_reported_but_caucus_proposers_are_not(self):
         person = Person.objects.create(name="李坤城")
         Membership.objects.create(person=person, source="ly", name="李坤城")

@@ -32,11 +32,12 @@ def _legislator(name, caucus=KMT, start=None, end=None, committees=(), person=No
                                      start_date=start, end_date=end, committees=list(committees))
 
 
-def _meeting(day, attendees, kind="plenary", units=("院會",), session=5):
+def _meeting(day, attendees, kind="plenary", units=("院會",), session=5, later_days=()):
+    """later_days：開好幾天的會議的其他天（院會多半是週五、下週二）。"""
     n = next(_ids)
     return LyMeeting.objects.create(
         code=f"{kind}-{n}", kind=kind, term=11, session_number=session, date=date.fromisoformat(day),
-        dates=[day], name=f"第11屆第{session}會期第{n}次會議", units=list(units),
+        dates=[day, *later_days], name=f"第11屆第{session}會期第{n}次會議", units=list(units),
         attendees=None if attendees is None else list(attendees),
         url=f"https://ppg.ly.gov.tw/ppg/sittings/{n}/details", synced_at=NOW)
 
@@ -109,6 +110,25 @@ class AttendanceTests(TestCase):
         _meeting("2026-03-02", ["甲"], kind="committee", units=["財政委員會"])
         compute_profiles()
         self.assertEqual(_values("committee_attendance"), {"甲": (None, 0)})
+
+    def test_a_meeting_over_several_days_counts_if_he_served_on_any_of_them(self):
+        """院會開週五與下週二：週一到職的遞補委員簽了週二的到，那一場是他在任期間的會議、他有出席；
+        週六離職的人週五還在，那一場也算他的。只看第一天的話，遞補的人那一場整個不見了。"""
+        _legislator("甲")
+        _legislator("乙", start=date(2026, 3, 9))                 # 週一到職
+        _legislator("丙", end=date(2026, 3, 7))                   # 週六離職
+        _meeting("2026-03-06", ["甲", "丙", "乙"], later_days=["2026-03-10"])
+        _meeting("2026-03-13", ["甲"], later_days=["2026-03-17"])
+        compute_profiles()
+        self.assertEqual(_values("plenary_attendance"),
+                         {"甲": (100.0, 2), "乙": (50.0, 2), "丙": (100.0, 1)})
+
+    def test_damaged_meeting_days_fall_back_to_the_first_day(self):
+        _legislator("甲")
+        meeting = _meeting("2026-03-06", ["甲"])
+        LyMeeting.objects.filter(pk=meeting.pk).update(dates=["不是日期"])
+        compute_profiles()
+        self.assertEqual(_values("plenary_attendance"), {"甲": (100.0, 1)})
 
     def test_spellings_differ_between_the_roster_and_the_sign_in_list(self):
         _legislator("伍麗華Saidhai‧Tahovecahe", caucus=DPP)
@@ -191,6 +211,13 @@ class VoteTests(TestCase):
         compute_profiles()
         self.assertEqual(_values("caucus_defections")["己"], (0.0, 0))
         self.assertEqual(_values("caucus_agreement")["己"], (100.0, 1))
+
+    def test_a_vote_without_any_ballot_counts_for_nobody(self):
+        """一張記名的票都沒有的表決（LYAPI 第 11 屆有一筆）是「不知道」，不是全院都沒投。"""
+        _vote("2026-03-13")
+        compute_profiles()
+        self.assertEqual(_values("vote_participation")["甲"], (100.0, 4))
+        self.assertEqual(_values("caucus_agreement")["甲"], (100.0, 3))
 
     def test_too_small_a_sample_gets_no_percentile(self):
         stats = _stats("caucus_agreement")
@@ -341,6 +368,8 @@ class ChamberApiTests(TestCase):
             _meeting(day, ["甲", "丙"], kind="committee", units=["財政委員會"])
             _meeting(day, ["丁"], kind="committee", units=["經濟委員會", "財政委員會"])
         _meeting("2026-05-20", None, kind="committee", units=["財政委員會"])
+        # 一張票都沒有的表決：不在任何人的清單、也不在任何人的分母裡
+        _vote("2026-03-10")
         _bill(["甲"], ["乙", "丙"], status="三讀", day="2026-03-04")
         _bill(["甲", "丁"], ["戊"], status="審查完畢", day="2026-05-06")
         _bill(["台灣民眾黨立法院黨團"], day="2026-05-07")
@@ -405,6 +434,16 @@ class ChamberApiTests(TestCase):
             self.assertEqual((got[key]["value"], got[key]["n"], got[key]["reason"]),
                              (None, 0, "no_caucus"))
         self.assertEqual(got["vote_participation"]["reason"], "")
+
+    def test_without_committee_data_the_reason_says_so(self):
+        """庚的名冊上沒有第 5 會期的委員會：委員會出席率是「沒有資料」。辛有委員會、只是那個委員會
+        沒有會議：那是樣本不足，不給原因。"""
+        self.m["辛"] = _legislator("辛", committees=["第11屆第5會期：交通委員會"])
+        compute_profiles()
+        got = {i["key"]: i for i in self._chamber("庚")["indicators"]}["committee_attendance"]
+        self.assertEqual((got["value"], got["n"], got["reason"]), (None, 0, "no_committee_data"))
+        other = {i["key"]: i for i in self._chamber("辛")["indicators"]}["committee_attendance"]
+        self.assertEqual((other["value"], other["n"], other["reason"]), (None, 0, ""))
 
     def test_every_count_can_be_clicked_back_to_exactly_that_many_records(self):
         """證據一致性：每個指標的紀錄清單筆數等於它的 n（分母）或值（計數）。"""

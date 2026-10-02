@@ -521,6 +521,8 @@ class RecordsReport:
     committee: int = 0
     # 還沒有出席紀錄的會議（委員會的議事錄常常晚好幾週）
     without_attendance: int = 0
+    # 一張記名的票都沒有的表決（第 11 屆有一筆）：不知道誰投了什麼，不計入投票出席率
+    without_ballots: int = 0
     bills: int = 0
     votes: int = 0
     sessions_created: list[str] = field(default_factory=list)
@@ -536,7 +538,9 @@ class RecordsReport:
         scope = f"第{self.term}屆" + (f"第{self.session}會期" if self.session else "（全部會期）")
         lines = [f"立法院院內紀錄 {scope}：院會 {self.plenary} 場、委員會（含聯席會議）{self.committee} 場、"
                  f"委員提案 {self.bills} 件、記名表決 {self.votes} 次；還沒有出席紀錄的會議 "
-                 f"{self.without_attendance} 場（不計入出席率）"]
+                 f"{self.without_attendance} 場（不計入出席率）"
+                 + (f"；沒有任何人的票的表決 {self.without_ballots} 次（不計入投票出席率）"
+                    if self.without_ballots else "")]
         if self.sessions_created:
             lines.append(f"新建會期：{'、'.join(self.sessions_created)}")
         if self.removed:
@@ -577,6 +581,7 @@ def save(fetched: FetchedRecords, now: datetime | None = None) -> RecordsReport:
     report.committee = len(fetched.meetings) - report.plenary
     report.without_attendance = sum(1 for m in fetched.meetings if m.attendees is None)
     report.bills, report.votes = len(fetched.bills), len(fetched.votes)
+    report.without_ballots = sum(1 for v in fetched.votes if not (v.yes or v.no or v.abstain))
     report.unknown_names = _unknown_names(fetched)
     return report
 

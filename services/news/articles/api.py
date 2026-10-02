@@ -146,8 +146,8 @@ class IndicatorOut(Schema):
     # 網站的相對路徑：點進去就是算出這個數字的那幾篇
     evidence_url: str
     # 沒有值時的原因（委員會職掌：「no_committee_data」＝有分類過的報導、但沒有他這個會期的委員會
-    # 資料；黨團一致率與跨黨投票：「no_caucus」＝沒有參加黨團）。頁面用它說清楚是哪一種「沒有」，
-    # 而不是一律寫樣本不足
+    # 資料；委員會出席率：同一個「no_committee_data」＝名冊上沒有他這個會期的委員會；黨團一致率與
+    # 跨黨投票：「no_caucus」＝沒有參加黨團）。頁面用它說清楚是哪一種「沒有」，而不是一律寫樣本不足
     reason: str = ""
 
 
@@ -625,7 +625,8 @@ def _chamber_block(person: Person, mine: dict[str, ProfileStat], session: Sessio
     """院內紀錄區塊。呼叫端已確認：這個會期有他的院內紀錄指標（同步過紀錄、而且重算過）。
 
     證據網址是網站的紀錄清單頁（/records/…），不是發言者頁。沒有參加黨團的人，一致率與跨黨投票的
-    reason 是 no_caucus：compute 把他的跨黨投票數存成 null（有黨團、從不跨黨的人是 0）。
+    reason 是 no_caucus：compute 把他的跨黨投票數存成 null（有黨團、從不跨黨的人是 0）。委員會出席率
+    n 是 0、而且名冊上沒有他這個會期的委員會（中途離職的人常常沒有）：reason 是 no_committee_data。
     """
     defections = mine.get(chamber.CAUCUS_DEFECTIONS.key)
     no_caucus = defections is not None and defections.value is None
@@ -635,6 +636,9 @@ def _chamber_block(person: Person, mine: dict[str, ProfileStat], session: Sessio
         out["evidence_url"] = chamber.evidence_url(person.id, session.id, indicator.key)
         if no_caucus and indicator.key in chamber.CAUCUS_KEYS:
             out["reason"] = chamber.NO_CAUCUS
+        if (indicator is chamber.COMMITTEE_ATTENDANCE and out["n"] == 0
+                and not chamber.has_committee_data(person.id, session)):
+            out["reason"] = chamber.NO_COMMITTEE_DATA
         indicators.append(out)
     return {"key": chamber.CHAMBER, "title": chamber.TITLE, "indicators": indicators}
 

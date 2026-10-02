@@ -140,6 +140,20 @@ def evidence_url(person_id: int, session_id: int, indicator_key: str) -> str:
     return f"/records/{person_id}?session={session_id}&kind={KIND_OF_INDICATOR[indicator_key]}"
 
 
+# 委員會出席率沒有值、因為名冊上沒有他這個會期的委員會（中途離職、或 LYAPI 沒給）：頁面寫「沒有他這個
+# 會期的委員會資料」，不寫樣本不足（同議題分布的委員會職掌）
+NO_COMMITTEE_DATA = "no_committee_data"
+
+
+def has_committee_data(person_id: int, session: Session) -> bool:
+    """名冊上有沒有他這個會期的委員會。跟 _TermRoster.committees 同一個判斷（換黨切段的任期合起來看），
+    只是給 API 用：一個人一次查詢，不必為了一個原因把整個會期的紀錄讀進來。"""
+    entries = Membership.objects.filter(person_id=person_id, source=ArticleSource.LY).values_list(
+        "committees", flat=True)
+    return any(parsed is not None and parsed[0] == session.name
+               for committees in entries for parsed in map(topics.parse_committee, committees or []))
+
+
 # --- 立委的任期 ---
 
 
@@ -197,15 +211,19 @@ class _TermRoster:
             self._by_key[seat.key].append(seat)
             self._by_person[seat.person_id].append(seat)
 
-    def person_for(self, name: str, day: date | None) -> int | None:
-        """紀錄上的名字 → 那天坐在那個位子上的人。沒有日期（少數議案）就不看任期。"""
+    def person_during(self, name: str, days: Sequence[date]) -> int | None:
+        """紀錄上的名字 → 這幾天裡任何一天坐在那個位子上的人（議案、表決是一天，會議可能好幾天）。
+        沒有日期（少數議案）就不看任期。"""
         seats = self._by_key.get(name_key(name), ())
-        seat = _latest(s for s in seats if day is None or s.covers(day))
+        seat = _latest(s for s in seats if not days or any(s.covers(d) for d in days))
         return seat.person_id if seat else None
 
-    def serving(self, person_id: int, day: date | None) -> bool:
-        """他那天在不在任。日期不知道就當在任（只有 LYAPI 資料不全時才會發生）。"""
-        return day is None or any(s.covers(day) for s in self._by_person.get(person_id, ()))
+    def serving_during(self, person_id: int, days: Sequence[date]) -> bool:
+        """這幾天裡他有沒有任何一天在任。院會多半開兩、三天（週五、下週二）：遞補的人第二天才到職、
+        離職的人第一天還在，那一場都是他在任期間的會議——只看第一天的話，第二天到職、也簽了到的人
+        那一場就不見了。日期不知道就當在任（只有 LYAPI 資料不全時才會發生）。"""
+        seats = self._by_person.get(person_id, ())
+        return not days or any(s.covers(d) for s in seats for d in days)
 
     def caucus(self, person_id: int, day: date | None) -> str:
         """他那天所屬的黨團（同一會期換過黨團的話，看那一天的那段任期）。"""
@@ -275,6 +293,34 @@ def _majority(counts: Counter) -> str | None:
     return ranked[0][0]
 
 
+def _one_day(day: date | None) -> tuple[date, ...]:
+    """單一日期 → _people／serving_during 要的「幾天」。沒有日期是空的（不看任期）。"""
+    return () if day is None else (day,)
+
+
+def meeting_days(meeting: LyMeeting) -> tuple[date, ...]:
+    """一場會議的每一天（同步時存的 ISO 字串）。存的壞掉或是空的，就只有第一天；連第一天都沒有是空的。"""
+    days = []
+    for value in meeting.dates if isinstance(meeting.dates, list) else ():
+        try:
+            days.append(date.fromisoformat(value))
+        except (TypeError, ValueError):
+            continue
+    if not days and meeting.date is not None:
+        days.append(meeting.date)
+    return tuple(sorted(set(days)))
+
+
+def has_ballots(vote: LyVote) -> bool:
+    """這次表決有沒有任何一張記名的票。
+
+    一張都沒有的是「不知道誰投了什麼」，不是「全院都沒投」（第 11 屆有一筆：LYAPI 的投票委員是空的）：
+    跟還沒有出席紀錄的會議一樣，不算進任何人的分母，否則每個人那個會期的投票出席率都平白少一次。
+    """
+    return any(isinstance(names, list) and any(isinstance(n, str) and n.strip() for n in names)
+               for names in (vote.yes, vote.no, vote.abstain))
+
+
 class SessionRecords:
     """一個會期的院內紀錄，與每個人的清單。指標（tally）與證據清單（evidence）都從這裡來。"""
 
@@ -291,12 +337,16 @@ class SessionRecords:
             self.votes = list(LyVote.objects.filter(term=term, session_number=number))
         # 屆別從會期名稱拿（跟紀錄的篩選同一個來源），不靠 Session.term 這個另外存的欄位
         self.roster = legislators.for_term(str(numbers[0]) if numbers else session.term)
-        # 這個會期的紀錄期間：母體是任期跟它有重疊的人。只看會議與表決：提案日期可能比一讀早好幾個月
-        # （休會期間提、或卡在程序委員會），拿來算的話，早就離職的人也會跑進這個會期的母體。還沒有
-        # 會議與表決的會期（剛開議的）才用提案日期
-        days = [d for d in [m.date for m in self.meetings] + [v.date for v in self.votes] if d]
+        # 這個會期的紀錄期間：母體是任期跟它有重疊的人。只看會議（每一天）與表決：提案日期可能比一讀早
+        # 好幾個月（休會期間提、或卡在程序委員會），拿來算的話，早就離職的人也會跑進這個會期的母體。
+        # 還沒有會議與表決的會期（剛開議的）才用提案日期
+        self._days = {m.code: meeting_days(m) for m in self.meetings}
+        days = [d for span in self._days.values() for d in span]
+        days += [v.date for v in self.votes if v.date]
         days = days or [b.proposed_on for b in self.bills if b.proposed_on]
         self.first, self.last = (min(days), max(days)) if days else (None, None)
+        # 一張記名的票都沒有的表決是「不知道」，不算進任何人的分母（見 has_ballots）
+        self.ballots = [v for v in self.votes if has_ballots(v)]
         self._index()
 
     @property
@@ -306,22 +356,24 @@ class SessionRecords:
     def _index(self) -> None:
         """名字一次對成人：每場會議的出席者、每件議案的提案人與連署人、每次表決每個人的票。"""
         self._meeting_index = {m.code: m for m in self.meetings}
-        # 出席名單不是清單（null，或資料壞了）就是「不知道」：不算進任何人的分母
-        self._attended = {m.code: set(self._people(m.attendees, m.date))
+        # 出席名單不是清單（null，或資料壞了）就是「不知道」：不算進任何人的分母。名字對人看會議的
+        # 每一天：第二天才到職的遞補委員，第一天還對不到他
+        self._attended = {m.code: set(self._people(m.attendees, self._days[m.code]))
                           for m in self.meetings if isinstance(m.attendees, list)}
         self._proposed: dict[int, list[LyBill]] = defaultdict(list)
         self._cosigned: dict[int, list[LyBill]] = defaultdict(list)
         for bill in self.bills:
-            for pid in self._people(bill.proposers, bill.proposed_on):
+            on = _one_day(bill.proposed_on)
+            for pid in self._people(bill.proposers, on):
                 self._proposed[pid].append(bill)
-            for pid in self._people(bill.cosigners, bill.proposed_on):
+            for pid in self._people(bill.cosigners, on):
                 self._cosigned[pid].append(bill)
         self._choices: dict[str, dict[int, str]] = {}
         self._majorities: dict[str, dict[str, str | None]] = {}
-        for vote in self.votes:
+        for vote in self.ballots:
             choices: dict[int, str] = {}
             for option, names in ((YES, vote.yes), (NO, vote.no), (ABSTAIN, vote.abstain)):
-                for pid in self._people(names, vote.date):
+                for pid in self._people(names, _one_day(vote.date)):
                     choices.setdefault(pid, option)
             by_caucus: dict[str, Counter] = defaultdict(Counter)
             for pid, option in choices.items():
@@ -331,11 +383,12 @@ class SessionRecords:
             self._choices[vote.code] = choices
             self._majorities[vote.code] = {c: _majority(n) for c, n in by_caucus.items()}
 
-    def _people(self, names: object, day: date | None) -> list[int]:
-        """名字清單 → 人（去重、保留順序）。JSON 欄位不是字串清單的部分略過，不讓一筆壞資料拖垮重算。"""
+    def _people(self, names: object, days: Sequence[date]) -> list[int]:
+        """名字清單 → 那幾天在任的人（去重、保留順序）。JSON 欄位不是字串清單的部分略過，不讓一筆壞資料
+        拖垮重算。"""
         if not isinstance(names, list):
             return []
-        found = (self.roster.person_for(name, day) for name in names if isinstance(name, str))
+        found = (self.roster.person_during(name, days) for name in names if isinstance(name, str))
         return list(dict.fromkeys(pid for pid in found if pid is not None))
 
     @property
@@ -352,12 +405,13 @@ class SessionRecords:
         """在任期間、有出席紀錄、單位裡有他那個會期所屬委員會的會議（聯席會議只要有一個就算）。"""
         mine = self.roster.committees(person_id, self.session.name)
         return self._meetings(person_id, LyMeetingKind.COMMITTEE,
-                              lambda m: bool(mine.intersection(m.units or ())))
+                              lambda m: isinstance(m.units, list) and bool(mine.intersection(m.units)))
 
     def _meetings(self, person_id: int, kind: str, wanted) -> list[MeetingItem]:
+        """在任期間＝會議的任何一天他在任（院會多半開兩、三天，見 _TermRoster.serving_during）。"""
         return [MeetingItem(m, person_id in self._attended[m.code]) for m in self.meetings
                 if m.kind == kind and m.code in self._attended and wanted(m)
-                and self.roster.serving(person_id, m.date)]
+                and self.roster.serving_during(person_id, self._days[m.code])]
 
     def proposed(self, person_id: int) -> list[LyBill]:
         return list(self._proposed.get(person_id, ()))
@@ -369,10 +423,10 @@ class SessionRecords:
         return [b for b in self.proposed(person_id) if PASSED_MARK in b.status]
 
     def all_votes(self, person_id: int) -> list[VoteItem]:
-        """在任期間的記名表決，附他的票與他黨團的多數。"""
+        """在任期間、有記名的票的表決，附他的票與他黨團的多數。"""
         items = []
-        for vote in self.votes:
-            if not self.roster.serving(person_id, vote.date):
+        for vote in self.ballots:
+            if not self.roster.serving_during(person_id, _one_day(vote.date)):
                 continue
             caucus = self.roster.caucus(person_id, vote.date)
             majority = self._majorities[vote.code].get(caucus) if caucus else None
@@ -448,8 +502,11 @@ class SessionRecords:
         plenary = [m for m in self.meetings if m.kind == LyMeetingKind.PLENARY]
         committee = [m for m in self.meetings if m.kind == LyMeetingKind.COMMITTEE]
         known = sum(1 for m in committee if m.attendees is not None)
+        unknown_votes = len(self.votes) - len(self.ballots)
+        votes = f"記名表決 {len(self.votes)} 次" + (
+            f"（{unknown_votes} 次沒有任何人的票，不計入）" if unknown_votes else "")
         return (f"{self.session.name} 院內紀錄：院會 {len(plenary)} 場、委員會 {len(committee)} 場"
-                f"（有出席紀錄 {known} 場）、委員提案 {len(self.bills)} 件、記名表決 {len(self.votes)} 次；"
+                f"（有出席紀錄 {known} 場）、委員提案 {len(self.bills)} 件、{votes}；"
                 f"母體 {len(self.population)} 人")
 
 
