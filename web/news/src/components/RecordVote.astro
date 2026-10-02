@@ -19,11 +19,15 @@ const { vote: v } = Astro.props;
 // 後端給了日期就照網站的日期格式；沒給就寫原文（LYAPI 的表決時間是民國年的中文字串）
 const when = formatDateWithWeekday(v.date) || v.voted_at || '日期不詳';
 const mine = v.vote ? BALLOT_LABEL[v.vote] : '沒有投票';
+// 他有投票時，黨團至少有他一票，沒有多數只可能是並列；他沒投時也可能是黨團沒有人投，
+// 那就只寫「沒有多數」，不替它猜原因
 const majority = v.caucus_majority
   ? BALLOT_LABEL[v.caucus_majority]
-  : v.caucus
-    ? '沒有多數（票數並列）'
-    : '沒有參加黨團';
+  : !v.caucus
+    ? '沒有參加黨團'
+    : v.vote
+      ? '沒有多數（票數並列）'
+      : '沒有多數';
 const differs = Boolean(v.vote && v.caucus_majority && v.vote !== v.caucus_majority);
 // 他有投票、有黨團，但黨團並列：這一次不算進一致率與跨黨投票，要講清楚為什麼
 const tie = Boolean(v.vote && v.caucus && !v.caucus_majority);

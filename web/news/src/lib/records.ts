@@ -100,6 +100,18 @@ export const RECORD_KINDS: readonly RecordKindInfo[] = [
     indicator: 'vote_participation',
   },
   {
+    // 一致率的分母跟投票出席率不同（少了他沒投的、黨團並列的），要有自己的清單，
+    // 「看這 n 次表決」點進去才剛好 n 筆
+    key: 'caucus',
+    label: '黨團有多數',
+    title: '他有投票、黨團有多數的表決',
+    description:
+      '與所屬黨團一致率的分母：他有投票、而且他所屬黨團那一次有多數（票數沒有並列）的記名表決。他的票跟黨團多數相同就算一致。',
+    unit: '次表決',
+    empty: '這個會期沒有「他有投票、黨團也有多數」的記名表決。',
+    indicator: 'caucus_agreement',
+  },
+  {
     key: 'defections',
     label: '跨黨投票',
     title: '跨黨投票',
@@ -140,9 +152,10 @@ export const CHAMBER_INDICATORS: readonly ChamberIndicatorInfo[] = [
   { key: 'bills_proposed', label: '主提案數', unit: '件', n_unit: '件', kind: 'proposed', group: 'bills', rate: false },
   { key: 'bills_cosigned', label: '連署數', unit: '件', n_unit: '件', kind: 'cosigned', group: 'bills', rate: false },
   { key: 'bills_passed', label: '三讀數', unit: '件', n_unit: '件', kind: 'passed', group: 'bills', rate: false },
-  { key: 'vote_participation', label: '投票出席率', unit: '%', n_unit: '次表決', kind: 'votes', group: 'votes', rate: true },
-  { key: 'caucus_agreement', label: '與所屬黨團一致率', unit: '%', n_unit: '次表決', kind: 'votes', group: 'votes', rate: true },
-  { key: 'caucus_defections', label: '跨黨投票數', unit: '次', n_unit: '次表決', kind: 'defections', group: 'votes', rate: false },
+  // n_unit 跟後端（chamber.py）一樣寫「次」；連結文字另外照清單的單位寫成「次表決」
+  { key: 'vote_participation', label: '投票出席率', unit: '%', n_unit: '次', kind: 'votes', group: 'votes', rate: true },
+  { key: 'caucus_agreement', label: '與所屬黨團一致率', unit: '%', n_unit: '次', kind: 'caucus', group: 'votes', rate: true },
+  { key: 'caucus_defections', label: '跨黨投票數', unit: '次', n_unit: '次', kind: 'defections', group: 'votes', rate: false },
 ];
 
 /** 側寫上院內紀錄區塊的分組：八張卡混在一起排，出席率會跟連署數擠在同一列 */
@@ -161,15 +174,24 @@ export function isRecordsPath(path: string | null | undefined): boolean {
   return (path ?? '').trim().startsWith('/records/');
 }
 
+/** 證據連結指到哪一類清單（網址的 kind）；不是紀錄清單頁或不認得的類別就是 null */
+export function recordKindOfPath(path: string | null | undefined): RecordKind | null {
+  if (!isRecordsPath(path)) return null;
+  const query = (path ?? '').split('#')[0].split('?')[1] ?? '';
+  const kind = new URLSearchParams(query).get('kind');
+  return isRecordKind(kind) ? kind : null;
+}
+
 /**
- * 院內紀錄指標的證據連結文字。
+ * 院內紀錄指標的證據連結文字：「看這 12 場」「看這 88 次表決」。
  *
- * 一致率的 n 只算「他有投票、黨團也有多數」的那幾次，但證據是整份記名表決清單
- * （每一筆都寫了他的票與黨團多數，讀者能自己數）——寫「看這 88 次表決」卻列出 96 筆
- * 會被當成數字錯了，所以這一項不寫筆數。其他指標的清單筆數就是 n。
+ * 每一類清單的筆數都等於它對應指標的 n（一致率有自己的「黨團有多數」清單），所以可以
+ * 寫出筆數。單位照連結指到的那一類清單寫：後端的 n_unit 是「次」，「看這 88 次」讀不出
+ * 是表決；認不得類別才退回 n_unit。
  */
-export function recordEvidenceLabel(ind: Pick<ProfileIndicator, 'key' | 'n' | 'n_unit'>): string {
-  return ind.key === 'caucus_agreement' ? '看每一次的票與黨團多數' : `看這 ${ind.n} ${ind.n_unit}`;
+export function recordEvidenceLabel(ind: Pick<ProfileIndicator, 'n' | 'n_unit' | 'evidence_url'>): string {
+  const kind = recordKindOfPath(ind.evidence_url);
+  return `看這 ${ind.n} ${kind ? recordKindInfo(kind).unit : ind.n_unit}`;
 }
 
 /** 選項的中文：贊成、反對、棄權 */
@@ -217,11 +239,16 @@ function ballot(v: unknown): Ballot | null {
   return typeof v === 'string' ? (BALLOTS.get(v.trim()) ?? null) : null;
 }
 
+// 後端（RecordOut）每一類都用 id 與 title：會議代碼、議案編號、表決代碼都放在 id，
+// 會議名稱、議案名稱、表決議題都放在 title。舊的欄位名稱（code、name…）也收，
+// 哪一邊先改都不會整份清單被當成壞掉的筆丟光
+const first = (o: Raw, ...keys: string[]): string => keys.map((k) => text(o[k])).find(Boolean) ?? '';
+
 function normalizeMeeting(raw: unknown): MeetingRecord | null {
   const o = asObject(raw);
   if (!o) return null;
-  const code = text(o.code);
-  const name = text(o.name);
+  const code = first(o, 'code', 'id', 'meeting_code');
+  const name = first(o, 'name', 'title');
   if (!code && !name) return null;
   return {
     code,
@@ -237,10 +264,11 @@ function normalizeMeeting(raw: unknown): MeetingRecord | null {
 function normalizeBill(raw: unknown): BillRecord | null {
   const o = asObject(raw);
   if (!o) return null;
-  const name = text(o.name);
+  const name = first(o, 'name', 'title');
   if (!name) return null;
   return {
-    bill_no: text(o.bill_no),
+    bill_no: first(o, 'bill_no', 'id'),
+    date: text(o.date),
     name,
     status: text(o.status),
     proposers: (Array.isArray(o.proposers) ? o.proposers : []).map(text).filter(Boolean),
@@ -253,12 +281,14 @@ function normalizeTally(raw: unknown): VoteRecord['tally'] {
   return o ? { yes: count(o.yes), no: count(o.no), abstain: count(o.abstain) } : null;
 }
 
-function normalizeVote(raw: unknown): VoteRecord | null {
+/** listCaucus：清單層級的黨團（後端只在清單上給一次，每一筆不重複帶） */
+function normalizeVote(raw: unknown, listCaucus: string): VoteRecord | null {
   const o = asObject(raw);
   if (!o) return null;
-  const topic = text(o.topic);
-  const code = text(o.code);
+  const topic = first(o, 'topic', 'title');
+  const code = first(o, 'code', 'id');
   if (!topic && !code) return null;
+  const caucus = text(o.caucus) || listCaucus;
   return {
     code,
     meeting_code: text(o.meeting_code),
@@ -267,38 +297,48 @@ function normalizeVote(raw: unknown): VoteRecord | null {
     topic: topic || code,
     tally: normalizeTally(o.tally),
     vote: ballot(o.vote),
-    caucus: text(o.caucus),
-    caucus_majority: ballot(o.caucus_majority),
+    caucus,
+    // 沒有黨團就沒有黨團多數：上游哪天在這裡給了值，也不能讓一個沒參加黨團的人出現「跟黨團不同」
+    caucus_majority: caucus ? ballot(o.caucus_majority) : null,
     url: text(o.url),
   };
 }
 
+/** 一列一列整理，記下丟掉幾筆 */
+function normalizeRows<T>(rows: unknown[], one: (raw: unknown) => T | null): { items: T[]; dropped: number } {
+  const items = rows.map(one).filter(notNull);
+  return { items, dropped: rows.length - items.length };
+}
+
 /**
- * 紀錄清單：接受陣列或 {items: [...]}，壞掉的筆丟掉。
+ * 紀錄清單：接受陣列或 {items: [...]}（後端的 RecordListOut），壞掉的筆丟掉並記下筆數。
  * 整個回應讀不懂才回 null（頁面顯示錯誤），而不是當成「沒有紀錄」——那會被讀成他一場都沒有。
  */
 export function normalizeRecords(kind: RecordKind, raw: unknown): RecordList | null {
   const rows = Array.isArray(raw) ? raw : asObject(raw)?.items;
   if (!Array.isArray(rows)) return null;
+  const listCaucus = text(asObject(raw)?.caucus);
   switch (kind) {
     case 'plenary':
     case 'committee':
-      return { kind, items: rows.map(normalizeMeeting).filter(notNull) };
+      return { kind, ...normalizeRows(rows, normalizeMeeting) };
     case 'proposed':
     case 'cosigned':
     case 'passed':
-      return { kind, items: rows.map(normalizeBill).filter(notNull) };
+      return { kind, ...normalizeRows(rows, normalizeBill) };
     case 'votes':
+    case 'caucus':
     case 'defections':
-      return { kind, items: rows.map(normalizeVote).filter(notNull) };
+      return { kind, ...normalizeRows(rows, (r) => normalizeVote(r, listCaucus)) };
   }
 }
 
 /* ------------------------------------------------------------------
    假資料模式（USE_FIXTURE=1）
 
-   records.json 只存紀錄本身與編的同儕人數、百分位；三讀、跨黨投票的清單與八個
-   指標的值、n 都照後端的公式從紀錄算出來。
+   records.json 只存紀錄本身與編的同儕人數、百分位；三讀、黨團有多數、跨黨投票的清單
+   與八個指標的值、n 都照後端的公式從紀錄算出來。紀錄清單照後端 RecordListOut 的形狀
+   回（id、title、中文的票），假資料模式走的就是正式站的整理路徑。
    ------------------------------------------------------------------ */
 
 /** 後端的 MIN_SAMPLE：比例類指標的分母不到這個數就不比較 */
@@ -316,8 +356,8 @@ type FixtureChamber = {
   records: {
     plenary: MeetingRecord[];
     committee: MeetingRecord[];
-    proposed: BillRecord[];
-    cosigned: BillRecord[];
+    proposed: Omit<BillRecord, 'date'>[];
+    cosigned: Omit<BillRecord, 'date'>[];
     votes: Omit<VoteRecord, 'caucus'>[];
   };
 };
@@ -328,22 +368,38 @@ function fixtureEntry(personId: number, sessionId: number): FixtureChamber | nul
   return (fx.chamber ?? []).find((c) => c.person_id === personId && c.session_id === sessionId) ?? null;
 }
 
-/** 一份假紀錄的七類清單；三讀與跨黨投票照後端的定義篩出來 */
-function fixtureLists(entry: FixtureChamber): Record<RecordKind, RecordList['items']> {
+type FixtureLists = {
+  plenary: MeetingRecord[];
+  committee: MeetingRecord[];
+  proposed: BillRecord[];
+  cosigned: BillRecord[];
+  passed: BillRecord[];
+  votes: VoteRecord[];
+  caucus: VoteRecord[];
+  defections: VoteRecord[];
+};
+
+/** 一份假紀錄的八類清單；三讀、黨團有多數與跨黨投票照後端的定義篩出來 */
+function fixtureLists(entry: FixtureChamber): FixtureLists {
+  const bills = (rows: Omit<BillRecord, 'date'>[]): BillRecord[] => rows.map((b) => ({ date: '', ...b }));
   const votes: VoteRecord[] = entry.records.votes.map((v) => ({
     ...v,
     caucus: entry.caucus,
     caucus_majority: entry.caucus ? v.caucus_majority : null,
   }));
+  // 一致率的分母：他有投票、黨團有多數（並列就沒有）
+  const caucus = votes.filter((v) => v.vote && v.caucus_majority);
+  const proposed = bills(entry.records.proposed);
   return {
     plenary: entry.records.plenary,
     committee: entry.records.committee,
-    proposed: entry.records.proposed,
-    cosigned: entry.records.cosigned,
-    passed: entry.records.proposed.filter((b) => b.status.includes('三讀')),
+    proposed,
+    cosigned: bills(entry.records.cosigned),
+    passed: proposed.filter((b) => b.status.includes('三讀')),
     votes,
-    // 他有投票、黨團有多數（並列就沒有），而且跟多數不同
-    defections: votes.filter((v) => v.vote && v.caucus_majority && v.vote !== v.caucus_majority),
+    caucus,
+    // 分母裡跟多數不同的
+    defections: caucus.filter((v) => v.vote !== v.caucus_majority),
   };
 }
 
@@ -352,23 +408,22 @@ const share = (part: number, whole: number) => (whole > 0 ? (part / whole) * 100
 type FixtureValue = { value: number | null; n: number; reason?: string };
 
 /** 一個指標的值與 n（公式見 spec 的指標表；方法頁寫的是同一套） */
-function fixtureValue(key: string, lists: Record<RecordKind, RecordList['items']>, caucus: string): FixtureValue {
-  const meetings = (k: 'plenary' | 'committee') => lists[k] as MeetingRecord[];
-  const votes = lists.votes as VoteRecord[];
+function fixtureValue(key: string, lists: FixtureLists, caucus: string): FixtureValue {
   switch (key) {
     case 'plenary_attendance':
     case 'committee_attendance': {
-      const all = meetings(key === 'plenary_attendance' ? 'plenary' : 'committee');
+      const all = key === 'plenary_attendance' ? lists.plenary : lists.committee;
       return { value: share(all.filter((m) => m.attended).length, all.length), n: all.length };
     }
     case 'vote_participation':
-      return { value: share(votes.filter((v) => v.vote).length, votes.length), n: votes.length };
+      return { value: share(lists.votes.filter((v) => v.vote).length, lists.votes.length), n: lists.votes.length };
     case 'caucus_agreement': {
       if (!caucus) return { value: null, n: 0, reason: 'no_caucus' };
-      const counted = votes.filter((v) => v.vote && v.caucus_majority);
-      return { value: share(counted.filter((v) => v.vote === v.caucus_majority).length, counted.length), n: counted.length };
+      const agreed = lists.caucus.length - lists.defections.length;
+      return { value: share(agreed, lists.caucus.length), n: lists.caucus.length };
     }
     case 'caucus_defections':
+      // 後端存成 null（不是 0）：沒有參加黨團與「從不跨黨」是兩回事
       if (!caucus) return { value: null, n: 0, reason: 'no_caucus' };
       return { value: lists.defections.length, n: lists.defections.length };
     default: {
@@ -408,11 +463,53 @@ export function fixtureChamberBlock(personId: number, sessionId: number): Profil
   return { key: 'chamber', title: '院內紀錄', indicators };
 }
 
+const BALLOT_ZH: Record<Ballot, string> = { yes: '贊成', no: '反對', abstain: '棄權' };
+const ballotZh = (b: Ballot | null) => (b ? BALLOT_ZH[b] : null);
+
+/** 一筆假紀錄轉成後端 RecordOut 的形狀；unit、tally、voted_at 是後端目前沒給、網站會用的欄位 */
+function apiRow(kind: RecordKind, row: MeetingRecord | BillRecord | VoteRecord): Record<string, unknown> {
+  if (kind === 'plenary' || kind === 'committee') {
+    const m = row as MeetingRecord;
+    return { id: m.code, date: m.date, title: m.name, url: m.url, meeting_code: m.code, attended: m.attended, unit: m.unit };
+  }
+  if (kind === 'proposed' || kind === 'cosigned' || kind === 'passed') {
+    const b = row as BillRecord;
+    return { id: b.bill_no, date: b.date || null, title: b.name, url: b.url, status: b.status, proposers: b.proposers };
+  }
+  const v = row as VoteRecord;
+  return {
+    id: v.code,
+    date: v.date || null,
+    title: v.topic,
+    url: v.url,
+    meeting_code: v.meeting_code,
+    vote: ballotZh(v.vote),
+    caucus_majority: ballotZh(v.caucus_majority),
+    voted_at: v.voted_at,
+    tally: v.tally,
+  };
+}
+
+/** 新的在前、同一天照代碼由大到小（跟後端的排序一樣） */
+function newestFirst(a: Record<string, unknown>, b: Record<string, unknown>): number {
+  const key = (r: Record<string, unknown>) => [String(r.date ?? ''), String(r.id ?? '')];
+  const [ad, ai] = key(a);
+  const [bd, bi] = key(b);
+  return bd.localeCompare(ad) || bi.localeCompare(ai);
+}
+
 /** 假資料的紀錄清單：沒有這個人這個會期的紀錄就是 404（後端同樣處理） */
 export function fixtureRecords(personId: number, query: RecordQuery): Result<unknown> {
   const entry = fixtureEntry(personId, query.session);
   if (!entry) {
     return { ok: false, error: { kind: 'notfound', status: 404, message: '假資料裡沒有這個會期的院內紀錄' } };
   }
-  return { ok: true, data: { items: fixtureLists(entry)[query.kind] } };
+  const items = (fixtureLists(entry)[query.kind] as (MeetingRecord | BillRecord | VoteRecord)[])
+    .map((row) => apiRow(query.kind, row))
+    .sort(newestFirst);
+  const info = recordKindInfo(query.kind);
+  return {
+    ok: true,
+    data: { kind: query.kind, label: info.title, indicator: info.indicator, caucus: entry.caucus, count: items.length, items },
+  };
 }

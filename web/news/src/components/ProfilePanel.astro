@@ -38,8 +38,10 @@ const coverage =
     : '';
 const computed = formatDateTime(profile.computed_at);
 const sessionHref = (id: number) => `${basePath}?source=${profile.source}&session=${id}#profile`;
-// 院內紀錄的卡片要分組，由 ProfileChamber 自己排，不走下面通用的一排卡片
+// 院內紀錄的卡片要分組，由 ProfileChamber 自己排，不走下面通用的一排卡片。
+// 只有立法院有這份資料：後端只替立委算，別的議會萬一帶了也不畫（跟議題分布的門檻一樣兩邊各擋一次）
 const chamber = profile.blocks.find((b) => b.key === 'chamber');
+const showChamber = chamber && profile.source === 'ly';
 ---
 
 <section
@@ -133,6 +135,6 @@ const chamber = profile.blocks.find((b) => b.key === 'chamber');
         </section>
       ))
     }
-    {chamber && <ProfileChamber block={chamber} minSample={profile.min_sample} />}
+    {showChamber && <ProfileChamber block={chamber} minSample={profile.min_sample} />}
   </div>
 </section>

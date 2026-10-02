@@ -197,8 +197,25 @@ export type ProfileQuery = {
    筆數等於指標的 n（或值）。只有立法院有。
    ------------------------------------------------------------------ */
 
-/** 紀錄的類別，也是網址的 kind；每一類對到哪個指標見 lib/records.ts 的 RECORD_KINDS */
-export type RecordKind = 'plenary' | 'committee' | 'proposed' | 'cosigned' | 'passed' | 'votes' | 'defections';
+/**
+ * 紀錄的類別，也是網址的 kind；每一類對到哪個指標見 lib/records.ts 的 RECORD_KINDS。
+ * 'caucus' 是一致率的分母（他有投票、黨團也有多數的表決）：設計列了七類，但一致率的 n
+ * 跟投票出席率的 n 不一樣，少了這一類，一致率就點不回「n 筆」（後端也多了這一類）
+ */
+export type RecordKind =
+  | 'plenary'
+  | 'committee'
+  | 'proposed'
+  | 'cosigned'
+  | 'passed'
+  | 'votes'
+  | 'caucus'
+  | 'defections';
+
+/*
+ * 下面三種是網站整理後的形狀。後端（RecordOut）把代碼、編號放在 id，名稱、議題放在
+ * title，票是中文（贊成／反對／棄權）；lib/records.ts 的 normalizeRecords 負責轉過來。
+ */
 
 /** 一場會議（院會或委員會），以及出席名單上有沒有他 */
 export type MeetingRecord = {
@@ -217,6 +234,8 @@ export type MeetingRecord = {
 /** 一件委員提案 */
 export type BillRecord = {
   bill_no: string;
+  /** 提案日（YYYY-MM-DD）；後端沒給是空字串 */
+  date: string;
   name: string;
   /** 議案狀態原文，例如「三讀」「交付審查」 */
   status: string;
@@ -249,11 +268,16 @@ export type VoteRecord = {
   url: string;
 };
 
-/** 一頁紀錄清單；items 的形狀跟著 kind 走 */
-export type RecordList =
+/**
+ * 一頁紀錄清單；items 的形狀跟著 kind 走。
+ * dropped 是讀不懂、沒畫出來的筆數：清單筆數要等於指標的 n，少了幾筆要照實說，
+ * 不能讓讀者以為數字錯了
+ */
+export type RecordList = { dropped: number } & (
   | { kind: 'plenary' | 'committee'; items: MeetingRecord[] }
   | { kind: 'proposed' | 'cosigned' | 'passed'; items: BillRecord[] }
-  | { kind: 'votes' | 'defections'; items: VoteRecord[] };
+  | { kind: 'votes' | 'caucus' | 'defections'; items: VoteRecord[] }
+);
 
 export type RecordQuery = {
   session: number;

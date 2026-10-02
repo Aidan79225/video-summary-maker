@@ -1,12 +1,13 @@
 ---
 /**
- * 紀錄清單的一件議案：名稱、議案狀態、提案人、議案編號、官方連結。
+ * 紀錄清單的一件議案：提案日、名稱、議案狀態、提案人、議案編號、官方連結。
  *
  * 狀態照 LYAPI 的原文寫（「交付審查」「三讀」），不翻成「通過／沒通過」：議案還在
  * 流程中間的時候，任何二分法都是我們替它下的結論。含「三讀」的標成強調色，因為
  * 三讀數就是數這個字。
  */
 import type { BillRecord } from '../lib/types';
+import { formatDateWithWeekday } from '../lib/format';
 import OfficialLink from './OfficialLink.astro';
 
 interface Props {
@@ -18,7 +19,8 @@ const passed = b.status.includes('三讀');
 ---
 
 <li class="rounded-xl border border-line-soft px-4 py-3">
-  <p class="text-[0.92rem] leading-relaxed text-ink">{b.name}</p>
+  {b.date && <p class="tabular text-[0.75rem] text-muted">{formatDateWithWeekday(b.date)}</p>}
+  <p class:list={['text-[0.92rem] leading-relaxed text-ink', b.date && 'mt-1']}>{b.name}</p>
   <div class="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[0.72rem] text-muted">
     {
       b.status && (

@@ -35,13 +35,11 @@ const evidenceLabel = isRecordsPath(ind.evidence_url)
   : ind.n_unit === '篇'
     ? `看這 ${ind.n} 篇`
     : '看這些數字出自哪幾篇';
-// n 是 0 時沒有連結，改寫一句「沒有…」：報導、數字，或院內紀錄（場次、議案、表決）
-const emptyText =
-  ind.n_unit === '篇'
-    ? '這個會期沒有可計算的報導'
-    : ind.n_unit === '個數字'
-      ? '這個會期沒有可計算的數字'
-      : '這個會期沒有紀錄可列';
+// n 是 0 時沒有連結，改寫一句「沒有…」：院內紀錄（場次、議案、表決）照紀錄寫，
+// 其他指標維持原本的「報導／數字」（別的區塊之後加新的 n_unit，也不會被寫成「紀錄」）
+const emptyText = isRecordsPath(ind.evidence_url)
+  ? '這個會期沒有紀錄可列'
+  : `這個會期沒有可計算的${ind.n_unit === '篇' ? '報導' : '數字'}`;
 // 百分號緊貼數字，其他單位留一點空隙
 const tightUnit = ind.unit === '%';
 ---
