@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import io
 import itertools
+import logging
 import re
 from datetime import date, datetime, timedelta
 from unittest import mock
@@ -93,14 +94,22 @@ class FakeFollowupGpu:
     可以是字串或 pair → 字串（模擬評估途中換了模型）。
     """
 
-    def __init__(self, answer=_says_followed, classifier=CLASSIFIER):
+    def __init__(self, answer=_says_followed, classifier=CLASSIFIER, submit_error=None):
         self.answer = answer
         self.classifier = classifier
+        # 送出時就丟的例外（GPU 連不上）：工作根本沒送出去
+        self.submit_error = submit_error
         self.pairs: list[dict] = []
+        self.cancelled: list[str] = []
 
     def submit_followup(self, request, response, card, excerpt):
+        if self.submit_error is not None:
+            raise self.submit_error
         self.pairs.append({"request": request, "response": response, "card": card, "excerpt": excerpt})
         return f"job-{len(self.pairs)}"
+
+    def cancel(self, job_id):
+        self.cancelled.append(job_id)
 
     def wait(self, job_id, timeout, poll_seconds=3.0, on_progress=None):
         pair = self.pairs[int(job_id.removeprefix("job-")) - 1]
@@ -850,6 +859,157 @@ class CheckTests(TestCase):
         self.assertEqual(self._state_on(later.date()), FollowUpState.WATCHING)
 
 
+class PairFailureTests(TestCase):
+    """一對一直失敗時：記在那一對身上、排到沒失敗過的後面、失敗 2 次就跳過。
+
+    王立 2026-03-02 要求「提出無人機交機時程清冊」（到期 4/2），3/5 要求「長照據點的預算」（到期 4/5）。
+    """
+
+    LOGGER = "articles.followups"
+    NOW = _aware(2026, 5, 1, 4, 30)
+    AFTER_WINDOW = _aware(2026, 7, 10, 4, 30)
+
+    def setUp(self):
+        self.member = _member("王立")
+        self.drones = _article(day="2026-03-02", asks=[(REQUEST, "一個月內", "")], membership=self.member)
+        self.care = _article(day="2026-03-05", asks=[("長照據點的預算", "一個月內", "")],
+                             membership=self.member)
+
+    def _candidate(self, day, one_liner, followed=False):
+        transcript = FOLLOWED_TRANSCRIPT if followed else "00:00 王立 今天問別的事情。"
+        return _article(day=day, one_liner=one_liner, transcript=transcript, membership=self.member)
+
+    @staticmethod
+    def _broken(pair):
+        """「壞掉的那篇」每次都被 GPU 拒絕，其他照常判。"""
+        return JobFailed("摘要 API 拒絕這個請求（422）") if "壞掉的那篇" in pair["card"] else _says_followed(pair)
+
+    def _run(self, limit=10, now=None, gpu=None, **kw):
+        gpu = gpu or FakeFollowupGpu(answer=self._broken)
+        # 失敗都會記 warning：這裡要看的是報告與資料，不讓 log 灌滿測試輸出
+        logging.disable(logging.WARNING)
+        try:
+            report = check_followups(gpu, limit=limit, now=now or self.NOW, **kw)
+        finally:
+            logging.disable(logging.NOTSET)
+        return gpu, report
+
+    def _followup(self, article):
+        return FollowUp.objects.get(article=article)
+
+    def _state(self, article, day):
+        fu = self._followup(article)
+        return state_for(fu.due_date, fu.followed_by_id, fu.classifier, fu.checked_at, day, CLASSIFIER)
+
+    def test_a_pair_that_keeps_failing_does_not_block_the_queue(self):
+        """攔的 bug：到期最早的那一對每晚都失敗，照到期日排它每晚都在最前面，後面的要求永遠輪不到。"""
+        broken = self._candidate("2026-03-20", "無人機交機壞掉的那篇")
+        care = self._candidate("2026-03-21", "長照據點")
+        _, report = self._run(limit=1)
+        self.assertEqual(self._followup(self.drones).failures, {str(broken.id): 1})
+        self.assertEqual(report.failed, 1)
+        # 第二晚：失敗過的排到後面，長照那一項先判
+        gpu, _ = self._run(limit=1)
+        self.assertEqual([p["card"].splitlines()[0] for p in gpu.pairs], ["一句話：長照據點"])
+        self.assertEqual(self._followup(self.care).checked, [care.id])
+        # 第三晚：沒有新的了，才輪到失敗過一次的；失敗第二次
+        gpu, report = self._run(limit=1)
+        self.assertEqual(len(gpu.pairs), 1)
+        self.assertEqual(self._followup(self.drones).failures, {str(broken.id): 2})
+        self.assertEqual((report.skipped, report.remaining), (1, 0))
+        self.assertIn("有一對失敗 2 次而跳過、所以不算未追問的要求 1", str(report))
+        # 之後就不再送
+        gpu, _ = self._run()
+        self.assertEqual(gpu.pairs, [])
+
+    def test_an_ask_with_a_skipped_pair_is_never_not_followed(self):
+        """跳過的那一對沒判過：觀察期結束也不能說他沒追，停在觀察中，直到別篇判出有追問。"""
+        broken = self._candidate("2026-03-20", "無人機交機壞掉的那篇")
+        self._candidate("2026-03-22", "無人機交機")                       # 判得出來，沒有追問
+        sync_followups()
+        FollowUp.objects.filter(article=self.drones).update(failures={str(broken.id): 2})
+        gpu, report = self._run(now=self.AFTER_WINDOW)
+        self.assertEqual(len(gpu.pairs), 1)
+        fu = self._followup(self.drones)
+        self.assertIsNone(fu.checked_at)
+        self.assertEqual(report.skipped, 1)
+        self.assertEqual(self._state(self.drones, date(2026, 7, 10)), FollowUpState.WATCHING)
+        # 長照那一項沒有候選：照樣是未追問
+        self.assertEqual(self._state(self.care, date(2026, 7, 10)), FollowUpState.NOT_FOLLOWED)
+        # 別篇判出有追問：已追問
+        self._candidate("2026-06-01", "無人機交機時程", followed=True)
+        self._run(now=self.AFTER_WINDOW)
+        self.assertEqual(self._state(self.drones, date(2026, 7, 10)), FollowUpState.FOLLOWED)
+
+    def test_the_early_stop_counts_only_pairs_that_never_failed(self):
+        """攔的 bug：之前就失敗過的對再失敗，被當成「開頭連續被拒、GPU 端沒更新」而整輪停下。"""
+        candidate = self._candidate("2026-03-20", "無人機交機長照據點的預算")
+        for i in range(2):
+            _article(day=f"2026-03-0{i + 3}", asks=[(f"無人機交機第{i}批", "一個月內", "")],
+                     membership=self.member)
+        sync_followups()
+        FollowUp.objects.update(failures={str(candidate.id): 1})
+        gpu = FakeFollowupGpu(answer=lambda pair: JobFailed("模型的輸出壞了"))
+        _, report = self._run(gpu=gpu)
+        self.assertEqual(len(gpu.pairs), 4)
+        self.assertFalse(report.stopped)
+        self.assertEqual([fu.failures for fu in FollowUp.objects.all()], [{str(candidate.id): 2}] * 4)
+
+    def test_a_wait_that_runs_out_counts_against_the_pair_and_cancels_the_job(self):
+        """等不到結果：算這一對失敗一次、取消那個 GPU 工作（不然它在佇列裡繼續占位），這一輪照樣停。"""
+        candidate = self._candidate("2026-03-20", "無人機交機")
+        self._candidate("2026-03-21", "長照據點")
+        gpu = FakeFollowupGpu(answer=lambda pair: GpuApiError("等待工作 job-1 超過 600 秒仍未完成"))
+        _, report = self._run(gpu=gpu)
+        self.assertEqual((len(gpu.pairs), gpu.cancelled), (1, ["job-1"]))
+        self.assertTrue(report.stopped)
+        self.assertEqual(self._followup(self.drones).failures, {str(candidate.id): 1})
+        self.assertIn("已要求取消工作 job-1", report.errors[0])
+
+    def test_a_job_that_could_not_be_sent_is_not_the_pairs_fault(self):
+        self._candidate("2026-03-20", "無人機交機")
+        gpu = FakeFollowupGpu(submit_error=GpuApiError("摘要 API 連線失敗"))
+        _, report = self._run(gpu=gpu)
+        self.assertTrue(report.stopped)
+        self.assertEqual((self._followup(self.drones).failures, gpu.cancelled), ({}, []))
+
+    def test_a_cancel_that_fails_still_ends_the_wait(self):
+        self._candidate("2026-03-20", "無人機交機")
+        gpu = FakeFollowupGpu(answer=lambda pair: GpuApiError("逾時"))
+
+        def cancel(job_id):
+            raise GpuApiError("摘要 API 連線失敗")
+
+        gpu.cancel = cancel
+        _, report = self._run(gpu=gpu)
+        self.assertTrue(report.stopped)
+        self.assertEqual(report.failed, 1)
+
+    def test_retry_failed_puts_skipped_pairs_back_in_the_queue(self):
+        broken = self._candidate("2026-03-20", "無人機交機壞掉的那篇")
+        sync_followups()
+        FollowUp.objects.filter(article=self.drones).update(failures={str(broken.id): 2})
+        gpu, _ = self._run()
+        self.assertEqual(gpu.pairs, [])
+        gpu, report = self._run(gpu=FakeFollowupGpu(), retry_failed=True)
+        self.assertEqual((len(gpu.pairs), report.retried), (1, 1))
+        self.assertIn("清掉失敗次數重新排隊 1 項", str(report))
+        self.assertEqual(self._followup(self.drones).failures, {})
+
+    def test_a_success_and_a_regenerated_candidate_clear_the_pairs_failures(self):
+        broken = self._candidate("2026-03-20", "無人機交機壞掉的那篇")
+        sync_followups()
+        FollowUp.objects.filter(article=self.drones).update(failures={str(broken.id): 1, "999": 1})
+        self._run(gpu=FakeFollowupGpu())
+        self.assertEqual(self._followup(self.drones).failures, {"999": 1})
+        # 重產的那篇：之前的失敗不算數（內容換了），從 checked 拿掉、重新排隊
+        FollowUp.objects.filter(article=self.drones).update(failures={str(broken.id): 2})
+        save_result(broken, {"title": "t", "slides": [], "transcript_text": "00:00 王立 重寫過。",
+                             "brief": _brief(one_liner="無人機交機重寫過")})
+        fu = self._followup(self.drones)
+        self.assertEqual((fu.failures, fu.checked), ({}, []))
+
+
 # --- 重產時的清理 ---
 
 
@@ -1129,6 +1289,18 @@ class CommandTests(TestCase):
     def test_recheck_needs_a_passing_judge(self):
         with self._gpu("check_followups", FakeFollowupGpu()), self.assertRaises(CommandError):
             call_command("check_followups", "--recheck", stdout=io.StringIO())
+
+    def test_retry_failed_puts_skipped_pairs_back(self):
+        _article(day="2026-03-02", asks=[(REQUEST, "一個月內", "")], membership=self.member)
+        candidate = _article(day="2026-03-20", one_liner="無人機交機", transcript="x", membership=self.member)
+        sync_followups()
+        FollowUp.objects.update(failures={str(candidate.id): 2})
+        gpu = FakeFollowupGpu()
+        out = io.StringIO()
+        with self._gpu("check_followups", gpu):
+            call_command("check_followups", "--retry-failed", stdout=out)
+        self.assertEqual(len(gpu.pairs), 1)
+        self.assertIn("清掉失敗次數重新排隊 1 項", out.getvalue())
 
     def test_sample_followup_labels(self):
         _article(day="2026-03-02", asks=[(REQUEST, "一個月內", "")], membership=self.member)

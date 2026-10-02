@@ -534,10 +534,31 @@ def parse_result(result: object) -> FollowUpResult:
     return FollowUpResult(followed_up, quote.strip() if followed_up else "", classifier.strip())
 
 
+class WaitAbandoned(GpuApiError):
+    """工作送出去了，卻等不到結果（逾時、輪詢一直連不上、GPU 那邊不認得它了）；已經要求 GPU 取消它。
+
+    跟「送不出去」分開：送不出去是 GPU 的事，這一對沒有錯；送出去之後卡住，可能就是這一對
+    （例如片段讓模型一直生成），每晚都排在最前面卡一次，整個佇列就一直動不了。
+    """
+
+
 def judge_pair(client: GpuApiClient, pair: PairInput, timeout: float) -> FollowUpResult:
-    """送一個 followup 工作、等它跑完。錯誤契約同 GpuApiClient：只丟 GpuApiError 或 JobFailed。"""
+    """送一個 followup 工作、等它跑完。錯誤契約同 GpuApiClient：只丟 GpuApiError 或 JobFailed。
+
+    等不到結果時丟 WaitAbandoned（GpuApiError 的一種），而且先取消那個工作：摘要工作逾時不取消，
+    是因為下一輪會接回同一個工作的成品；追問判斷不接回（下一輪重送），留著它只會在 GPU 的
+    佇列裡繼續占位，擋住後面的摘要與判斷。
+    """
     job_id = client.submit_followup(pair.request, pair.response, pair.card, pair.excerpt)
-    return parse_result(client.wait(job_id, timeout=timeout, poll_seconds=_POLL_SECONDS))
+    try:
+        result = client.wait(job_id, timeout=timeout, poll_seconds=_POLL_SECONDS)
+    except GpuApiError as e:
+        try:
+            client.cancel(job_id)
+        except GpuApiError as cancel_error:
+            logger.warning("追問判斷工作 %s 取消失敗：%s", job_id, cancel_error)
+        raise WaitAbandoned(f"{e}（已要求取消工作 {job_id}）") from e
+    return parse_result(result)
 
 
 def _squeeze(text: str) -> str:
@@ -727,6 +748,8 @@ class SyncReport:
 
 def _clear_judgments(followup: FollowUp) -> None:
     followup.checked = []
+    # 失敗次數一起清：要求的文字變了、或換了判斷器，之前一直失敗的對可能就不會失敗了
+    followup.failures = {}
     followup.followed_by = None
     followup.quote = ""
     followup.classifier = ""
@@ -747,7 +770,7 @@ def _drop_follow_up_outside_window(followup: FollowUp) -> None:
     followup.followed_by, followup.quote = None, ""
 
 
-_FOLLOWUP_FIELDS = ["request", "deadline_text", "due_date", "checked", "followed_by", "quote",
+_FOLLOWUP_FIELDS = ["request", "deadline_text", "due_date", "checked", "failures", "followed_by", "quote",
                     "classifier", "checked_at"]
 _DEADLINE_TEXT_LIMIT = 300
 
@@ -818,6 +841,14 @@ def reset_untrusted(judge: str | None) -> int:
 # --- 每晚判斷 ---
 
 
+# 一對失敗幾次就不再送：一次可能是 GPU 剛好重開或在忙，兩次多半是這一對自己的問題
+MAX_PAIR_FAILURES = 2
+
+
+def _failures_of(followup: FollowUp, candidate_id: int) -> int:
+    return int((followup.failures or {}).get(str(candidate_id), 0))
+
+
 @dataclass
 class CheckReport:
     sync: SyncReport = field(default_factory=SyncReport)
@@ -831,8 +862,12 @@ class CheckReport:
     stale: int = 0
     # --recheck 清掉重來的要求數
     reset: int = 0
+    # --retry-failed 清掉失敗次數的要求數
+    retried: int = 0
     # 還有候選沒判斷的要求：積壓要講出來，否則一晚 200 個的上限會無聲地一直排著
     remaining: int = 0
+    # 剩下沒判的對都失敗到跳過了的要求：不會再送，也就永遠不算未追問（停在觀察中）
+    skipped: int = 0
     # 觀察期結束、候選都判完了，但同一個人在觀察期裡還有沒做完的文章：先不算未追問
     waiting: int = 0
     stopped: bool = False
@@ -846,10 +881,15 @@ class CheckReport:
             text += f"、引用對不上逐字稿當成沒有追問 {self.ungrounded}"
         if self.stale:
             text += f"、內容剛被改過不存 {self.stale}"
+        if self.skipped:
+            text += (f"、有一對失敗 {MAX_PAIR_FAILURES} 次而跳過、所以不算未追問的要求 {self.skipped}"
+                     "（GPU 端修好之後用 --retry-failed 重新排隊）")
         if self.waiting:
             text += f"、觀察期裡還有報導沒做完、先不算未追問的要求 {self.waiting}"
         if self.reset:
             text += f"、換判斷器清掉重判 {self.reset} 項"
+        if self.retried:
+            text += f"、清掉失敗次數重新排隊 {self.retried} 項"
         return text + (f"（{self.stop_reason or 'GPU 不可用'}，這一輪提前結束）" if self.stopped else "")
 
 
@@ -858,6 +898,18 @@ def _open_followups():
     return (FollowUp.objects.filter(due_date__isnull=False, followed_by__isnull=True)
             .select_related("article").defer("article__transcript_text", "article__source_note")
             .order_by("due_date", "id"))
+
+
+@dataclass
+class _Item:
+    """一項要求這一輪的工作。prior_failures 是這一輪**開始時**各對失敗過的次數：決定一對排在哪一段，
+    這一輪才失敗的不會在同一輪又被重送（GPU 抖一下就把一對的兩次機會一晚用完）。"""
+    followup: FollowUp
+    candidates: list[Doc]
+    prior_failures: dict[str, int]
+
+    def prior(self, doc: Doc) -> int:
+        return int(self.prior_failures.get(str(doc.id), 0))
 
 
 class _Round:
@@ -872,25 +924,38 @@ class _Round:
         self.today = timezone.localdate(now)
         self.report = CheckReport()
         self.waiting = waiting or WaitingIndex({}, {}, {})
+        # 開頭連續被拒的計數只算沒失敗過的對：之前就失敗過的再失敗一次，不代表 GPU 端有問題
+        self.fresh_failed = 0
 
-    def check(self, followup: FollowUp, candidates: list[Doc]) -> None:
-        """依重疊高到低判還沒判過的候選，第一篇有追問就停；最後記下是不是全部判完了。"""
-        checked = set(followup.checked or [])
-        for doc in candidates:
-            if doc.id in checked:
+    def run(self, items: list[_Item]) -> None:
+        """先判沒失敗過的對、再判之前失敗過一次的，最後記下每一項是不是全部判完了。
+
+        失敗過的排在後面：一對每次都失敗（或每次都卡到逾時）的話，照到期日排它每晚都在最前面，
+        後面的要求永遠輪不到。
+        """
+        for retry in (False, True):
+            for item in items:
+                self._judge_item(item, retry)
+        for item in items:
+            self._settle(item)
+
+    def _judge_item(self, item: _Item, retry: bool) -> None:
+        """依重疊高到低判這一段（沒失敗過／失敗過一次）還沒判過的候選，第一篇有追問就停。"""
+        for doc in item.candidates:
+            followup = item.followup
+            if followup.followed_by_id:
+                return
+            prior = item.prior(doc)
+            if doc.id in followup.checked or prior >= MAX_PAIR_FAILURES or (prior > 0) != retry:
                 continue
             if self.report.stopped or self.budget <= 0:
-                break
+                return
             self.budget -= 1
-            fresh = self._judge(followup, doc)
-            if fresh is None:
-                continue
-            followup = fresh
-            if followup.followed_by_id:
-                break
-        self._settle(followup, candidates)
+            fresh = self._judge(followup, doc, prior)
+            if fresh is not None:
+                item.followup = fresh
 
-    def _judge(self, followup: FollowUp, doc: Doc) -> FollowUp | None:
+    def _judge(self, followup: FollowUp, doc: Doc, prior: int) -> FollowUp | None:
         """判一對、存起來，回傳存好的 FollowUp；失敗或內容變了回 None。"""
         ask = ask_at(followup.article.brief, followup.ask_index)
         if ask is None:
@@ -913,43 +978,63 @@ class _Round:
             # 存檔也放在 try 裡：SD 卡上的 SQLite 偶爾會鎖住，一對存不進去不該讓這一輪剩下的
             # 都不判（同 topics.classify_topics）
             _record(fresh_followup, doc.id, result, followed)
+        except WaitAbandoned as e:
+            # 送出去了卻等不到：算這一對失敗一次（judge_pair 已經取消了那個工作），這一輪照樣停
+            self._failure(followup, doc, e, prior)
+            self._stop()
+            return None
         except GpuApiError as e:
+            # 送不出去：GPU 的事，不是這一對的錯，不記在它頭上
             self._failure(followup, doc, e)
-            self.report.stopped = True
-            logger.warning("GPU 不可用，追問判斷這一輪提前結束")
+            self._stop()
             return None
         except JobFailed as e:
-            self._failure(followup, doc, e)
-            if self.report.judged == 0 and self.report.failed >= _EARLY_FAILURES:
+            self._failure(followup, doc, e, prior)
+            if self.report.judged == 0 and self.fresh_failed >= _EARLY_FAILURES:
                 # 開頭連續幾個都被拒絕，多半是 GPU 端還沒更新（舊版不認得 followup 工作，每個都回
                 # 422）：照樣送完整批只是同一個錯誤重複兩百次
                 self.report.stopped = True
-                self.report.stop_reason = f"開頭 {self.report.failed} 個都被 GPU 拒絕，GPU 端可能還沒更新"
+                self.report.stop_reason = f"開頭 {self.fresh_failed} 個都被 GPU 拒絕，GPU 端可能還沒更新"
                 logger.warning("追問判斷：%s", self.report.stop_reason)
             return None
         except Exception as e:  # noqa: BLE001
             logger.exception("要求 %s 對文章 %s 判斷時發生預期外的錯誤", followup.pk, doc.id)
-            self._failure(followup, doc, e)
+            self._failure(followup, doc, e, prior)
             return None
         self.report.judged += 1
         self.report.found += followed
         return fresh_followup
 
-    def _failure(self, followup: FollowUp, doc: Doc, error: Exception) -> None:
+    def _stop(self) -> None:
+        self.report.stopped = True
+        logger.warning("GPU 不可用，追問判斷這一輪提前結束")
+
+    def _failure(self, followup: FollowUp, doc: Doc, error: Exception, prior: int | None = None) -> None:
+        """記一次失敗。prior 不是 None：這一對自己的失敗，記在它的失敗次數上。"""
         self.report.failed += 1
         self.report.errors.append(f"要求 {followup.pk} 對文章 {doc.id}: {error}")
         logger.warning("要求 %s 對文章 %s 判斷失敗：%s", followup.pk, doc.id, error)
+        if prior is None:
+            return
+        if prior == 0:
+            self.fresh_failed += 1
+        _count_failure(followup, doc.id)
 
-    def _settle(self, followup: FollowUp, candidates: list[Doc]) -> None:
+    def _settle(self, item: _Item) -> None:
         """記下這一項是不是所有候選都判完了（checked_at），未追問要靠它。
 
         只在需要時寫：還沒判完而之前記過 → 清掉；判完了而還沒記過、或上次是觀察期結束前記的
-        → 記現在。每晚把每一項都寫一次會白白磨 SD 卡。
+        → 記現在。每晚把每一項都寫一次會白白磨 SD 卡。失敗到跳過的對永遠判不完：這一項停在
+        觀察中，除非別的候選判出有追問。
         """
+        followup = item.followup
         checked = set(followup.checked or [])
-        complete = bool(followup.followed_by_id) or all(doc.id in checked for doc in candidates)
-        if not complete:
-            self.report.remaining += 1
+        unchecked = [doc for doc in item.candidates if doc.id not in checked]
+        if not followup.followed_by_id and unchecked:
+            if all(_failures_of(followup, doc.id) >= MAX_PAIR_FAILURES for doc in unchecked):
+                self.report.skipped += 1
+            else:
+                self.report.remaining += 1
             if followup.checked_at is not None:
                 FollowUp.objects.filter(pk=followup.pk).update(checked_at=None)
             return
@@ -965,6 +1050,37 @@ class _Round:
             self.today > end >= timezone.localdate(followup.checked_at)))
         if stale_mark:
             FollowUp.objects.filter(pk=followup.pk).update(checked_at=self.now)
+
+
+def _count_failure(followup: FollowUp, candidate_id: int) -> None:
+    """這一對的失敗次數加一。從資料庫重讀再加：等 GPU 的時候這一項可能被重產清掉或刪掉了。
+
+    存不進去（SD 卡上的 SQLite 鎖住）只記 log：少記一次失敗，頂多這一對多送一次。
+    """
+    try:
+        current = FollowUp.objects.filter(pk=followup.pk).values_list("failures", flat=True).first()
+        if current is None:
+            return
+        failures = dict(current)
+        key = str(candidate_id)
+        failures[key] = int(failures.get(key, 0)) + 1
+        FollowUp.objects.filter(pk=followup.pk).update(failures=failures)
+        followup.failures = failures
+    except Exception:  # noqa: BLE001
+        logger.exception("要求 %s 對文章 %s 的失敗次數存不進去", followup.pk, candidate_id)
+
+
+def reset_failures() -> int:
+    """清掉每一對的失敗次數，跳過的對重新排隊（check_followups --retry-failed）。
+
+    失敗到跳過的對永遠不會再送，那一項也就永遠停在觀察中。GPU 端還沒更新、或判斷器的提示詞有
+    問題時，每一對都會失敗：修好之後要能讓它們重來，不必一筆一筆刪。
+    """
+    stale = [fu for fu in FollowUp.objects.only("id", "failures") if fu.failures]
+    for followup in stale:
+        followup.failures = {}
+    FollowUp.objects.bulk_update(stale, ["failures"])
+    return len(stale)
 
 
 def _fresh_pair(followup_id: int, candidate_id: int,
@@ -988,35 +1104,42 @@ def _record(followup: FollowUp, candidate_id: int, result: FollowUpResult, follo
     """記下一對的判斷。換了判斷器就整項重來：一項要求的判斷永遠出自同一個判斷器。
 
     否則一項要求的三個候選可能是兩個版本判的，「只算通過的判斷器判出來的」就說不清楚。
+    判出來了，這一對之前的失敗次數就沒有用了，一起拿掉。
     """
     if followup.classifier and followup.classifier != result.classifier:
         _clear_judgments(followup)
     followup.classifier = result.classifier
     if candidate_id not in followup.checked:
         followup.checked = [*followup.checked, candidate_id]
+    followup.failures = {k: v for k, v in (followup.failures or {}).items() if k != str(candidate_id)}
     if followed:
         followup.followed_by_id = candidate_id
         followup.quote = result.quote
-    followup.save(update_fields=["checked", "followed_by", "quote", "classifier", "checked_at"])
+    followup.save(update_fields=["checked", "failures", "followed_by", "quote", "classifier", "checked_at"])
 
 
 def check_followups(client: GpuApiClient, limit: int, recheck: bool = False,
-                    timeout: float | None = None, now: datetime | None = None) -> CheckReport:
+                    timeout: float | None = None, now: datetime | None = None,
+                    retry_failed: bool = False) -> CheckReport:
     """替基礎文章建立／更新要求（期限換算），再判斷新的候選對，最多 limit 個判斷工作。
 
     失敗處理同議題分類：失敗只記 log、下一輪再判；GPU 連不上整輪停；開頭連續 3 個被拒也停。
-    判不完的要求照樣記下「還沒判完」（checked_at 清掉），不會被當成未追問。
+    判不完的要求照樣記下「還沒判完」（checked_at 清掉），不會被當成未追問。每一對的失敗次數記在
+    FollowUp.failures：失敗過的排在沒失敗過的後面，失敗 2 次就不再送。
 
     recheck=True：先把不是通過的判斷器判的要求清掉重來（換模型或提示詞、新版本評估通過之後用）。
+    retry_failed=True：先清掉每一對的失敗次數，跳過的對重新排隊（GPU 端修好之後用）。
     """
     timeout = timeout or settings.GPU_JOB_TIMEOUT_SECONDS
     round_ = _Round(client, limit, timeout, now or timezone.now(), WaitingIndex.load())
     round_.report.sync = sync_followups()
     if recheck:
         round_.report.reset = reset_untrusted(passing_judge())
+    if retry_failed:
+        round_.report.retried = reset_failures()
     index = CandidateIndex.load()
-    for followup in list(_open_followups()):
-        round_.check(followup, index.candidates(followup))
+    round_.run([_Item(followup, index.candidates(followup), dict(followup.failures or {}))
+                for followup in _open_followups()])
     return round_.report
 
 
@@ -1029,22 +1152,27 @@ def forget_article(article: Article) -> None:
     - 它當來源的要求刪掉：要求的文字與位置都可能換了，下一輪 sync_followups 重建。
     - 它當候選的那些要求：從 checked 與 followed_by 拿掉，下一輪用新內容重判。只有發言日在它
       之前、觀察期涵蓋它的要求才可能判過它，先用日期篩，不必每篇都掃全部。
+    - 這一對之前失敗的次數也拿掉：內容換了，之前一直失敗（或跳過）的那一對可能就判得出來了。
     """
     FollowUp.objects.filter(article=article).delete()
     day = article.date if isinstance(article.date, date) else date.fromisoformat(str(article.date))
+    key = str(article.pk)
     touched = []
     for followup in FollowUp.objects.filter(
             article__source=article.source, article__date__lt=day,
             due_date__gte=day - timedelta(days=WATCH_DAYS)).only(
-            "id", "checked", "followed_by", "quote", "checked_at"):
-        if article.pk not in (followup.checked or []) and followup.followed_by_id != article.pk:
+            "id", "checked", "failures", "followed_by", "quote", "checked_at"):
+        failures = followup.failures or {}
+        if (article.pk not in (followup.checked or []) and followup.followed_by_id != article.pk
+                and key not in failures):
             continue
         followup.checked = [i for i in followup.checked if i != article.pk]
+        followup.failures = {k: v for k, v in failures.items() if k != key}
         if followup.followed_by_id == article.pk:
             followup.followed_by, followup.quote = None, ""
         followup.checked_at = None
         touched.append(followup)
-    FollowUp.objects.bulk_update(touched, ["checked", "followed_by", "quote", "checked_at"])
+    FollowUp.objects.bulk_update(touched, ["checked", "failures", "followed_by", "quote", "checked_at"])
 
 
 # --- 標註集 ---
