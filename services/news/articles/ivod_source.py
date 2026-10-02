@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import json
+import re
 import time
 import urllib.error
 import urllib.parse
@@ -43,6 +44,8 @@ class Field(StrEnum):
     DURATION = "影片長度"
     MEETING = "會議資料"
     MEETING_TITLE = "標題"
+    # 全院委員會、公聽會的片段沒有「會議資料」，只有這個頂層欄位
+    MEETING_NAME = "會議名稱"
     FEATURES = "支援功能"
     ROWS = "ivods"
     TOTAL_PAGES = "total_page"
@@ -111,7 +114,7 @@ def _clip(raw: dict) -> IvodClip | None:
         # 沒有播放網址的話，後面送去 GPU 一定被拒，而那個拒絕會被當成
         # 「服務不可用」而擋住當天整批。在這裡就不要登記它。
         return None
-    meeting = (raw.get(Field.MEETING) or {}).get(Field.MEETING_TITLE) or ""
+    meeting = meeting_title(raw)
     return IvodClip(
         ivod_id=str(ivod_id),
         date=str(raw.get(Field.DATE) or ""),
@@ -121,6 +124,27 @@ def _clip(raw: dict) -> IvodClip | None:
         ivod_url=url,
         has_transcript=Feature.AI_TRANSCRIPT in (raw.get(Field.FEATURES) or []),
     )
+
+
+# 「第11屆第5會期第2次全院委員會（事由：總統咨，…）」：事由動輒幾百字，只留會議本身
+_REASON_RE = re.compile(r"\s*[（(]事由[：:].*$", re.S)
+# 後備的會議名稱最多留這麼長：標題是「日期 講者－會議」，欄位上限 300
+_FALLBACK_MEETING_MAX = 200
+
+
+def meeting_title(raw: dict) -> str:
+    """片段的會議名稱。
+
+    平常在「會議資料.標題」。全院委員會、公聽會的片段沒有會議資料（實測約 6%），只有頂層的
+    「會議名稱」——沒有這個後備，這些發言的會議名稱是空的，解析不出會期，就從人物側寫裡
+    整個消失。
+    """
+    data = raw.get(Field.MEETING)
+    title = data.get(Field.MEETING_TITLE) if isinstance(data, dict) else None
+    if title:
+        return str(title)
+    name = str(raw.get(Field.MEETING_NAME) or "")
+    return _REASON_RE.sub("", name).strip()[:_FALLBACK_MEETING_MAX]
 
 
 def _retry_delay(error: urllib.error.HTTPError, attempt: int) -> float:
@@ -174,6 +198,14 @@ class IvodDailySource:
         # 上游哪天給了非數字 id，排序不該讓整個指令崩潰
         return sorted(clips, key=lambda c: (len(c.ivod_id), c.ivod_id))
 
+    def record(self, ivod_id: str) -> dict:
+        """單一片段的原始資料（回補會議名稱用）。"""
+        payload = self._get_json(f"{self._base}/{urllib.parse.quote(str(ivod_id))}")
+        record = payload.get("data", payload) if isinstance(payload, dict) else None
+        if not isinstance(record, dict):
+            raise IvodUnavailable("立法院 API 的片段資料不是物件")
+        return record
+
     def _page(self, day: date, page: int) -> dict:
         query = urllib.parse.urlencode({
             Field.DATE: day.isoformat(),
@@ -181,7 +213,9 @@ class IvodDailySource:
             "limit": _PAGE_SIZE,
             "page": page,
         })
-        url = f"{self._base}?{query}"
+        return self._get_json(f"{self._base}?{query}")
+
+    def _get_json(self, url: str) -> dict:
         for attempt in range(len(_RETRY_DELAYS) + 1):
             if self._requests:
                 # 第一次不等；之後每次請求前留間隔，多天回補才不會一口氣打爆對方

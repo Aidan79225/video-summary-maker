@@ -19,7 +19,7 @@ import urllib.request
 from collections import Counter
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field, replace
-from datetime import date
+from datetime import date, timedelta
 
 from django.conf import settings
 from django.db import transaction
@@ -58,12 +58,13 @@ class SyncReport:
     created_memberships: int = 0
     updated: int = 0
     party_changes: int = 0
+    term_changes: int = 0
     review: int = 0
     errors: list[str] = field(default_factory=list)
 
     def __str__(self) -> str:
         text = (f"名單 {self.seen} 筆：新人物 {self.created_persons}、新任期 {self.created_memberships}、"
-                f"更新 {self.updated}、換黨 {self.party_changes}")
+                f"更新 {self.updated}、換黨 {self.party_changes}、換屆 {self.term_changes}")
         if self.review:
             text += f"、待人工確認 {self.review}"
         return text
@@ -383,6 +384,37 @@ def _find_person(name: str) -> tuple[Person | None, bool]:
     return None, len(matches) > 1
 
 
+_TERM_NUMBER_RE = re.compile(r"\d+")
+_FULLWIDTH = str.maketrans("０１２３４５６７８９", "0123456789")
+
+
+def term_number(term: str | None) -> str:
+    """「第11屆」「11」都變成「11」；沒有數字就是空字串（不知道是哪一屆）。"""
+    match = _TERM_NUMBER_RE.search((term or "").translate(_FULLWIDTH))
+    return str(int(match.group())) if match else ""
+
+
+# 每一屆的就職日。臺中、新北都在 2010-12-25 升格直轄市，之後每四年一屆、12 月 25 日就職；
+# 立法院從第 7 屆（2008-02-01）起每四年一屆、2 月 1 日就職。換屆時用它當新任期的起點——
+# 用同步那天的話，新屆開議到下一次同步之間的會期裡，連任的人會對不上這一屆的任期。
+_FIRST_TERM = {ArticleSource.TCCC: (1, 2010, 12, 25), ArticleSource.NTPC: (1, 2010, 12, 25),
+               ArticleSource.LY: (7, 2008, 2, 1)}
+
+
+def term_start(source: str, term: str | None) -> date | None:
+    """這個來源第幾屆的就職日；不知道就是 None。"""
+    number, first = term_number(term), _FIRST_TERM.get(source)
+    if not number or first is None or int(number) < first[0]:
+        return None
+    base, year, month, day = first
+    return date(year + 4 * (int(number) - base), month, day)
+
+
+def _term_changed(membership: Membership, record: MemberRecord) -> bool:
+    old, new = term_number(membership.term), term_number(record.term)
+    return bool(old and new and old != new)
+
+
 @transaction.atomic
 def sync(records: Iterable[MemberRecord], today: date | None = None) -> SyncReport:
     today = today or timezone.localdate()
@@ -404,6 +436,30 @@ def sync(records: Iterable[MemberRecord], today: date | None = None) -> SyncRepo
                                     external_id=record.external_id, name=record.name,
                                     party=record.party, start_date=record.start_date)
             report.created_memberships += 1
+        elif _term_changed(membership, record):
+            # 換屆（連任也算）：舊的一段結束在新任期的前一天、新開一筆。不能直接改寫
+            # term／role——議會的任期沒有日期，人物側寫靠 term 分辨「誰在這一屆」，改寫了，
+            # 舊會期的同儕就會混進新議員、新任議長以前的發言也會被當成主持人拿掉。
+            # 新任期的起點：來源給的到職日 > 那一屆的就職日 > 今天（猜的，標起來讓人補）。
+            start = record.start_date or term_start(record.source, record.term)
+            guessed = start is None
+            start = start or today
+            # 已經結束的不要改（提前離職的人，原本的離職日才是真的）
+            if membership.end_date is None or membership.end_date >= start:
+                membership.end_date = start - timedelta(days=1)
+            membership.synced_at = now
+            membership.save()
+            logger.info("%s 換屆（%s → %s），已開新的一段任期", record.name,
+                        membership.term, record.term)
+            if record.party and record.party != membership.party:
+                # 換屆時一起換黨：照樣算進換黨的數字，報告上才看得到
+                report.party_changes += 1
+            membership = Membership(person=membership.person, source=record.source,
+                                    external_id=record.external_id, name=record.name,
+                                    party=record.party, start_date=start, needs_review=guessed)
+            report.term_changes += 1
+            if guessed:
+                report.review += 1
         elif membership.party != record.party and record.party:
             # 換黨：舊的結束在今天、新開一筆。真正的日期來源不給，標起來讓人補。
             membership.end_date = today
@@ -434,13 +490,21 @@ def sync(records: Iterable[MemberRecord], today: date | None = None) -> SyncRepo
 
 
 def _existing(record: MemberRecord) -> Membership | None:
-    """先用來源給的編號找，沒有編號（或改過）再用「同來源、同名、現任」。"""
+    """先用來源給的編號找，沒有編號（或改過）再用「同來源、同名、現任」。
+
+    沒有編號、而且已經離職的人（LYAPI 有幾位委員沒有歷屆立法委員編號），要用「同名、
+    同一個離職日」找回原本那一筆——只找現任的話永遠找不到，每週同步都會多建一筆任期。
+    """
     queryset = Membership.objects.filter(source=record.source)
     if record.external_id:
         found = queryset.filter(external_id=record.external_id).order_by("-id").first()
         if found:
             return found
-    return queryset.filter(name=record.name, end_date__isnull=True).order_by("-id").first()
+    same_name = queryset.filter(name=record.name).order_by("-id")
+    found = same_name.filter(end_date__isnull=True).first()
+    if found is None and record.end_date:
+        found = same_name.filter(end_date=record.end_date).first()
+    return found
 
 
 # --- 文章連結 ---

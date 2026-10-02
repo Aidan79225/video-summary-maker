@@ -1,0 +1,123 @@
+---
+/**
+ * 側寫的一個指標：名稱、值、n、跟同儕比的位置、證據連結。
+ *
+ * 百分位長條只標「他在哪裡」，不從 0 塗滿到他的位置——塗滿的長條讀起來
+ * 像分數，越長越好；但發言次數多不代表比較好，這裡只回答「跟同一個會期的
+ * 同儕比，他落在哪一段」。長條純粹是視覺輔助（aria-hidden），同一件事
+ * 底下有一行字完整寫出來，讀螢幕報讀器或不看顏色的人都拿得到。
+ */
+import type { ProfileIndicator } from '../lib/types';
+import { safeInternalPath } from '../lib/api';
+import { formatMetric } from '../lib/format';
+
+interface Props {
+  indicator: ProfileIndicator;
+  /** 最小樣本（API 的 min_sample），寫進「樣本不足（需至少 5 篇）」 */
+  minSample: number;
+}
+
+const { indicator: ind, minSample } = Astro.props;
+
+const hasValue = ind.value !== null;
+const pct = ind.percentile;
+// 頁面四捨五入到整數；長條的位置用原值，兩個同儕在 63.5 與 64.4 時記號不會疊在一起
+const pctLabel = pct !== null ? `第 ${Math.round(pct)} 百分位，在 ${ind.peers} 位同儕中` : '';
+const safeEvidence = ind.n > 0 ? safeInternalPath(ind.evidence_url) : null;
+// 跳到清單：側寫區塊在清單上面，不跳的話點了只會回到頁首
+const evidence = safeEvidence && !safeEvidence.includes('#') ? `${safeEvidence}#articles` : safeEvidence;
+// 證據連結列出的是文章；「有來源的數字占比」的 n 是數字個數，不能寫成「看這 23 篇」
+const evidenceLabel = ind.n_unit === '篇' ? `看這 ${ind.n} 篇` : '看這些數字出自哪幾篇';
+// 百分號緊貼數字，其他單位留一點空隙
+const tightUnit = ind.unit === '%';
+---
+
+<li class="flex min-w-0 flex-col rounded-xl border border-line-soft px-4 py-3.5">
+  <p class="text-[0.82rem] font-medium text-ink-2">{ind.label}</p>
+
+  {/* 樣本不足時值照樣給（原始計數），但降成次要的顏色：一兩篇算出來的比例不該像標題數字一樣搶眼 */}
+  <p
+    class:list={[
+      'mt-1 text-[1.55rem] leading-tight font-semibold',
+      ind.sample_ok && hasValue ? 'text-ink' : 'text-muted',
+    ]}
+  >
+    {
+      hasValue ? (
+        <>
+          {formatMetric(ind.value as number)}
+          {ind.unit && (
+            <span class:list={['text-[0.85rem] font-medium text-muted', tightUnit ? 'ml-px' : 'ml-1']}>
+              {ind.unit}
+            </span>
+          )}
+        </>
+      ) : (
+        <>
+          <span aria-hidden="true">—</span>
+          <span class="sr-only">沒有可計算的資料</span>
+        </>
+      )
+    }
+  </p>
+  <p class="tabular mt-0.5 text-[0.72rem] text-muted">n = {ind.n} {ind.n_unit}</p>
+
+  {/* 桌面版三格並排時，長條與「樣本不足」等高，底下的證據連結才會對齊；手機一格一列就不必留白 */}
+  <div class="mt-3 sm:min-h-[3.1rem]">
+    {
+      pct !== null ? (
+        <>
+          <div class="px-1.5" aria-hidden="true" title={`百分位 ${formatMetric(pct)}`}>
+            <div class="relative h-4">
+              <span class="absolute inset-x-0 top-1/2 h-1 -translate-y-1/2 rounded-full bg-line" />
+              {/* 中位數的刻度：讓「比一半的人多／少」一眼看得出來 */}
+              <span class="absolute top-1/2 left-1/2 h-2.5 w-px -translate-y-1/2 bg-muted/45" />
+              <span
+                class="absolute top-1/2 h-3 w-3 -translate-x-1/2 -translate-y-1/2 rounded-full bg-viz-mark ring-2 ring-surface"
+                style={`left: ${pct}%`}
+              />
+            </div>
+            {/* 刻度字以中心對齊各自的位置，「50」才會正好落在中位刻度底下 */}
+            <div class="tabular relative mt-0.5 h-3 text-[0.62rem] leading-none text-muted">
+              <span class="absolute left-0 -translate-x-1/2">0</span>
+              <span class="absolute left-1/2 -translate-x-1/2">50</span>
+              <span class="absolute left-full -translate-x-1/2">100</span>
+            </div>
+          </div>
+          <p class="mt-1.5 text-[0.75rem] leading-snug text-ink-2">{pctLabel}</p>
+        </>
+      ) : (
+        <p class="flex items-start gap-1.5 text-[0.75rem] leading-snug text-muted">
+          <svg
+            viewBox="0 0 24 24"
+            class="mt-[3px] h-3.5 w-3.5 shrink-0"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.8"
+            aria-hidden="true"
+          >
+            <circle cx="12" cy="12" r="9" />
+            <path d="M12 11v5" stroke-linecap="round" />
+            <circle cx="12" cy="7.8" r="0.9" fill="currentColor" stroke="none" />
+          </svg>
+          {ind.sample_ok ? '同儕不足，不比較' : `樣本不足（需至少 ${minSample} ${ind.n_unit}）`}
+        </p>
+      )
+    }
+  </div>
+
+  <p class="mt-auto pt-3 text-[0.78rem]">
+    {
+      evidence ? (
+        <a href={evidence} class="group inline-flex items-center gap-1 text-accent">
+          <span class="underline decoration-accent/40 underline-offset-4 transition-colors group-hover:decoration-accent">
+            {evidenceLabel}
+          </span>
+          <span aria-hidden="true">→</span>
+        </a>
+      ) : (
+        <span class="text-muted">{ind.n > 0 ? '' : `這個會期沒有可計算的${ind.n_unit === '篇' ? '報導' : '數字'}`}</span>
+      )
+    }
+  </p>
+</li>

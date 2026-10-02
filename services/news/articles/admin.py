@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from django.contrib import admin, messages
 
-from .models import Article, ArticleStatus, Membership, Person, Slide
+from .models import Article, ArticleStatus, Membership, Person, ProfileStat, Session, Slide
 
 
 class SlideInline(admin.TabularInline):
@@ -14,15 +14,16 @@ class SlideInline(admin.TabularInline):
 class ArticleAdmin(admin.ModelAdmin):
     list_display = ("date", "speaker", "party", "source", "meeting", "status", "attempts",
                     "updated_at")
-    list_filter = ("status", "source", "party", "date", "speaker")
+    list_filter = ("status", "source", "session", "party", "date", "speaker")
     search_fields = ("ivod_id", "speaker", "title", "transcript_text", "error")
     # 失敗原因與 GPU 工作編號是給人看的診斷資訊，不該在 admin 裡被改掉
     readonly_fields = ("error", "gpu_job_id", "attempts", "created_at", "updated_at",
                        "published_at")
-    autocomplete_fields = ("membership",)
+    # 會期可以手動改：每晚的重算只替「還沒掛會期」的文章掛，不會蓋掉人改過的
+    autocomplete_fields = ("membership", "session")
     fieldsets = (
         (None, {"fields": ("source", "ivod_id", "slug", "title", "speaker", "party", "membership",
-                           "meeting", "date", "duration_seconds", "ivod_url")}),
+                           "meeting", "session", "date", "duration_seconds", "ivod_url")}),
         ("處理狀態", {"fields": ("status", "attempts", "error", "gpu_job_id",
                                  "created_at", "updated_at", "published_at")}),
         ("內容", {"classes": ("collapse",),
@@ -98,3 +99,36 @@ class MembershipAdmin(admin.ModelAdmin):
     list_filter = ("source", "party", "needs_review", "term", "role", "caucus")
     search_fields = ("name", "external_id", "person__name")
     autocomplete_fields = ("person",)
+
+
+@admin.register(Session)
+class SessionAdmin(admin.ModelAdmin):
+    """會期是從會議名稱解析出來的，涵蓋範圍每晚重算：在這裡改了也會被蓋掉，所以只給看。
+
+    刪除照常可用：文章的會期會變成空的，下次 compute_profiles 再依會議名稱掛回去。
+    """
+
+    list_display = ("name", "source", "term", "start_date", "end_date")
+    list_filter = ("source", "term")
+    search_fields = ("name",)
+    readonly_fields = ("source", "term", "name", "start_date", "end_date")
+
+    def has_add_permission(self, request) -> bool:
+        return False
+
+
+@admin.register(ProfileStat)
+class ProfileStatAdmin(admin.ModelAdmin):
+    """側寫快取：每晚整批重算，手改會被下一次重算蓋掉，所以只給看。要重算跑 compute_profiles。"""
+
+    list_display = ("person", "session", "indicator", "value", "n", "percentile", "peers",
+                    "computed_at")
+    list_filter = ("session__source", "indicator", "session")
+    search_fields = ("person__name",)
+    list_select_related = ("person", "session")
+
+    def has_add_permission(self, request) -> bool:
+        return False
+
+    def has_change_permission(self, request, obj=None) -> bool:
+        return False

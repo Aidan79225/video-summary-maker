@@ -3,14 +3,17 @@ from __future__ import annotations
 
 import atexit
 import base64
+import itertools
 import shutil
 import tempfile
 from datetime import date
+from urllib.parse import parse_qsl, unquote, urlsplit
 
 from django.test import TestCase, override_settings
 
 from articles.ingest import save_result
-from articles.models import Article, ArticleStatus
+from articles.models import Article, ArticleStatus, Membership, Person, ProfileStat, Session
+from articles.profiles import assign_sessions, compute_profiles
 
 MEDIA = tempfile.mkdtemp(prefix="news_api_media_")
 atexit.register(shutil.rmtree, MEDIA, ignore_errors=True)
@@ -34,17 +37,18 @@ BRIEF = {
 
 
 def _article(ivod_id="900001", speaker="範例一", day="2026-08-27", status=None,
-             slides=2, with_image=True, brief=None, source="ly", party=""):
+             slides=2, with_image=True, brief=None, source="ly", party="",
+             meeting="第11屆第5會期第23次會議", duration=197):
     article = Article.objects.create(
         ivod_id=ivod_id,
         source=source,
         party=party,
         slug=f"{day}-{ivod_id}",
-        title=f"{day} {speaker}－第11屆第5會期第23次會議",
+        title=f"{day} {speaker}－{meeting}",
         speaker=speaker,
-        meeting="第11屆第5會期第23次會議",
+        meeting=meeting,
         date=date.fromisoformat(day),
-        duration_seconds=197,
+        duration_seconds=duration,
         ivod_url=f"https://ivod.ly.gov.tw/Play/Clip/1M/{ivod_id}",
     )
     if status in (ArticleStatus.PENDING, ArticleStatus.FAILED):
@@ -366,3 +370,232 @@ class PartyApiTests(TestCase):
         items = {i["name"]: i for i in self.client.get("/api/speakers").json()["items"]}
         self.assertEqual((items["甲"]["party"], items["甲"]["district"]), ("民主進步黨", "臺北市第一選舉區"))
         self.assertEqual((items["乙"]["party"], items["乙"]["district"]), ("", ""))
+
+
+# --- 人物側寫 ---
+
+S5 = "第11屆第5會期第23次會議"
+S5_EXTRA = "第11屆第5會期第1次臨時會第2次會議"
+S4 = "第11屆第4會期第8次會議"
+_speech_ids = itertools.count(1)
+
+
+def _speech(speaker, meeting=S5, day="2026-03-10", brief=None, source="ly",
+            status=None, duration=600):
+    """側寫用的文章：一段、不帶截圖，跑得快。"""
+    return _article(f"p{next(_speech_ids)}", speaker=speaker, day=day, status=status, slides=1,
+                    with_image=False, brief=brief, source=source, meeting=meeting,
+                    duration=duration)
+
+
+def _members(source, *names):
+    return {name: Membership.objects.create(person=Person.objects.create(name=name),
+                                            source=source, name=name)
+            for name in names}
+
+
+def _evidence_count(client, evidence_url):
+    """照網站的做法跟著證據網址走：/speaker/<名字>?… 換成 /api/articles 的查詢。
+
+    網站把 brief 轉成 has_brief（見設計文件「網站」一節），其餘原樣轉手。
+    """
+    parts = urlsplit(evidence_url)
+    assert parts.path.startswith("/speaker/"), evidence_url
+    params = dict(parse_qsl(parts.query))
+    if params.pop("brief", None) == "1":
+        params["has_brief"] = "1"
+    params["speaker"] = unquote(parts.path.removeprefix("/speaker/"))
+    return client.get("/api/articles", params).json()["count"]
+
+
+@override_settings(MEDIA_ROOT=MEDIA)
+class ProfileApiTests(TestCase):
+    """立法院第 11 屆第 5 會期（含臨時會）與第 4 會期，六位立委。"""
+
+    def setUp(self):
+        self.m = _members("ly", "王立", "王立任", "甲", "乙", "丙", "丁")
+        for day in range(1, 6):
+            _speech("王立", day=f"2026-03-0{day}", brief=BRIEF)
+        _speech("王立", S5_EXTRA, day="2026-07-15", brief=BRIEF)   # 臨時會併入第 5 會期
+        _speech("王立", day="2026-04-01")                          # 沒有摘要卡
+        _speech("王立、甲", day="2026-04-02", brief=BRIEF)          # 聯合質詢：不算具體度
+        _speech("王立", day="2026-04-03", status=ArticleStatus.PENDING)
+        _speech("王立任", day="2026-04-04", brief=BRIEF)            # 名字包含「王立」，不能算給他
+        _speech("王立任", day="2026-04-05", brief=BRIEF)
+        _speech("甲、王立任、乙", day="2026-04-06", duration=1800)
+        _speech("王立", S4, day="2025-10-01")
+        _speech("丙", S4, day="2025-10-02")
+        _speech("王立", "立法院朝野黨團協商", day="2026-04-07")      # 沒有會期
+        compute_profiles()
+        self.s5 = Session.objects.get(name="第11屆第5會期")
+        self.s4 = Session.objects.get(name="第11屆第4會期")
+
+    def _profile(self, name, **params):
+        return self.client.get(f"/api/people/{self.m[name].person_id}/profile", params)
+
+    def _indicators(self, res):
+        return {i["key"]: i for block in res["blocks"] for i in block["indicators"]}
+
+    def test_the_profile_has_the_documented_shape(self):
+        res = self._profile("王立").json()
+        self.assertEqual(res["person"], {"id": self.m["王立"].person_id, "name": "王立"})
+        self.assertEqual(res["source"], "ly")
+        self.assertEqual(res["session"], {"id": self.s5.id, "source": "ly", "term": "11",
+                                          "name": "第11屆第5會期", "start_date": "2026-03-01",
+                                          "end_date": "2026-07-15"})
+        self.assertEqual([s["name"] for s in res["sessions"]], ["第11屆第5會期", "第11屆第4會期"])
+        self.assertEqual(res["min_sample"], 5)
+        self.assertTrue(res["computed_at"].endswith("+08:00"), res["computed_at"])
+        self.assertEqual([(b["key"], b["title"], [i["key"] for i in b["indicators"]])
+                          for b in res["blocks"]],
+                         [("volume", "投入量", ["speeches", "speaking_minutes"]),
+                          ("specificity", "具體度", ["numbers_per_speech", "deadline_asks_per_speech",
+                                                    "sourced_number_share"])])
+        got = self._indicators(res)
+        speeches = got["speeches"]
+        # 單獨 5 + 臨時會 1 + 沒有卡 1 + 聯合 1；處理中的與沒有會期的不算
+        self.assertEqual((speeches["value"], speeches["n"], speeches["n_unit"], speeches["unit"],
+                          speeches["label"], speeches["peers"], speeches["sample_ok"]),
+                         (8, 8, "篇", "次", "發言次數", 6, True))
+        self.assertIsInstance(speeches["value"], int)
+        self.assertIsNotNone(speeches["percentile"])
+        # 摘要卡：兩個數字（一個有條文來源）、一項帶期限的要求；基礎文章 6 篇
+        self.assertEqual((got["numbers_per_speech"]["value"], got["numbers_per_speech"]["n"]), (2.0, 6))
+        self.assertEqual(got["deadline_asks_per_speech"]["value"], 1.0)
+        share = got["sourced_number_share"]
+        self.assertEqual((share["value"], share["n"], share["n_unit"], share["unit"]),
+                         (50.0, 12, "個數字", "%"))
+        # 具體度只有他夠樣本（王立任只有 2 篇）：同儕不足，不比較
+        self.assertEqual((share["sample_ok"], share["percentile"], share["peers"]), (True, None, 1))
+
+    def test_percentiles_are_passed_through_unrounded(self):
+        """頁面自己四捨五入到整數。API 先取到小數一位就是兩次捨入：64.46 → 64.5 → 65。"""
+        stat = ProfileStat.objects.get(person=self.m["王立"].person, session=self.s5,
+                                       indicator="speeches")
+        got = self._indicators(self._profile("王立").json())["speeches"]
+        # 第 5 會期的發言次數 0、0、1、2、3、8：比他低的 5 人、同值 1 人
+        self.assertEqual(stat.percentile, 5.5 * 100 / 6)
+        self.assertEqual(got["percentile"], stat.percentile)
+
+    def test_evidence_urls_are_relative_site_paths_with_the_name_encoded(self):
+        got = self._indicators(self._profile("王立").json())
+        base = f"/speaker/%E7%8E%8B%E7%AB%8B?source=ly&session={self.s5.id}"
+        self.assertEqual(got["speeches"]["evidence_url"], base)
+        self.assertEqual(got["speaking_minutes"]["evidence_url"], base)
+        for key in ("numbers_per_speech", "deadline_asks_per_speech", "sourced_number_share"):
+            self.assertEqual(got[key]["evidence_url"], base + "&solo=1&brief=1")
+
+    def test_every_count_can_be_clicked_back_to_exactly_that_many_articles(self):
+        """證據一致性：證據網址查出來的篇數必須等於指標的 n。"""
+        checked = 0
+        for name in self.m:
+            first = self._profile(name).json()
+            for session in first["sessions"]:
+                res = self._profile(name, session=session["id"]).json()
+                for indicator in self._indicators(res).values():
+                    if indicator["n_unit"] != "篇":
+                        continue
+                    self.assertEqual(_evidence_count(self.client, indicator["evidence_url"]),
+                                     indicator["n"], (name, session["name"], indicator["key"]))
+                    checked += 1
+                speeches = self._indicators(res)["speeches"]
+                self.assertEqual(speeches["value"], speeches["n"])
+        self.assertGreater(checked, 20)
+
+    def test_a_council_member_sees_speaking_time_first(self):
+        tccc = _members("tccc", "楊啓邦")
+        _speech("楊啓邦", "第4屆第8次定期會 市政總質詢", day="2026-09-01", source="tccc")
+        compute_profiles()
+        res = self.client.get(f"/api/people/{tccc['楊啓邦'].person_id}/profile").json()
+        self.assertEqual(res["source"], "tccc")
+        self.assertEqual([i["key"] for i in res["blocks"][0]["indicators"]],
+                         ["speaking_minutes", "speeches"])
+        self.assertEqual(res["blocks"][0]["indicators"][0]["value"], 10.0)
+
+    def test_the_default_session_is_the_latest_one_he_spoke_in(self):
+        # 丙只在第 4 會期發言：第 5 會期比較新，但他在那裡是 0
+        self.assertEqual(self._profile("丙").json()["session"]["id"], self.s4.id)
+        # 丁從沒發言：就用有統計的最近一個
+        res = self._profile("丁").json()
+        self.assertEqual(res["session"]["id"], self.s5.id)
+        self.assertEqual(self._indicators(res)["speeches"]["value"], 0)
+
+    def test_a_session_can_be_picked(self):
+        res = self._profile("王立", session=self.s4.id).json()
+        self.assertEqual((res["session"]["name"], res["source"]), ("第11屆第4會期", "ly"))
+        self.assertEqual(self._indicators(res)["speeches"]["value"], 1)
+
+    def test_the_default_source_is_that_of_the_latest_session(self):
+        person = self.m["王立"].person
+        Membership.objects.create(person=person, source="tccc", name="王立")
+        _speech("王立", "第4屆第8次定期會 市政總質詢", day="2026-09-01", source="tccc")
+        compute_profiles()
+        self.assertEqual(self._profile("王立").json()["source"], "tccc")
+        res = self._profile("王立", source="ly").json()
+        self.assertEqual((res["source"], res["session"]["id"]), ("ly", self.s5.id))
+        self.assertEqual([s["source"] for s in res["sessions"]], ["ly", "ly"])
+
+    def test_missing_people_and_statistics_are_404(self):
+        self.assertEqual(self.client.get("/api/people/999999/profile").status_code, 404)
+        nobody = Person.objects.create(name="沒有任期的人")
+        self.assertEqual(self.client.get(f"/api/people/{nobody.id}/profile").status_code, 404)
+        self.assertEqual(self._profile("王立", source="tccc").status_code, 404)
+        self.assertEqual(self._profile("王立", session=999999).status_code, 404)
+        self.assertEqual(self._profile("王立", session=self.s5.id, source="ntpc").status_code, 404)
+        self.assertEqual(self._profile("王立", source="nope").status_code, 422)
+
+
+@override_settings(MEDIA_ROOT=MEDIA)
+class EvidenceFilterTests(TestCase):
+    """/api/articles 的 session、solo、has_brief：側寫的證據網址靠它們。"""
+
+    def setUp(self):
+        _article("1", speaker="王立", brief=BRIEF, slides=1, with_image=False)
+        _article("2", speaker="王立、甲", brief=BRIEF, slides=1, with_image=False)
+        _article("3", speaker="王立", slides=1, with_image=False)
+        _article("4", speaker="王立任", brief=BRIEF, slides=1, with_image=False)
+        _article("5", speaker="王立", meeting=S4, day="2025-10-01", slides=1, with_image=False)
+        assign_sessions()
+        self.s5 = Session.objects.get(name="第11屆第5會期")
+
+    def _ids(self, **params):
+        return sorted(i["ivod_id"] for i in self.client.get("/api/articles", params).json()["items"])
+
+    def test_session_keeps_only_that_sessions_articles(self):
+        self.assertEqual(self._ids(session=self.s5.id), ["1", "2", "3", "4"])
+        self.assertEqual(self._ids(session=999999), [])
+
+    def test_solo_drops_joint_speeches_and_with_a_speaker_means_exactly_that_name(self):
+        self.assertEqual(self._ids(solo=1), ["1", "3", "4", "5"])
+        self.assertEqual(self._ids(speaker="王立"), ["1", "2", "3", "5"])
+        self.assertEqual(self._ids(speaker="王立", solo=1), ["1", "3", "5"])
+
+    def test_has_brief_keeps_only_articles_with_a_brief(self):
+        self.assertEqual(self._ids(has_brief=1), ["1", "2", "4"])
+        self.assertEqual(self._ids(speaker="王立", session=self.s5.id, solo=1, has_brief=1), ["1"])
+
+    def test_false_means_no_filter_and_junk_is_refused(self):
+        self.assertEqual(self._ids(solo=0, has_brief="false"), ["1", "2", "3", "4", "5"])
+        self.assertEqual(self.client.get("/api/articles?session=abc").status_code, 422)
+        self.assertEqual(self.client.get("/api/articles?solo=maybe").status_code, 422)
+
+
+@override_settings(MEDIA_ROOT=MEDIA)
+class SpeakerPersonTests(TestCase):
+    def test_speakers_carry_the_person_behind_the_name(self):
+        m = _members("ly", "甲")["甲"]
+        _article("1", speaker="甲")
+        _article("2", speaker="乙")
+        items = {i["name"]: i for i in self.client.get("/api/speakers").json()["items"]}
+        self.assertEqual(items["甲"]["person_id"], m.person_id)
+        self.assertIsNone(items["乙"]["person_id"])
+
+    def test_the_latest_term_wins_when_a_name_has_several(self):
+        old = Person.objects.create(name="甲")
+        new = Person.objects.create(name="甲")
+        Membership.objects.create(person=new, source="ly", name="甲", start_date=date(2024, 2, 1))
+        Membership.objects.create(person=old, source="ly", name="甲", start_date=date(2020, 2, 1),
+                                  end_date=date(2024, 1, 31))
+        _article("1", speaker="甲")
+        items = self.client.get("/api/speakers").json()["items"]
+        self.assertEqual([i["person_id"] for i in items], [new.id])

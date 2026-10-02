@@ -25,6 +25,7 @@ from .ivod_source import IvodClip, SourceUnavailable
 from .law_source import LawSource, LawUnavailable
 from .members_sync import link_article
 from .models import Article, ArticleSource, ArticleStatus, Slide
+from .profiles import attach_session
 
 logger = logging.getLogger(__name__)
 
@@ -176,8 +177,11 @@ def _upsert(clip: IvodClip, day: date) -> tuple[Article, bool]:
         },
     )
     if created:
+        # 會期從會議名稱解析，登記時就掛上，不必等每晚的側寫重算
+        attach_session(article, save=False)
         # 講者「當時」的政黨：登記那一刻就依日期查任期填好，之後換黨不回溯
-        link_article(article)
+        link_article(article, save=False)
+        article.save(update_fields=["session", "party", "membership", "updated_at"])
     return article, created
 
 

@@ -2,13 +2,18 @@
 from __future__ import annotations
 
 from datetime import date as date_type
+from datetime import datetime
 from typing import Literal
+from urllib.parse import quote
 
 from django.db.models import Max, Q
+from django.http import Http404
 from django.shortcuts import get_object_or_404
+from django.utils import timezone
 from ninja import NinjaAPI, Query, Schema
 
-from .models import Article, ArticleStatus, Membership
+from . import profiles
+from .models import Article, ArticleStatus, Membership, Person, ProfileStat, Session
 
 api = NinjaAPI(title="議會質詢摘要 API", version="1.0", urls_namespace="news")
 
@@ -104,6 +109,56 @@ class SpeakerOut(Schema):
     latest_date: date_type | None
     party: str = ""
     district: str = ""
+    # 同來源、同名的任期所屬的人；發言者頁靠它找側寫。查無任期就是 null
+    person_id: int | None = None
+
+
+class SessionOut(Schema):
+    id: int
+    source: str
+    term: str
+    name: str
+    # 資料涵蓋範圍（掛在這個會期的文章最早與最晚的日期），不是官方起訖
+    start_date: date_type | None
+    end_date: date_type | None
+
+
+class PersonRefOut(Schema):
+    id: int
+    name: str
+
+
+class IndicatorOut(Schema):
+    key: str
+    label: str
+    unit: str
+    # 分母是 0 時是 null；發言次數是整數
+    value: int | float | None
+    n: int
+    n_unit: str
+    # 樣本不足或同儕不足時是 null；沒有先捨入，頁面自己四捨五入到整數
+    percentile: float | None
+    peers: int
+    sample_ok: bool
+    # 網站的相對路徑：點進去就是算出這個數字的那幾篇
+    evidence_url: str
+
+
+class BlockOut(Schema):
+    key: str
+    title: str
+    indicators: list[IndicatorOut]
+
+
+class ProfileOut(Schema):
+    person: PersonRefOut
+    source: str
+    session: SessionOut
+    # 同來源、他有統計的所有會期，新的在前
+    sessions: list[SessionOut]
+    computed_at: datetime
+    min_sample: int
+    blocks: list[BlockOut]
 
 
 class PartyOut(Schema):
@@ -160,7 +215,8 @@ def health(request) -> dict:
 @api.get("/articles", response=ArticleListOut)
 def list_articles(request, date: date_type | None = None, speaker: str | None = None,
                   q: str | None = None, source: SourceParam | None = None,
-                  party: str | None = None,
+                  party: str | None = None, session: int | None = None,
+                  solo: bool = False, has_brief: bool = False,
                   page: int = Query(1, ge=1, le=_MAX_PAGE),
                   page_size: int = 20) -> dict:
     """只回已完成的文章——處理中或失敗的是內部狀態，不是新聞。
@@ -168,6 +224,10 @@ def list_articles(request, date: date_type | None = None, speaker: str | None = 
     date 宣告成日期型別而不是字串：前端會把訪客網址上的 ?date= 原樣轉手
     過來，字串會被直接丟進 filter() 而讓任何爬蟲或打錯的連結變成 500。
     交給 ninja 驗證就會回 422。
+
+    session、solo、has_brief 是人物側寫的證據篩選：側寫上每個數字的 evidence_url
+    帶的就是這幾個條件，查出來的篇數必須等於那個數字的 n（profiles 用同一套定義）。
+    solo、has_brief 是 false 時不篩——「只要聯合質詢」沒有人要。
     """
     # page 由 Query 擋住（超過 int64 的 OFFSET 會讓 SQLite 直接 500），
     # page_size 則夾住就好——一個看起來合理的 ?page_size=100 不值得回錯誤。
@@ -182,6 +242,13 @@ def list_articles(request, date: date_type | None = None, speaker: str | None = 
         queryset = queryset.filter(source=source)
     if party:
         queryset = queryset.filter(_joined_q("party", party))
+    if session is not None:
+        queryset = queryset.filter(session_id=session)
+    if solo:
+        # 講者欄位沒有「、」。搭配 speaker 時就只剩「講者完全等於這個名字」
+        queryset = queryset.exclude(speaker__contains=_SEP)
+    if has_brief:
+        queryset = queryset.filter(brief__isnull=False)
     if q:
         queryset = queryset.filter(
             Q(title__icontains=q)
@@ -255,14 +322,119 @@ def speakers(request, source: SourceParam | None = None) -> dict:
             if day > entry["latest_date"]:
                 entry["latest_date"] = day
     items = sorted(stats.values(), key=lambda e: (e["latest_date"], e["count"]), reverse=True)
-    # 現任的任期給政黨與選區；沒有任期資料就留空
-    current = {(m.name, m.source): m
-               for m in Membership.objects.filter(end_date__isnull=True).order_by("id")}
+    # 一次讀完任期：現任的那段給政黨與選區（沒有就留空）；最新的那段給 person_id
+    current: dict[tuple[str, str], Membership] = {}
+    latest: dict[tuple[str, str], Membership] = {}
+    for m in Membership.objects.order_by("id"):
+        key = (m.name, m.source)
+        if m.end_date is None:
+            current[key] = m
+        held = latest.get(key)
+        if held is None or (m.start_date or date_type.min) >= (held.start_date or date_type.min):
+            latest[key] = m
     for item in items:
-        m = current.get((item["name"], item["source"]))
+        key = (item["name"], item["source"])
+        m = current.get(key)
         item["party"] = m.party if m else ""
         item["district"] = m.district if m else ""
+        item["person_id"] = latest[key].person_id if key in latest else None
     return {"items": items}
+
+
+# --- 人物側寫 ---
+
+
+def _recency(session: Session) -> tuple:
+    """會期的新舊：看資料涵蓋到哪一天。"""
+    return (session.end_date or date_type.min, session.start_date or date_type.min, session.id)
+
+
+def _session_out(session: Session) -> dict:
+    return {"id": session.id, "source": session.source, "term": session.term, "name": session.name,
+            "start_date": session.start_date, "end_date": session.end_date}
+
+
+def _evidence_url(name: str, session: Session, indicator: profiles.Indicator) -> str:
+    """發言者頁的相對路徑，帶上算出這個數字的篩選條件。
+
+    具體度只算單獨發言而且有摘要卡的文章，所以多帶 solo 與 brief（網站轉成
+    /api/articles 的 solo、has_brief）。名字整個 URL 編碼：原住民族名有「．」。
+    """
+    url = f"/speaker/{quote(name, safe='')}?source={session.source}&session={session.id}"
+    if indicator.block == profiles.SPECIFICITY:
+        url += "&solo=1&brief=1"
+    return url
+
+
+def _indicator_out(stat: ProfileStat | None, indicator: profiles.Indicator, name: str,
+                   session: Session) -> dict:
+    value = stat.value if stat else None
+    n = stat.n if stat else 0
+    if value is not None and indicator is profiles.SPEECHES:
+        value = int(value)
+    return {
+        "key": indicator.key,
+        "label": indicator.label,
+        "unit": indicator.unit,
+        "value": value,
+        "n": n,
+        "n_unit": indicator.n_unit,
+        # 原樣給，不在這裡先取到小數一位：頁面還要再四捨五入到整數，兩次捨入會讓
+        # 64.46 變成 64.5 再變成 65，跟公式算出來的 64 對不上
+        "percentile": stat.percentile if stat else None,
+        "peers": stat.peers if stat else 0,
+        "sample_ok": indicator.sample_ok(n),
+        "evidence_url": _evidence_url(name, session, indicator),
+    }
+
+
+@api.get("/people/{person_id}/profile", response=ProfileOut)
+def person_profile(request, person_id: int, source: SourceParam | None = None,
+                   session: int | None = None) -> dict:
+    """一個人在一個會期的側寫：投入量與具體度，每項各自跟同儕比，不加總、不排名。
+
+    source 省略時用他最近一個有統計的會期的來源；session 省略時用這個來源裡他有發言的
+    最近一個會期，都沒有發言就用有統計的最近一個。指定了 session 而省略 source，
+    就用那個會期的來源。人不存在、在這個來源沒有任何統計、或指定的會期沒有他的
+    統計：404。
+    """
+    person = get_object_or_404(Person, pk=person_id)
+    stats = list(ProfileStat.objects.filter(person=person).select_related("session"))
+    by_session = {stat.session_id: stat.session for stat in stats}
+    ordered = sorted(by_session.values(), key=_recency, reverse=True)
+
+    chosen = None
+    if session is not None:
+        chosen = by_session.get(session)
+        if chosen is None or (source and chosen.source != source):
+            raise Http404("這個會期沒有他的統計")
+        source = chosen.source
+    if source is None:
+        if not ordered:
+            raise Http404("這個人還沒有任何統計")
+        source = ordered[0].source
+    in_source = [s for s in ordered if s.source == source]
+    if not in_source:
+        raise Http404("這個人在這個來源沒有任何統計")
+    if chosen is None:
+        spoke = {stat.session_id for stat in stats
+                 if stat.indicator == profiles.SPEECHES.key and (stat.value or 0) > 0}
+        chosen = next((s for s in in_source if s.id in spoke), in_source[0])
+
+    mine = {stat.indicator: stat for stat in stats if stat.session_id == chosen.id}
+    name = profiles.name_in_session(person, chosen)
+    blocks = [{"key": key, "title": title,
+               "indicators": [_indicator_out(mine.get(i.key), i, name, chosen) for i in indicators]}
+              for key, title, indicators in profiles.blocks_for(source)]
+    return {
+        "person": {"id": person.id, "name": person.name},
+        "source": source,
+        "session": _session_out(chosen),
+        "sessions": [_session_out(s) for s in in_source],
+        "computed_at": timezone.localtime(max(stat.computed_at for stat in mine.values())),
+        "min_sample": profiles.MIN_SAMPLE,
+        "blocks": blocks,
+    }
 
 
 @api.get("/parties", response=PartyListOut)

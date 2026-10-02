@@ -1,5 +1,5 @@
 {
-  "_note": "完全虛構的示範資料。姓名（範例一～範例六）、影片 id（9000xx；新北那篇的檔案 key 以 900 結尾）與發言內容都不對應任何真實人物或片段，網址也指向 example.invalid。USE_FIXTURE=1 時用它，讓 API 掛掉仍然可以展示畫面。 有摘要卡（brief）的三篇、沒有的兩篇，示範兩種版面；新北那篇是兩黨議員同一段的聯合質詢，示範多個政黨標籤。",
+  "_note": "完全虛構的示範資料。姓名（範例一～範例六）、影片 id（9000xx；新北那篇的檔案 key 以 900 結尾）與發言內容都不對應任何真實人物或片段，網址也指向 example.invalid。USE_FIXTURE=1 時用它，讓 API 掛掉仍然可以展示畫面。 有摘要卡（brief）的三篇、沒有的兩篇，示範兩種版面；新北那篇是兩黨議員同一段的聯合質詢，示範多個政黨標籤。 人物側寫：people 是名冊（同來源、同名對到哪個人；範例四刻意不在名冊裡，示範沒有側寫的發言者），sessions 是會期，文章的 session_id 是假資料才有的欄位（真的 API 在後端篩）。profiles 的第11屆第5會期與新北那一期照上面的文章算（範例一 1 篇、197 秒、4 個數字、1 項帶期限的要求），同儕人數與百分位是編的；第11屆第4會期沒有對應的文章，數字全是編的，用來示範有百分位的具體度與「同儕不足」——它的「看這 N 篇」會是空清單。",
   "articles": [
     {
       "slug": "2026-08-27-900001",
@@ -9,6 +9,7 @@
       "title": "2026-08-27 範例一－第11屆第5會期第23次會議",
       "speaker": "範例一",
       "meeting": "第11屆第5會期第23次會議",
+      "session_id": 3,
       "date": "2026-08-27",
       "duration_seconds": 197,
       "ivod_url": "https://ivod.example.invalid/Play/Clip/1M/900001",
@@ -134,6 +135,7 @@
       "title": "2026-08-26 範例二－第11屆第5會期第22次會議",
       "speaker": "範例二",
       "meeting": "第11屆第5會期第22次會議",
+      "session_id": 3,
       "date": "2026-08-26",
       "duration_seconds": 243,
       "ivod_url": "https://ivod.example.invalid/Play/Clip/1M/900002",
@@ -259,6 +261,7 @@
       "title": "2026-08-26 範例五、範例六議員－第4屆第8次定期會 捷運局專案報告",
       "speaker": "範例五、範例六",
       "meeting": "第4屆第8次定期會 捷運局專案報告",
+      "session_id": 7,
       "date": "2026-08-26",
       "duration_seconds": 1320,
       "ivod_url": "https://example.invalid/VodCloudV2/VOD/ViewMetaData?assetID=00000000-0000-0000-0000-000000900005",
@@ -375,6 +378,7 @@
       "title": "2026-08-25 範例三－第11屆第5會期第21次會議",
       "speaker": "範例三",
       "meeting": "第11屆第5會期第21次會議",
+      "session_id": 3,
       "date": "2026-08-25",
       "duration_seconds": 312,
       "ivod_url": "https://ivod.example.invalid/Play/Clip/1M/900003",
@@ -455,6 +459,7 @@
       "title": "2026-08-25 範例四議員－第4屆第8次定期會 市政總質詢",
       "speaker": "範例四",
       "meeting": "第4屆第8次定期會 市政總質詢",
+      "session_id": 5,
       "date": "2026-08-25",
       "duration_seconds": 268,
       "ivod_url": "https://example.invalid/index.asp?url=12&cno=0&ano=900004",
@@ -514,6 +519,369 @@
         }
       ],
       "transcript_text": "00:06 主席：請範例四委員質詢。\n00:11 範例四委員：謝謝主席，請次長。\n00:17 範例四委員：次長，校園霸凌的通報件數，三年前三千一百四十件，去年四千四百二十件，對嗎？\n00:31 教育部次長：報告委員，數字是這樣沒錯。\n00:37 範例四委員：成長四成。可是調查以後認定成立的，大概只有百分之十八。\n00:47 教育部次長：是，成立的比率大概在這個區間。\n00:54 範例四委員：同一段時間，家長對結果提出申復的比率也在上升。次長，我不是要你們提高成立率，我是說這兩個數字往相反方向走，代表程序的公信力有問題。\n01:14 教育部次長：我們會再檢視調查程序。\n01:20 範例四委員：那我直接問。現在學校的調查小組，大部分是誰在做？\n01:28 教育部次長：多數由校內人員組成，也會邀請外部專家。\n01:36 範例四委員：外部專家的參與比率很低。而且同一個輔導老師，常常又是調查的人，又是後面輔導的人。學生要怎麼相信這個程序？\n01:53 範例四委員：調查要冷，輔導要暖，這兩件事不應該同一個人做。我要求明定外部委員的最低比率，角色要分開。\n02:08 教育部次長：這部分我們會在準則修正的時候納入考量。\n02:15 範例四委員：再來講人力。全國專任輔導教師缺額多少？\n02:23 教育部次長：報告委員，大約六百四十人。\n02:29 範例四委員：偏遠地區缺額率超過三成，代理老師的比率一年比一年高。結果就是個案在學期中換老師。\n02:44 範例四委員：一個受害的孩子，要對第二個、第三個老師再講一次事情經過。次長，這件事本身就是二次傷害。\n02:58 教育部次長：我們理解委員的關心。\n03:04 範例四委員：不要只把缺額表送過來。請檢討員額分配跟待遇誘因，為什麼補不到人。\n03:16 範例四委員：最後一件事，調查時限。現在很多家長不是不能接受結果，是三個月都沒有人告訴他案子走到哪裡。\n03:32 範例四委員：我要求把時限跟進度告知寫進準則。原則二個月完成，必要時延長一次，每個階段主動告知雙方家長。\n03:49 教育部次長：這個部分我們會在準則修正草案裡面一併處理，下個會期前完成預告。\n04:01 範例四委員：我會持續追蹤。謝謝次長，謝謝主席。"
+    }
+  ],
+  "people": [
+    {
+      "id": 1,
+      "name": "範例一",
+      "source": "ly"
+    },
+    {
+      "id": 2,
+      "name": "範例二",
+      "source": "ly"
+    },
+    {
+      "id": 3,
+      "name": "範例三",
+      "source": "ly"
+    },
+    {
+      "id": 5,
+      "name": "範例五",
+      "source": "ntpc"
+    },
+    {
+      "id": 6,
+      "name": "範例六",
+      "source": "ntpc"
+    }
+  ],
+  "sessions": [
+    {
+      "id": 2,
+      "source": "ly",
+      "term": "11",
+      "name": "第11屆第4會期",
+      "start_date": "2025-09-09",
+      "end_date": "2026-01-16"
+    },
+    {
+      "id": 3,
+      "source": "ly",
+      "term": "11",
+      "name": "第11屆第5會期",
+      "start_date": "2026-02-24",
+      "end_date": "2026-08-27"
+    },
+    {
+      "id": 5,
+      "source": "tccc",
+      "term": "4",
+      "name": "第4屆第8次定期會",
+      "start_date": "2026-08-04",
+      "end_date": "2026-08-25"
+    },
+    {
+      "id": 7,
+      "source": "ntpc",
+      "term": "4",
+      "name": "第4屆第8次定期會",
+      "start_date": "2026-08-11",
+      "end_date": "2026-08-26"
+    }
+  ],
+  "profiles": [
+    {
+      "person_id": 1,
+      "source": "ly",
+      "session_id": 3,
+      "computed_at": "2026-10-01T06:12:00+08:00",
+      "blocks": [
+        {
+          "key": "volume",
+          "title": "投入量",
+          "indicators": [
+            {
+              "key": "speeches",
+              "label": "發言次數",
+              "unit": "次",
+              "value": 1,
+              "n": 1,
+              "n_unit": "篇",
+              "percentile": 9.3,
+              "peers": 113,
+              "sample_ok": true
+            },
+            {
+              "key": "speaking_minutes",
+              "label": "發言總時長",
+              "unit": "分鐘",
+              "value": 3.3,
+              "n": 1,
+              "n_unit": "篇",
+              "percentile": 6.6,
+              "peers": 113,
+              "sample_ok": true
+            }
+          ]
+        },
+        {
+          "key": "specificity",
+          "title": "具體度",
+          "indicators": [
+            {
+              "key": "numbers_per_speech",
+              "label": "每篇落地數字數",
+              "unit": "個／篇",
+              "value": 4.0,
+              "n": 1,
+              "n_unit": "篇",
+              "percentile": null,
+              "peers": 41,
+              "sample_ok": false
+            },
+            {
+              "key": "deadline_asks_per_speech",
+              "label": "每篇帶期限的要求數",
+              "unit": "項／篇",
+              "value": 1.0,
+              "n": 1,
+              "n_unit": "篇",
+              "percentile": null,
+              "peers": 41,
+              "sample_ok": false
+            },
+            {
+              "key": "sourced_number_share",
+              "label": "有來源的數字占比",
+              "unit": "%",
+              "value": 0.0,
+              "n": 4,
+              "n_unit": "個數字",
+              "percentile": null,
+              "peers": 3,
+              "sample_ok": false
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "person_id": 1,
+      "source": "ly",
+      "session_id": 2,
+      "computed_at": "2026-10-01T06:12:00+08:00",
+      "blocks": [
+        {
+          "key": "volume",
+          "title": "投入量",
+          "indicators": [
+            {
+              "key": "speeches",
+              "label": "發言次數",
+              "unit": "次",
+              "value": 14,
+              "n": 14,
+              "n_unit": "篇",
+              "percentile": 66.4,
+              "peers": 113,
+              "sample_ok": true
+            },
+            {
+              "key": "speaking_minutes",
+              "label": "發言總時長",
+              "unit": "分鐘",
+              "value": 47.2,
+              "n": 14,
+              "n_unit": "篇",
+              "percentile": 61.1,
+              "peers": 113,
+              "sample_ok": true
+            }
+          ]
+        },
+        {
+          "key": "specificity",
+          "title": "具體度",
+          "indicators": [
+            {
+              "key": "numbers_per_speech",
+              "label": "每篇落地數字數",
+              "unit": "個／篇",
+              "value": 2.6,
+              "n": 9,
+              "n_unit": "篇",
+              "percentile": 72.5,
+              "peers": 40,
+              "sample_ok": true
+            },
+            {
+              "key": "deadline_asks_per_speech",
+              "label": "每篇帶期限的要求數",
+              "unit": "項／篇",
+              "value": 0.4,
+              "n": 9,
+              "n_unit": "篇",
+              "percentile": 38.8,
+              "peers": 40,
+              "sample_ok": true
+            },
+            {
+              "key": "sourced_number_share",
+              "label": "有來源的數字占比",
+              "unit": "%",
+              "value": 8.7,
+              "n": 23,
+              "n_unit": "個數字",
+              "percentile": null,
+              "peers": 4,
+              "sample_ok": true
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "person_id": 5,
+      "source": "ntpc",
+      "session_id": 7,
+      "computed_at": "2026-10-01T06:12:00+08:00",
+      "blocks": [
+        {
+          "key": "volume",
+          "title": "投入量",
+          "indicators": [
+            {
+              "key": "speaking_minutes",
+              "label": "發言總時長",
+              "unit": "分鐘",
+              "value": 11.0,
+              "n": 1,
+              "n_unit": "篇",
+              "percentile": 5.5,
+              "peers": 64,
+              "sample_ok": true
+            },
+            {
+              "key": "speeches",
+              "label": "發言次數",
+              "unit": "次",
+              "value": 1,
+              "n": 1,
+              "n_unit": "篇",
+              "percentile": 7.8,
+              "peers": 64,
+              "sample_ok": true
+            }
+          ]
+        },
+        {
+          "key": "specificity",
+          "title": "具體度",
+          "indicators": [
+            {
+              "key": "numbers_per_speech",
+              "label": "每篇落地數字數",
+              "unit": "個／篇",
+              "value": null,
+              "n": 0,
+              "n_unit": "篇",
+              "percentile": null,
+              "peers": 22,
+              "sample_ok": false
+            },
+            {
+              "key": "deadline_asks_per_speech",
+              "label": "每篇帶期限的要求數",
+              "unit": "項／篇",
+              "value": null,
+              "n": 0,
+              "n_unit": "篇",
+              "percentile": null,
+              "peers": 22,
+              "sample_ok": false
+            },
+            {
+              "key": "sourced_number_share",
+              "label": "有來源的數字占比",
+              "unit": "%",
+              "value": null,
+              "n": 0,
+              "n_unit": "個數字",
+              "percentile": null,
+              "peers": 9,
+              "sample_ok": false
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "person_id": 6,
+      "source": "ntpc",
+      "session_id": 7,
+      "computed_at": "2026-10-01T06:12:00+08:00",
+      "blocks": [
+        {
+          "key": "volume",
+          "title": "投入量",
+          "indicators": [
+            {
+              "key": "speaking_minutes",
+              "label": "發言總時長",
+              "unit": "分鐘",
+              "value": 11.0,
+              "n": 1,
+              "n_unit": "篇",
+              "percentile": 5.5,
+              "peers": 64,
+              "sample_ok": true
+            },
+            {
+              "key": "speeches",
+              "label": "發言次數",
+              "unit": "次",
+              "value": 1,
+              "n": 1,
+              "n_unit": "篇",
+              "percentile": 7.8,
+              "peers": 64,
+              "sample_ok": true
+            }
+          ]
+        },
+        {
+          "key": "specificity",
+          "title": "具體度",
+          "indicators": [
+            {
+              "key": "numbers_per_speech",
+              "label": "每篇落地數字數",
+              "unit": "個／篇",
+              "value": null,
+              "n": 0,
+              "n_unit": "篇",
+              "percentile": null,
+              "peers": 22,
+              "sample_ok": false
+            },
+            {
+              "key": "deadline_asks_per_speech",
+              "label": "每篇帶期限的要求數",
+              "unit": "項／篇",
+              "value": null,
+              "n": 0,
+              "n_unit": "篇",
+              "percentile": null,
+              "peers": 22,
+              "sample_ok": false
+            },
+            {
+              "key": "sourced_number_share",
+              "label": "有來源的數字占比",
+              "unit": "%",
+              "value": null,
+              "n": 0,
+              "n_unit": "個數字",
+              "percentile": null,
+              "peers": 9,
+              "sample_ok": false
+            }
+          ]
+        }
+      ]
     }
   ]
 }

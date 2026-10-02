@@ -85,3 +85,43 @@ class PersonAdminTests(TestCase):
         sync([MemberRecord(source="ly", external_id="1", name="甲", party="民主進步黨")])
         self.assertEqual(self.client.get("/admin/articles/membership/").status_code, 200)
         self.assertEqual(self.client.get("/admin/articles/person/").status_code, 200)
+
+
+class ProfileAdminTests(TestCase):
+    """會期與側寫快取是算出來的：列得出來、看得到，但不能在 admin 裡新增或改值。"""
+
+    def setUp(self):
+        from articles.members_sync import MemberRecord, sync
+        from articles.profiles import compute_profiles
+
+        user = get_user_model().objects.create_superuser("admin3", "c@example.com", "pw")
+        self.client.force_login(user)
+        sync([MemberRecord(source="tccc", external_id="66", name="楊啓邦", party="中國國民黨")])
+        self.article = _article("tccc-1", ArticleStatus.READY, source="tccc", speaker="楊啓邦")
+        Article.objects.filter(pk=self.article.pk).update(meeting="第4屆第8次定期會 市政總質詢")
+        compute_profiles()
+
+    def test_sessions_and_stats_are_listed(self):
+        from articles.models import ProfileStat, Session
+
+        res = self.client.get("/admin/articles/session/")
+        self.assertEqual(res.status_code, 200)
+        self.assertContains(res, "第4屆第8次定期會")
+        res = self.client.get("/admin/articles/profilestat/?indicator=speeches")
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual([s.person.name for s in res.context["cl"].result_list], ["楊啓邦"])
+        stat = ProfileStat.objects.first()
+        self.assertEqual(self.client.get(f"/admin/articles/profilestat/{stat.pk}/change/").status_code,
+                         200)
+        session = Session.objects.get()
+        self.assertEqual(self.client.get(f"/admin/articles/session/{session.pk}/change/").status_code,
+                         200)
+
+    def test_nothing_derived_can_be_added_by_hand(self):
+        self.assertEqual(self.client.get("/admin/articles/session/add/").status_code, 403)
+        self.assertEqual(self.client.get("/admin/articles/profilestat/add/").status_code, 403)
+
+    def test_the_article_form_shows_its_session(self):
+        res = self.client.get(f"/admin/articles/article/{self.article.pk}/change/")
+        self.assertEqual(res.status_code, 200)
+        self.assertContains(res, 'name="session"')

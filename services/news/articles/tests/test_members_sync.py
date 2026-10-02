@@ -393,3 +393,82 @@ class NtpcCaucusClearingTests(TestCase):
         sync([_rec("甲", "民主進步黨", source="ntpc", caucus="民進黨團")])
         sync([_rec("甲", "民主進步黨", source="ntpc", caucus="")])
         self.assertEqual(Membership.objects.get(name="甲").caucus, "")
+
+
+class TermChangeTests(TestCase):
+    """攔的 bug：換屆時直接改寫 term 與 role，議會的任期又沒有日期，舊會期的同儕就會混進
+    新議員，新任議長以前當一般議員的發言也會被當成主持人拿掉。"""
+
+    def test_a_re_elected_member_gets_a_new_term_and_the_old_one_is_kept(self):
+        sync([_rec("甲", "中國國民黨", source="ntpc", term="第4屆")], today=date(2026, 9, 1))
+        report = sync([_rec("甲", "中國國民黨", source="ntpc", term="第5屆", role="議長")],
+                      today=date(2026, 12, 27))
+        self.assertEqual(report.term_changes, 1)
+        old, new = Membership.objects.order_by("id")
+        # 新任期從那一屆的就職日開始，不是同步那天
+        self.assertEqual((old.term, old.role, old.end_date), ("第4屆", "", date(2026, 12, 24)))
+        self.assertEqual((new.term, new.role, new.start_date), ("第5屆", "議長", date(2026, 12, 25)))
+        self.assertFalse(new.needs_review)
+        self.assertEqual(old.person_id, new.person_id)
+        # 下一次同步找到的是新的一段，不會再切
+        self.assertEqual(sync([_rec("甲", "中國國民黨", source="ntpc", term="第5屆", role="議長")],
+                              today=date(2027, 1, 3)).term_changes, 0)
+
+    def test_an_unknown_term_is_not_a_change(self):
+        sync([_rec("甲", "中國國民黨", source="tccc", term="")])
+        self.assertEqual(sync([_rec("甲", "中國國民黨", source="tccc", term="第4屆")]).term_changes, 0)
+        self.assertEqual(Membership.objects.get().term, "第4屆")
+
+    def test_term_numbers(self):
+        from articles.members_sync import term_number
+
+        self.assertEqual([term_number(t) for t in ("第11屆", "11", "第０４屆", "", None)],
+                         ["11", "11", "4", "", ""])
+
+
+class TermChangeEdgeTests(TestCase):
+    def test_term_start_dates(self):
+        from articles.members_sync import term_start
+
+        self.assertEqual(term_start("ntpc", "第5屆"), date(2026, 12, 25))
+        self.assertEqual(term_start("tccc", "第4屆"), date(2022, 12, 25))
+        self.assertEqual(term_start("ly", "第11屆"), date(2024, 2, 1))
+        self.assertEqual(term_start("ly", "第12屆"), date(2028, 2, 1))
+        self.assertIsNone(term_start("ly", ""))
+
+    def test_an_early_leaver_who_is_re_elected_keeps_the_real_leaving_date(self):
+        """攔的 bug：換屆時一律把舊任期結束在新任期前一天，提前離職的人就回到了舊會期的同儕裡。"""
+        sync([_rec("甲", "台灣民眾黨", external_id="1190", term="第11屆",
+                   start_date=date(2024, 2, 1), end_date=date(2026, 2, 1))], today=date(2026, 3, 1))
+        sync([_rec("甲", "台灣民眾黨", external_id="1190", term="第12屆",
+                   start_date=date(2028, 2, 1))], today=date(2028, 2, 15))
+        old, new = Membership.objects.order_by("id")
+        self.assertEqual(old.end_date, date(2026, 2, 1))
+        self.assertEqual(new.start_date, date(2028, 2, 1))
+
+    def test_the_new_segment_uses_the_sources_start_date(self):
+        sync([_rec("乙", "甲黨", external_id="2000", term="第11屆", start_date=date(2024, 2, 1))],
+             today=date(2026, 3, 1))
+        report = sync([_rec("乙", "乙黨", external_id="2000", term="第12屆", start_date=date(2028, 2, 3))],
+                      today=date(2028, 2, 15))
+        old, new = Membership.objects.order_by("id")
+        self.assertEqual((old.end_date, new.start_date), (date(2028, 2, 2), date(2028, 2, 3)))
+        # 換屆時一起換黨：也算進換黨
+        self.assertEqual((report.term_changes, report.party_changes), (1, 1))
+
+    def test_an_unknown_term_start_falls_back_to_today_and_asks_for_review(self):
+        """立法院第 7 屆以前沒有就職日的公式，來源也沒給到職日：只能用今天，標起來讓人補。"""
+        sync([_rec("丙", "某黨", external_id="9", term="第5屆")], today=date(2004, 3, 1))
+        report = sync([_rec("丙", "某黨", external_id="9", term="第6屆")], today=date(2005, 3, 1))
+        new = Membership.objects.order_by("id").last()
+        self.assertEqual((new.start_date, new.needs_review), (date(2005, 3, 1), True))
+        self.assertEqual(report.review, 1)
+
+    def test_a_member_without_an_id_who_has_left_is_not_duplicated_every_week(self):
+        """攔的 bug（#18 起就有）：沒有歷屆立法委員編號、已經離職的委員，只用「同名、現任」
+        找不到原本那一筆，每週同步都多建一筆任期。"""
+        record = MemberRecord(source="ly", external_id="", name="李貞秀", party="台灣民眾黨",
+                              term="第11屆", start_date=date(2026, 2, 3), end_date=date(2026, 4, 13))
+        for week in range(3):
+            sync([record], today=date(2026, 5, 3 + 7 * week))
+        self.assertEqual(Membership.objects.filter(name="李貞秀").count(), 1)

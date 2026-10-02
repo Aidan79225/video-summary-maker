@@ -26,6 +26,7 @@
   --color-accent-soft: var(--c-accent-soft);
   --color-accent-ink: var(--c-accent-ink);
   --color-danger: var(--c-danger);
+  --color-viz-mark: var(--c-viz-mark);
 
   --radius-card: 14px;
 }
@@ -45,6 +46,10 @@
   --c-accent-soft: rgba(232, 179, 92, 0.14);
   --c-accent-ink: #f3cd8c;
   --c-danger: #ef7d6a;
+  /* 圖表上「他在這裡」的記號。不直接用 accent：深色的 accent（L 0.80）
+     放在深色底上太亮、會搶過數字本身；換成同色系、落在深色模式亮度帶
+     （OKLCH L 0.48–0.67）裡的一階，對 surface 的對比仍大於 3:1。 */
+  --c-viz-mark: #c98500;
 }
 
 @media (prefers-color-scheme: light) {
@@ -63,6 +68,7 @@
     --c-accent-soft: rgba(154, 101, 18, 0.1);
     --c-accent-ink: #7c5210;
     --c-danger: #b2402b;
+    --c-viz-mark: #9a6512;
   }
 }
 

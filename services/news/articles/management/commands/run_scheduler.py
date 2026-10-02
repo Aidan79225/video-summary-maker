@@ -1,9 +1,9 @@
-"""常駐排程：每天固定時間跑一次匯入。
+"""常駐排程：每天固定時間跑一次匯入，接著重算人物側寫。
 
     python manage.py run_scheduler
 
 想用系統排程的人可以不要這個指令，直接用 cron 或 systemd timer 跑
-`manage.py ingest_ivod`——兩邊跑的是同一段程式碼。
+`manage.py ingest_ivod` 再跑 `manage.py compute_profiles`——兩邊跑的是同一段程式碼。
 """
 from __future__ import annotations
 
@@ -38,6 +38,23 @@ def sources_missing_members() -> list[str]:
     return [str(source) for source in wanted if source not in present]
 
 
+def nightly(days: int) -> None:
+    """每晚的工作：匯入，接著重算人物側寫。
+
+    兩步各包各的：例外若冒出排程，APScheduler 會把這個工作移除，之後就再也不會跑
+    ——而使用者不會發現，只會覺得「新聞停更了」。側寫重算失敗也不能拖垮匯入；
+    匯入失敗時照樣重算，既有的文章仍然值得一份最新的統計。
+    """
+    try:
+        call_command("ingest_ivod", days=days)
+    except Exception:  # noqa: BLE001
+        logger.exception("每日匯入失敗，排程繼續")
+    try:
+        call_command("compute_profiles")
+    except Exception:  # noqa: BLE001
+        logger.exception("人物側寫重算失敗，排程繼續")
+
+
 class Command(BaseCommand):
     help = "每天固定時間自動匯入立法院當日的質詢摘要"
 
@@ -54,12 +71,7 @@ class Command(BaseCommand):
         hour, minute = options["hour"], options["minute"]
 
         def job(days: int = options["backfill_days"] or 1) -> None:
-            # 包起來：例外若冒出排程，APScheduler 會把這個工作移除，之後
-            # 就再也不會跑——而使用者不會發現，只會覺得「新聞停更了」。
-            try:
-                call_command("ingest_ivod", days=days)
-            except Exception:  # noqa: BLE001
-                logger.exception("每日匯入失敗，排程繼續")
+            nightly(days)
 
         # 每天也跑回補而不只查昨天：立法院的 AI 逐字稿有時晚幾小時才出現，
         # 而 discover 只收「已經有逐字稿」的片段。晚到排程時間之後的那些，

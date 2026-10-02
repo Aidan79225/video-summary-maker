@@ -1,0 +1,306 @@
+---
+/**
+ * 方法說明：網站上每一個「算出來的數字」怎麼來的。
+ *
+ * 側寫的可信度全靠這一頁——公式寫在這裡，任何人拿同樣的資料都能算出同樣的
+ * 結果；限制也寫在這裡，讀者才知道哪些數字不能拿來做什麼。寫給一般讀者看，
+ * 不用程式欄位名稱，用「篇」「個數字」這種看得懂的字。
+ *
+ * 內容要跟後端的計算（services/news 的 compute_profiles）一致；改公式時兩邊一起改。
+ */
+import Base from '../layouts/Base.astro';
+
+const toc = [
+  { id: 'profile-principles', label: '原則' },
+  { id: 'profile-sessions', label: '會期與同儕' },
+  { id: 'profile-volume', label: '投入量' },
+  { id: 'profile-specificity', label: '具體度' },
+  { id: 'profile-joint', label: '聯合質詢' },
+  { id: 'profile-percentile', label: '百分位' },
+  { id: 'profile-sample', label: '最小樣本' },
+  { id: 'profile-limits', label: '資料限制' },
+  { id: 'profile-todo', label: '還沒做的指標' },
+];
+
+// 公式框與小標的樣式集中在這裡，各節才會長得一樣
+const h3 = 'headline mt-12 scroll-mt-24 text-lg font-semibold text-ink sm:text-xl';
+const formula =
+  'my-4 rounded-xl border border-line-soft bg-bg-soft/60 px-4 py-3 text-[0.92rem] leading-relaxed text-ink';
+const term = 'font-semibold text-ink';
+const list = 'mt-3 grid list-disc gap-2 pl-5 marker:text-muted';
+---
+
+<Base
+  title="方法說明"
+  description="人物側寫的每個指標怎麼算：原則、公式、會期與同儕的定義、百分位、最小樣本與資料限制。"
+  back={true}
+>
+  <section class="border-b border-line-soft bg-bg-soft/60">
+    <div class="mx-auto max-w-3xl px-4 py-10 sm:px-6 sm:py-12">
+      <p class="text-[0.7rem] tracking-[0.3em] text-accent uppercase">Method</p>
+      <h1 class="headline mt-3 text-3xl font-semibold sm:text-4xl">方法說明</h1>
+      <p class="mt-4 text-sm leading-relaxed text-muted sm:text-base">
+        網站上每一個算出來的數字，公式都寫在這一頁。任何人拿同樣的資料，都應該算出同樣的結果；算不出來，就是我們錯了。
+      </p>
+    </div>
+  </section>
+
+  <div class="mx-auto max-w-3xl px-4 py-10 sm:px-6">
+    <section id="profile" class="scroll-mt-24" aria-labelledby="profile-heading">
+      <h2 id="profile-heading" class="headline text-2xl font-semibold sm:text-[1.7rem]">人物側寫</h2>
+      <div class="prose-cn mt-4">
+        <p>
+          發言者頁上的「人物側寫」回答兩件事：這位民意代表在一個會期裡<strong class={term}>發言了多少</strong>，以及他的質詢<strong
+            class={term}>講得多具體</strong>。每個數字都跟同一個議會、同一個會期的人放在一起看，讓讀者知道他落在哪一段。
+        </p>
+        <p class="mt-3">側寫不是評分。這一頁的公式算出來的是計數與比例，不是好壞。</p>
+      </div>
+
+      <nav class="mt-6 rounded-xl border border-line bg-surface px-4 py-3" aria-label="這一節的目錄">
+        <p class="text-[0.7rem] tracking-[0.2em] text-muted">目錄</p>
+        <ul class="mt-2 flex flex-wrap gap-x-4 gap-y-1.5 text-sm">
+          {
+            toc.map((t) => (
+              <li>
+                <a href={`#${t.id}`} class="text-ink-2 underline decoration-line underline-offset-4 hover:text-accent">
+                  {t.label}
+                </a>
+              </li>
+            ))
+          }
+        </ul>
+      </nav>
+
+      <!-- 原則 -->
+      <h3 id="profile-principles" class={h3}>原則</h3>
+      <ol class="prose-cn mt-3 grid list-decimal gap-2.5 pl-5 marker:text-muted">
+        <li>
+          <strong class={term}>不加總、不排名。</strong>沒有總分，也沒有排行榜。每個指標各自顯示，怎麼權衡由讀者決定——各項權重怎麼配都是一種立場，所以我們不配。
+        </li>
+        <li>
+          <strong class={term}>只跟同儕比。</strong>立委只跟立委比，臺中市議員只跟臺中市議員比，新北市議員只跟新北市議員比，而且只比同一個會期。各議會的質詢制度不同，放在一起比沒有意義。
+        </li>
+        <li>
+          <strong class={term}>數字由程式按公式算。</strong>每個指標都是從既有資料直接計數或相除，公式就寫在下面。模型不給數字：具體度用到的摘要卡是語言模型從逐字稿抽取、再由程式逐一檢查過的（見「具體度」），目前的指標都沒有用到模型分類。
+        </li>
+        <li>
+          <strong class={term}>樣本太少就不比較。</strong>具體度的分母不到 5 時只顯示原始的值，不跟別人比（見「最小樣本」）。
+        </li>
+        <li>
+          <strong class={term}>每個數字都能點回去。</strong>指標底下的「看這 12 篇」，列出的就是算出這個數字的那 12 篇報導。
+        </li>
+      </ol>
+
+      <!-- 會期與同儕 -->
+      <h3 id="profile-sessions" class={h3}>會期與同儕</h3>
+      <div class="prose-cn mt-3">
+        <p>
+          <strong class={term}>會期</strong>從每篇報導的會議名稱讀出來：
+        </p>
+      </div>
+      <div class="mt-3 overflow-x-auto">
+        <table class="w-full border-collapse text-left text-[0.85rem]">
+          <thead>
+            <tr class="border-b border-line text-[0.75rem] text-muted">
+              <th scope="col" class="py-2 pr-3 font-medium">來源</th>
+              <th scope="col" class="py-2 pr-3 font-medium">會議名稱（例）</th>
+              <th scope="col" class="py-2 font-medium">算在哪個會期</th>
+            </tr>
+          </thead>
+          <tbody class="text-ink-2">
+            <tr class="border-b border-line-soft align-top">
+              <td class="py-2 pr-3 whitespace-nowrap">立法院</td>
+              <td class="py-2 pr-3">第11屆第5會期財政委員會第3次全體委員會議</td>
+              <td class="py-2">第11屆第5會期</td>
+            </tr>
+            <tr class="border-b border-line-soft align-top">
+              <td class="py-2 pr-3 whitespace-nowrap">立法院</td>
+              <td class="py-2 pr-3">第11屆第3會期第1次臨時會第2次會議</td>
+              <td class="py-2">第11屆第3會期（臨時會併入它所屬的會期）</td>
+            </tr>
+            <tr class="border-b border-line-soft align-top">
+              <td class="py-2 pr-3 whitespace-nowrap">臺中市議會</td>
+              <td class="py-2 pr-3">第4屆第8次定期會、第4屆第2次臨時會</td>
+              <td class="py-2">原樣：定期會與臨時會各自是一期</td>
+            </tr>
+            <tr class="align-top">
+              <td class="py-2 pr-3 whitespace-nowrap">新北市議會</td>
+              <td class="py-2 pr-3">第4屆第8次定期會 市政總質詢</td>
+              <td class="py-2">第4屆第8次定期會</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="prose-cn">
+        <ul class={list}>
+          <li>讀不出會期的報導（例如立法院的「朝野黨團協商」）不掛會期，不計入任何指標。</li>
+          <li>
+            側寫上的<strong class={term}>「資料涵蓋」</strong>不是官方的會期起訖，而是掛在這個會期的報導最早與最晚的日期。同一個會期裡，每個人的涵蓋範圍都一樣，比較才公平。
+          </li>
+          <li>
+            <strong class={term}>同儕</strong>（比較的母體）是同一個議會裡、同一屆，任期跟這個會期的資料涵蓋範圍有重疊的所有民意代表——<strong
+              class={term}>包括一次都沒有發言的人</strong>，他們的發言次數就是 0，這正是要比較的。
+          </li>
+          <li>
+            新北市議會的議長、副議長不列入同儕：他們主持會議、不質詢，放進來只會多一排零。看的是那一屆的職務，下一屆才當選議長的人，這一屆仍照常計算。立法院與臺中市議會的名冊沒有記職務，因此沒有排除任何人。
+          </li>
+          <li>同一個人在會期中換了政黨，或連任到下一屆，名冊上會分成兩段任期，但側寫把他當成同一個人計算。</li>
+          <li>報導的講者要對得到議會名冊上的任期（同一個議會、同一個名字、任期涵蓋發言日期）才算進他的側寫。</li>
+        </ul>
+      </div>
+
+      <!-- 投入量 -->
+      <h3 id="profile-volume" class={h3}>投入量</h3>
+      <div class="prose-cn mt-3">
+        <p>這個會期發言了幾次、講了多久。</p>
+      </div>
+      <div class={formula}>
+        <p><span class={term}>發言次數</span>（次）＝ 這個會期裡，講者包含他的報導篇數</p>
+      </div>
+      <div class={formula}>
+        <p>
+          <span class={term}>發言總時長</span>（分鐘）＝ 每篇「影片長度〔秒〕÷ 該篇的講者人數」的總和 ÷ 60，取到小數一位
+        </p>
+      </div>
+      <div class="prose-cn">
+        <ul class={list}>
+          <li>投入量沒有分母，不套最小樣本；但同儕不到 5 人時不給百分位。</li>
+          <li>發言總時長是用取到小數一位之後的分鐘數跟同儕比：頁面上分鐘數一樣的人，就是同值。</li>
+          <li>
+            市議會的側寫把時長放在前面：總質詢一次幾十分鐘、業務質詢十幾分鐘，時長比次數更能反映投入。立法院則次數在前。
+          </li>
+        </ul>
+      </div>
+
+      <!-- 具體度 -->
+      <h3 id="profile-specificity" class={h3}>具體度</h3>
+      <div class="prose-cn mt-3">
+        <p>
+          具體度只看<strong class={term}>基礎報導</strong>：這個會期、已經完成、<strong class={term}>他單獨發言</strong>、而且<strong
+            class={term}>有摘要卡</strong>的報導。
+        </p>
+      </div>
+      <div class={formula}>
+        <p><span class={term}>每篇落地數字數</span>（個／篇）＝ 基礎報導的關鍵數字總數 ÷ 基礎報導篇數</p>
+      </div>
+      <div class={formula}>
+        <p>
+          <span class={term}>每篇帶期限的要求數</span>（項／篇）＝ 基礎報導中「有寫期限」的要求總數 ÷ 基礎報導篇數
+        </p>
+      </div>
+      <div class={formula}>
+        <p>
+          <span class={term}>有來源的數字占比</span>（%）＝ 附有條文原文的關鍵數字個數 ÷ 關鍵數字總數 × 100
+        </p>
+      </div>
+      <div class="prose-cn">
+        <ul class={list}>
+          <li>
+            <strong class={term}>摘要卡</strong>是每篇報導最上面那張卡：一句話、關鍵數字、要求與回應。它由語言模型從逐字稿抽取，程式再逐一檢查每個關鍵數字引用的那句話是不是真的出現在逐字稿裡，找不到的就丟掉。所以「落地數字」是講者真的講出口、在逐字稿裡查得到的數字；空泛的發言，這一項就是零。
+          </li>
+          <li>前兩項的 n 是基礎報導的篇數；有來源占比的 n 是關鍵數字的個數。n 是 0 時沒有值，顯示「—」。</li>
+          <li>
+            <strong class={term}>「有來源」目前的意思很窄：</strong>這個數字是在講某一條法律，而且我們抓得到那一條的條文原文。它說的是「有沒有附出處」，不是「講得對不對」。預算書、統計資料這類出處還沒有接上，所以這一項普遍偏低是正常的。
+          </li>
+        </ul>
+      </div>
+
+      <!-- 聯合質詢 -->
+      <h3 id="profile-joint" class={h3}>聯合質詢</h3>
+      <div class="prose-cn">
+        <ul class={list}>
+          <li>
+            <strong class={term}>投入量：</strong>每位講者各算一次發言；影片長度平分給每位講者。我們分不出誰講了多久，平分是唯一不用猜的算法。
+          </li>
+          <li>
+            <strong class={term}>具體度：</strong>不計入任何一個人。摘要卡是整段的，分不出哪個數字、哪項要求是誰提的。
+          </li>
+        </ul>
+      </div>
+
+      <!-- 百分位 -->
+      <h3 id="profile-percentile" class={h3}>百分位</h3>
+      <div class="prose-cn mt-3">
+        <p>
+          百分位回答「跟同儕比，他落在哪一段」。投入量的同儕是整個母體；具體度的同儕是母體中這一項樣本足夠（n 至少 5）的人。
+        </p>
+      </div>
+      <div class={formula}>
+        <p>
+          <span class={term}>百分位</span> ＝（同儕中值比他低的人數 ＋ 0.5 × 跟他同值的人數〔含他自己〕）÷ 同儕人數 × 100
+        </p>
+        <p class="mt-2 text-[0.85rem] text-muted">
+          例：113 位同儕中，70 人的發言次數比他少，包括他在內有 2 人同值。（70 ＋ 0.5 × 2）÷ 113 × 100 ≈ 62.8，頁面顯示「第 63 百分位，在 113 位同儕中」。
+        </p>
+      </div>
+      <div class="prose-cn">
+        <ul class={list}>
+          <li>同值的人拿到一樣的百分位，不會因為排列順序而多一點或少一點。</li>
+          <li>同儕不到 5 人時，所有人的這一項都不給百分位，頁面寫「同儕不足，不比較」。</li>
+          <li>
+            長條上的圓點是他的位置，中間的刻度是第 50 百分位。長條不塗滿，因為百分位不是分數：發言次數在第 90 百分位，代表比九成的同儕多，不代表比較好。
+          </li>
+          <li>百分位以小數保存，頁面上四捨五入到整數。</li>
+        </ul>
+      </div>
+
+      <!-- 最小樣本 -->
+      <h3 id="profile-sample" class={h3}>最小樣本</h3>
+      <div class="prose-cn mt-3">
+        <p>
+          具體度的三項指標，分母（n）不到 <strong class={term}>5</strong> 時，不給百分位、不畫長條，只顯示原始的值與 n，並寫「樣本不足（需至少 5 篇）」；有來源占比的分母是數字個數，寫的是「需至少 5 個數字」。一兩篇算出來的比例起伏太大，拿去跟別人比只會誤導。
+        </p>
+        <p class="mt-3">
+          投入量是計數、不是比例，沒有分母，所以不套最小樣本：發言 1 次的人一樣有百分位。但同儕不到 5 人時，投入量也不比較。
+        </p>
+      </div>
+
+      <!-- 資料限制 -->
+      <h3 id="profile-limits" class={h3}>資料限制</h3>
+      <div class="prose-cn">
+        <ul class={list}>
+          <li>
+            <strong class={term}>只算已經完成的報導。</strong>還在處理中的影片不算，所以數字會隨處理進度變動。側寫上標有「計算於」的時間；每天晚上匯入新影片後重算一次。
+          </li>
+          <li>
+            <strong class={term}>舊報導沒有摘要卡。</strong>摘要卡是後來才加的功能，舊報導要重新產生才會有，所以具體度的分母一開始會很小，很多人會先顯示「樣本不足」。
+          </li>
+          <li>
+            <strong class={term}>「有來源」目前只等於「引用了法條，而且查得到條文原文」。</strong>見上面「具體度」。
+          </li>
+          <li>
+            <strong class={term}>只涵蓋我們收錄的影片。</strong>來源是立法院 IVOD、臺中市議會與新北市議會公開的質詢影片；沒有公開或沒有被收錄的質詢不會算進來。
+          </li>
+          <li>
+            <strong class={term}>名字要對得到名冊。</strong>講者的寫法跟議會名冊不同時（例如異體字），那幾篇暫時不計入，會在每天的計算報告裡列出來，由人工處理。
+          </li>
+          <li>
+            <strong class={term}>摘要卡可能出錯。</strong>關鍵數字經過逐字稿比對，但「這是一項要求」「這是期限」是模型的判斷，仍可能誤判。逐字稿本身也可能有辨識錯誤。正式引用請以原始影音與公報為準。
+          </li>
+        </ul>
+      </div>
+
+      <!-- 還沒做的指標 -->
+      <h3 id="profile-todo" class={h3}>還沒做的指標</h3>
+      <div class="prose-cn mt-3">
+        <p>側寫目前只有投入量與具體度兩塊。下面幾項在規劃中，做好之前不會出現在頁面上：</p>
+        <ul class={list}>
+          <li>
+            <strong class={term}>出席率</strong>（立委）：立法院開放資料有結構化的出席紀錄，會跟立法產出一起做。市議會的出席資料各市公開程度不同，暫不做。
+          </li>
+          <li>
+            <strong class={term}>議題分布</strong>：每篇報導分到一個固定的政策領域，再統計各領域的占比。分類由模型做，要先有一份人工標註的測試資料、準確率過門檻才會上線。
+          </li>
+          <li><strong class={term}>追問率</strong>：要求的期限過了以後，有沒有再追問同一件事。</li>
+          <li><strong class={term}>立法產出</strong>（立委）：主提案、連署與三讀的數量。</li>
+          <li>
+            <strong class={term}>表決</strong>（立委）：要先確認公報裡的表決紀錄是不是逐人記名的結構化資料；不是的話就不做，不讓模型從內文猜。
+          </li>
+        </ul>
+        <p class="mt-4">
+          不會做的：問政態度、選區服務、媒體聲量，以及任何形式的總分或排行榜。問政態度要靠主觀評價，交給模型判就成了網站的意見；選區服務與媒體聲量沒有公開的結構化資料；總分與排行榜違反第一條原則。
+        </p>
+      </div>
+    </section>
+  </div>
+</Base>

@@ -88,6 +88,71 @@ export type Speaker = {
   latest_date: string;
   party?: string;
   district?: string;
+  /**
+   * 同來源、同名的任期所屬的人（Person）。發言者頁靠它找側寫；
+   * 名冊對不到（或舊後端沒給）就是 null／缺欄位，頁面就不顯示側寫。
+   */
+  person_id?: number | null;
+};
+
+/* ------------------------------------------------------------------
+   人物側寫（GET /api/people/{id}/profile）
+
+   數字全部由後端算好：前端只排版，不重算、不加總、不排名。
+   ------------------------------------------------------------------ */
+
+/**
+ * 會期。start_date／end_date 是「資料涵蓋範圍」（掛在這個會期的文章最早與
+ * 最晚的日期），不是官方起訖；頁面要寫「資料涵蓋」，不能寫成會期起訖。
+ */
+export type ProfileSession = {
+  id: number;
+  source: ArticleSource;
+  term: string;
+  name: string;
+  start_date: string | null;
+  end_date: string | null;
+};
+
+export type ProfileIndicator = {
+  key: string;
+  label: string;
+  unit: string;
+  /** n 為 0 時是 null（沒有分母就沒有值） */
+  value: number | null;
+  n: number;
+  /** n 的單位：「篇」或「個數字」 */
+  n_unit: string;
+  /** 0～100 的浮點；樣本不足或同儕不足時是 null */
+  percentile: number | null;
+  /** 同儕人數（百分位的母體） */
+  peers: number;
+  /** n 達到最小樣本；false 時只顯示原始計數 */
+  sample_ok: boolean;
+  /** 網站的相對路徑，點進去就是算這個數字用的那幾篇 */
+  evidence_url: string;
+};
+
+export type ProfileBlock = {
+  key: string;
+  title: string;
+  indicators: ProfileIndicator[];
+};
+
+export type Profile = {
+  person: { id: number; name: string };
+  source: ArticleSource;
+  session: ProfileSession;
+  /** 同來源、他有統計的所有會期，新的在前 */
+  sessions: ProfileSession[];
+  computed_at: string;
+  min_sample: number;
+  blocks: ProfileBlock[];
+};
+
+export type ProfileQuery = {
+  source?: string;
+  session?: number;
 };
 
 export type Party = {
@@ -129,6 +194,12 @@ export type ArticleQuery = {
   source?: string;
   party?: string;
   q?: string;
+  /** 會期 id：只要掛在這個會期的文章 */
+  session?: number;
+  /** 只要單獨發言（講者欄位沒有「、」）；搭配 speaker 就是講者完全等於這個名字 */
+  solo?: boolean;
+  /** 只要有摘要卡的文章 */
+  has_brief?: boolean;
   page?: number;
   page_size?: number;
 };
