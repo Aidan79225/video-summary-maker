@@ -4,7 +4,7 @@
 
 想用系統排程的人可以不要這個指令，直接用 cron 或 systemd timer 依序跑
 `manage.py ingest_ivod`、`manage.py classify_topics`、`manage.py compute_profiles`
-——兩邊跑的是同一段程式碼。
+——兩邊跑的是同一段程式碼。每週日另外依序跑 `sync_members`、`sync_ly_records`、`compute_profiles`。
 """
 from __future__ import annotations
 
@@ -63,6 +63,25 @@ def nightly(days: int) -> None:
         logger.exception("人物側寫重算失敗，排程繼續")
 
 
+WEEKLY_STEPS = (("sync_members", "議員名單同步失敗"),
+                ("sync_ly_records", "立法院院內紀錄同步失敗"),
+                ("compute_profiles", "人物側寫重算失敗"))
+
+
+def weekly() -> None:
+    """每週日的工作：議員名單 → 立法院的院內紀錄（出席、提案、表決）→ 重算人物側寫。
+
+    院內紀錄排在名單之後：黨團、到職與離職日都是名單給的，遞補的人當週就對得上。重算排在最後，
+    新的院內紀錄當天就上得了網站，不必等到隔天晚上。三步各包各的（同 nightly）：例外冒出排程，
+    APScheduler 會把這個工作移除。
+    """
+    for name, failure in WEEKLY_STEPS:
+        try:
+            call_command(name)
+        except Exception:  # noqa: BLE001
+            logger.exception("%s，排程繼續", failure)
+
+
 class Command(BaseCommand):
     help = "每天固定時間自動匯入立法院當日的質詢摘要"
 
@@ -93,8 +112,8 @@ class Command(BaseCommand):
             except Exception:  # noqa: BLE001
                 logger.exception("議員名單同步失敗，排程繼續")
 
-        # 政黨、選區一週看一次就夠；排在匯入之前，當天新文章才標得到
-        scheduler.add_job(sync_members_job, "cron", day_of_week="sun", hour=3, minute=30,
+        # 政黨、選區一週看一次就夠；排在匯入之前，當天新文章才標得到。院內紀錄跟著名單一起跑（weekly）
+        scheduler.add_job(weekly, "cron", day_of_week="sun", hour=3, minute=30,
                           id="sync_members", max_instances=1, coalesce=True,
                           misfire_grace_time=3600)
         def stop(*_) -> None:

@@ -46,8 +46,10 @@ class MemberRecord:
     photo_url: str = ""
     start_date: date | None = None
     end_date: date | None = None
-    # 只有新北填：議長／副議長／空、國民黨團／民進黨團／無黨團結聯盟／空
+    # 只有新北填：議長／副議長／空
     role: str = ""
+    # 新北：國民黨團／民進黨團／無黨團結聯盟／空；立法院：LYAPI 的「黨團」（中國國民黨／民主進步黨／
+    # 台灣民眾黨／空），院內紀錄的黨團一致率用。無黨籍也可能參加黨團，不能拿政黨代替
     caucus: str = ""
     # 只有立法院填：LYAPI 的「委員會」原樣（「第11屆第5會期：財政委員會」），議題分布的
     # 委員會職掌比對用
@@ -159,7 +161,18 @@ class LyMemberSource:
             start_date=_parse_date(row.get("到職日")),
             end_date=_parse_date(row.get("離職日期")) if left else None,
             committees=_committees(row.get("委員會")),
+            caucus=_ly_caucus(row.get("黨團")),
         )
+
+
+# LYAPI 名冊的「黨團」：沒有參加黨團的人寫「0無」（第 10 屆實測）。存成空字串——院內紀錄的
+# 黨團一致率靠空字串判斷「沒有參加黨團」，不能把「0無」當成一個黨團去算它的多數
+_LY_NO_CAUCUS = frozenset({"", "0無", "無"})
+
+
+def _ly_caucus(value: object) -> str:
+    text = str(value or "").strip()
+    return "" if text in _LY_NO_CAUCUS else text
 
 
 def _committees(value: object) -> tuple[str, ...]:
