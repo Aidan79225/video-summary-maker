@@ -202,7 +202,7 @@ const stateLabel = (key: string) => FOLLOWUP_STATES.find((s) => s.key === key)?.
       觀察期是到期日之後的 {FOLLOWUP_WATCH_DAYS} 天：要給議會開會、排到質詢的時間，議會休會時可能好幾個月都沒有質詢。
     </li>
     <li>
-      日期的界線：到期日當天還是「{stateLabel('pending')}」，隔天起是「{stateLabel('watching')}」；到期日後第 {FOLLOWUP_WATCH_DAYS} 天是觀察期的最後一天，過了那一天還沒找到再提，就是「{stateLabel('not_followed')}」。觀察期結束後，要等那一晚的判斷把候選報導都看過，才改成「{stateLabel('not_followed')}」，在那之前仍是「{stateLabel('watching')}」。
+      日期的界線：到期日當天還是「{stateLabel('pending')}」，隔天起是「{stateLabel('watching')}」；到期日後第 {FOLLOWUP_WATCH_DAYS} 天是觀察期的最後一天，過了那一天還沒找到再提，就是「{stateLabel('not_followed')}」。觀察期結束後，要等那一晚的判斷把候選報導都看過，才改成「{stateLabel('not_followed')}」，在那之前仍是「{stateLabel('watching')}」。他在觀察期裡還有質詢影片沒做成報導（還在排隊、正在處理，或失敗了但還會重試）的話，也要等那幾篇做完、判斷過才算：做完的那一篇可能就是再提的那一次。
     </li>
     <li>找到再提的報導，不管是在期限前、期限後還是觀察期快結束時，都是「{stateLabel('followed')}」。</li>
   </ul>

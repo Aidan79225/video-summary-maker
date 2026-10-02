@@ -803,6 +803,52 @@ class CheckTests(TestCase):
         fu = FollowUp.objects.get()
         self.assertEqual((fu.classifier, fu.checked, fu.checked_at, report.remaining), ("", [], self.NOW, 0))
 
+    def _state_on(self, day):
+        fu = FollowUp.objects.get()
+        return state_for(fu.due_date, fu.followed_by_id, fu.classifier, fu.checked_at, day, CLASSIFIER)
+
+    def test_not_followed_waits_for_his_unfinished_speeches_in_the_window(self):
+        """攔的 bug：觀察期結束那一晚，他觀察期裡的質詢還在排隊產摘要，候選判完了就宣告未追問。"""
+        self._candidate("2026-03-20", "無人機交機")
+        after = _aware(2026, 7, 2, 4, 30)
+        queued = _article(day="2026-07-01", status=ArticleStatus.PENDING, brief=False, membership=self.member)
+        # 不算數的：觀察期外、發言當天、別人、聯合質詢、失敗到不再重試
+        _article(day="2026-07-02", status=ArticleStatus.PENDING, brief=False)
+        _article(day="2026-03-02", status=ArticleStatus.PENDING, brief=False)
+        _article(speaker="甲", day="2026-06-30", status=ArticleStatus.PENDING, brief=False)
+        _article(speaker="王立、甲", day="2026-06-30", status=ArticleStatus.PROCESSING, brief=False)
+        gave_up = _article(day="2026-06-29", status=ArticleStatus.FAILED, brief=False)
+        Article.objects.filter(pk=gave_up.pk).update(attempts=5)
+        for status, attempts in ((ArticleStatus.PENDING, 0), (ArticleStatus.PROCESSING, 1),
+                                 (ArticleStatus.FAILED, 4)):
+            with self.subTest(status=status):
+                Article.objects.filter(pk=queued.pk).update(status=status, attempts=attempts)
+                _, report = self._run(now=after)
+                self.assertIsNone(FollowUp.objects.get().checked_at)
+                self.assertEqual(report.waiting, 1)
+                self.assertIn("觀察期裡還有報導沒做完、先不算未追問的要求 1", str(report))
+                self.assertEqual(self._state_on(after.date()), FollowUpState.WATCHING)
+        # 失敗到不再重試：永遠不會變成候選，不必再等
+        Article.objects.filter(pk=queued.pk).update(status=ArticleStatus.FAILED, attempts=5)
+        _, report = self._run(now=after)
+        self.assertEqual((FollowUp.objects.get().checked_at, report.waiting), (after, 0))
+        self.assertEqual(self._state_on(after.date()), FollowUpState.NOT_FOLLOWED)
+
+    def test_his_other_names_count_and_a_late_import_takes_not_followed_back(self):
+        """同一個人換了寫法的名字也算；已經宣告未追問之後才補匯入觀察期裡的質詢，要收回來等它做完。"""
+        self._candidate("2026-03-20", "無人機交機")
+        after = _aware(2026, 7, 2, 4, 30)
+        self._run(now=after)
+        self.assertEqual(self._state_on(after.date()), FollowUpState.NOT_FOLLOWED)
+        renamed = _member("王小立", person=self.member.person)
+        _article(speaker="王小立", day="2026-05-01", status=ArticleStatus.PENDING, brief=False,
+                 membership=renamed)
+        later = _aware(2026, 7, 3, 4, 30)
+        _, report = self._run(now=later)
+        self.assertEqual(report.waiting, 1)
+        self.assertIsNone(FollowUp.objects.get().checked_at)
+        self.assertEqual(self._state_on(later.date()), FollowUpState.WATCHING)
+
 
 # --- 重產時的清理 ---
 

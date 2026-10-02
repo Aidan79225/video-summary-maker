@@ -30,7 +30,7 @@ from enum import StrEnum
 
 from django.conf import settings
 from django.db import transaction
-from django.db.models import F
+from django.db.models import F, Q
 from django.utils import timezone
 
 from .gpu_client import GpuApiClient, GpuApiError, JobFailed
@@ -663,6 +663,52 @@ class CandidateIndex:
         return [doc for _, doc in scored[:TOP_CANDIDATES]]
 
 
+class WaitingIndex:
+    """還沒做完、做完之後可能就是追問的那一篇的文章：同一個人在觀察期裡還有這種文章，就不能說他沒追。
+
+    等待處理、處理中，或失敗了但還會重試（attempts < MAX_ATTEMPTS）的。觀察期剛結束的那一晚，
+    前幾天的質詢常常還在排隊產摘要；照「候選都判完了」就宣告未追問，等它做完、判出有追問時，
+    頁面已經寫過一次「未追問」了。失敗到不再重試的不算：它永遠不會變成候選。
+
+    同一個人＝講者欄位**正好是**他在那個來源的某個名字（任期上的名字；來源文章自己的講者寫法也算）。
+    不看文章掛的是哪段任期：還沒做完的文章可能還沒對上任期，寧可多等，不可先說沒追。
+    """
+
+    def __init__(self, days: dict[tuple[str, str], list[date]], names: dict[tuple[str, int], set[str]],
+                 person_of_membership: dict[int, int]):
+        self._days = days
+        self._names = names
+        self._person_of = person_of_membership
+
+    @classmethod
+    def load(cls) -> WaitingIndex:
+        # ingest 匯入本模組（文章重產時要 forget_article），在模組層匯入它會循環
+        from .ingest import MAX_ATTEMPTS
+
+        unfinished = Article.objects.filter(
+            Q(status__in=[ArticleStatus.PENDING, ArticleStatus.PROCESSING])
+            | Q(status=ArticleStatus.FAILED, attempts__lt=MAX_ATTEMPTS))
+        days: dict[tuple[str, str], list[date]] = defaultdict(list)
+        for source, speaker, day in unfinished.values_list("source", "speaker", "date").iterator():
+            days[(source, speaker)].append(day)
+        names: dict[tuple[str, int], set[str]] = defaultdict(set)
+        person_of = {}
+        for membership_id, person_id, source, name in Membership.objects.values_list(
+                "id", "person_id", "source", "name"):
+            person_of[membership_id] = person_id
+            names[(source, person_id)].add(name)
+        return cls(days, names, person_of)
+
+    def blocks(self, followup: FollowUp) -> bool:
+        """這一項的觀察期（發言日, 到期日 + 90 天］裡，同一個人還有沒做完的文章。"""
+        source = followup.article
+        person = self._person_of.get(source.membership_id)
+        names = {source.speaker, *self._names.get((source.source, person), ())}
+        end = window_end(followup.due_date)
+        return any(source.date < day <= end
+                   for name in names for day in self._days.get((source.source, name), ()))
+
+
 # --- 建立與更新要求 ---
 
 
@@ -787,6 +833,8 @@ class CheckReport:
     reset: int = 0
     # 還有候選沒判斷的要求：積壓要講出來，否則一晚 200 個的上限會無聲地一直排著
     remaining: int = 0
+    # 觀察期結束、候選都判完了，但同一個人在觀察期裡還有沒做完的文章：先不算未追問
+    waiting: int = 0
     stopped: bool = False
     stop_reason: str = ""
     errors: list[str] = field(default_factory=list)
@@ -798,6 +846,8 @@ class CheckReport:
             text += f"、引用對不上逐字稿當成沒有追問 {self.ungrounded}"
         if self.stale:
             text += f"、內容剛被改過不存 {self.stale}"
+        if self.waiting:
+            text += f"、觀察期裡還有報導沒做完、先不算未追問的要求 {self.waiting}"
         if self.reset:
             text += f"、換判斷器清掉重判 {self.reset} 項"
         return text + (f"（{self.stop_reason or 'GPU 不可用'}，這一輪提前結束）" if self.stopped else "")
@@ -813,13 +863,15 @@ def _open_followups():
 class _Round:
     """一輪 check_followups：預算、報告、失敗處理都在這裡，判斷一對的細節分成小函式。"""
 
-    def __init__(self, client: GpuApiClient, limit: int, timeout: float, now: datetime):
+    def __init__(self, client: GpuApiClient, limit: int, timeout: float, now: datetime,
+                 waiting: WaitingIndex | None = None):
         self.client = client
         self.budget = max(0, limit)
         self.timeout = timeout
         self.now = now
         self.today = timezone.localdate(now)
         self.report = CheckReport()
+        self.waiting = waiting or WaitingIndex({}, {}, {})
 
     def check(self, followup: FollowUp, candidates: list[Doc]) -> None:
         """依重疊高到低判還沒判過的候選，第一篇有追問就停；最後記下是不是全部判完了。"""
@@ -901,8 +953,16 @@ class _Round:
             if followup.checked_at is not None:
                 FollowUp.objects.filter(pk=followup.pk).update(checked_at=None)
             return
+        end = window_end(followup.due_date)
+        if not followup.followed_by_id and self.today > end and self.waiting.blocks(followup):
+            # 觀察期結束後的確認就是「未追問」：同一個人在觀察期裡還有沒做完的文章時不能下。
+            # 之前已經下過的（補匯入了舊的質詢）也收回來，等那幾篇做完、判過再說
+            self.report.waiting += 1
+            if followup.checked_at is not None and timezone.localdate(followup.checked_at) > end:
+                FollowUp.objects.filter(pk=followup.pk).update(checked_at=None)
+            return
         stale_mark = (followup.checked_at is None or (
-            self.today > window_end(followup.due_date) >= timezone.localdate(followup.checked_at)))
+            self.today > end >= timezone.localdate(followup.checked_at)))
         if stale_mark:
             FollowUp.objects.filter(pk=followup.pk).update(checked_at=self.now)
 
@@ -950,7 +1010,7 @@ def check_followups(client: GpuApiClient, limit: int, recheck: bool = False,
     recheck=True：先把不是通過的判斷器判的要求清掉重來（換模型或提示詞、新版本評估通過之後用）。
     """
     timeout = timeout or settings.GPU_JOB_TIMEOUT_SECONDS
-    round_ = _Round(client, limit, timeout, now or timezone.now())
+    round_ = _Round(client, limit, timeout, now or timezone.now(), WaitingIndex.load())
     round_.report.sync = sync_followups()
     if recheck:
         round_.report.reset = reset_untrusted(passing_judge())
