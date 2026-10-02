@@ -175,6 +175,16 @@ class ParseBillTests(SimpleTestCase):
         self.assertEqual(first.proposed_on, date(2026, 7, 10))
         self.assertEqual(first.url, "https://ppg.ly.gov.tw/ppg/bills/202110224730000/details")
 
+    def test_a_bill_belongs_to_the_session_of_its_first_reading(self):
+        """「會期」是最新進度的會期：第 1 會期一讀、第 5 會期撤案的案子，「會期」寫 5。"""
+        row = _rows("lyapi_bills_11.json", "bills")[4]
+        self.assertEqual((row["會期"], row["會議代碼"]), (5, "院會-11-1-10"))
+        bill = parse_bill(row)
+        self.assertEqual((bill.bill_no, bill.session_number, bill.status), ("202110031760000", 1, "撤案"))
+        # 讀不出一讀的院會、或讀出不存在的會期（實測有「院會-11-9-2」）才退回「會期」
+        self.assertEqual(parse_bill(dict(row, 會議代碼="")).session_number, 5)
+        self.assertEqual(parse_bill(dict(row, 會議代碼="院會-11-9-2")).session_number, 5)
+
     def test_a_caucus_bill_has_no_cosigners_field(self):
         caucus_bill = parse_bill(_rows("lyapi_bills_11.json", "bills")[2])
         self.assertEqual(caucus_bill.proposers[0], "台灣民眾黨立法院黨團")
@@ -223,7 +233,7 @@ class SourceTests(SimpleTestCase):
         fetched = source.fetch()
         self.assertEqual(len(fetched.meetings), 2 + 5 + 2)
         self.assertEqual({m.kind for m in fetched.meetings[2:]}, {LyMeetingKind.COMMITTEE})
-        self.assertEqual((len(fetched.bills), len(fetched.votes)), (4, 2))
+        self.assertEqual((len(fetched.bills), len(fetched.votes)), (5, 2))
         meets = fetch.queries("meets")
         self.assertEqual([q["會議種類"] for q in meets], [["院會"], ["委員會"], ["聯席會議"]])
         self.assertTrue(all(q["屆"] == ["11"] for q in meets))
@@ -271,7 +281,7 @@ class SourceTests(SimpleTestCase):
         sleeps = []
         source = LyRecordsSource("https://api.example/v2", term=11, fetch=Flaky(routes),
                                  sleep=sleeps.append)
-        self.assertEqual(len(source.fetch().bills), 4)
+        self.assertEqual(len(source.fetch().bills), 5)
         self.assertIn(5.0, sleeps)
 
     def test_429_that_never_ends_gives_up(self):
@@ -301,8 +311,10 @@ class SourceTests(SimpleTestCase):
         source, fetch, _ = _source()
         fetched = source.fetch(session=5)
         self.assertEqual(fetch.queries("meets")[0]["會期"], ["5"])
-        self.assertEqual(fetch.queries("bills")[0]["會期"], ["5"])
+        # 議案的「會期」篩選看的是最新進度的會期：整屆抓回來、照一讀的會期篩
+        self.assertNotIn("會期", fetch.queries("bills")[0])
         self.assertNotIn("會期", fetch.queries("votes")[0])
+        self.assertEqual(len(fetched.bills), 4)
         self.assertEqual([v.code for v in fetched.votes], ["1151901_00002_717"])
         # 存下來的委員會會議是第 4 會期的：不收
         self.assertEqual({m.session_number for m in fetched.meetings}, {5})
@@ -338,9 +350,9 @@ class SaveTests(TestCase):
     def test_records_and_their_sessions_are_written(self):
         report = save(self._fetched(), now=NOW)
         self.assertEqual((LyMeeting.objects.count(), LyBill.objects.count(), LyVote.objects.count()),
-                         (9, 4, 2))
-        self.assertEqual(report.sessions_created, ["第11屆第2會期", "第11屆第3會期", "第11屆第4會期",
-                                                   "第11屆第5會期"])
+                         (9, 5, 2))
+        # 由小到大建，id 才跟會期的先後一致；第 1 會期來自一讀在第 1 會期的那件議案
+        self.assertEqual(report.sessions_created, [f"第11屆第{n}會期" for n in range(1, 6)])
         session = Session.objects.get(name="第11屆第5會期")
         # 涵蓋範圍仍以文章為準：沒有文章就留空
         self.assertEqual((session.source, session.term, session.start_date, session.end_date),
@@ -371,7 +383,7 @@ class SaveTests(TestCase):
         source, _, _ = _source(routes)
         save(source.fetch(), now=NOW)
         self.assertEqual((LyMeeting.objects.count(), LyBill.objects.count(), LyVote.objects.count()),
-                         (9, 4, 2))
+                         (9, 5, 2))
         self.assertEqual(LyBill.objects.get(bill_no="202110224730000").status, "審查完畢")
 
     def test_vote_dates_come_from_the_meeting(self):
@@ -399,7 +411,7 @@ class CommandTests(TestCase):
             call_command("sync_ly_records", "--term", "11", stdout=out)
         cls.assert_called_once_with(term=11)
         self.assertIn("院會 2 場", out.getvalue())
-        self.assertEqual(LyBill.objects.count(), 4)
+        self.assertEqual(LyBill.objects.count(), 5)
 
     def test_one_failed_page_writes_nothing(self):
         routes = _real_routes()

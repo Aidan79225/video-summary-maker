@@ -10,6 +10,9 @@
 - 聯席會議是另一個會議種類（「聯席會議」），不在「委員會」裡，要另外抓。
 - 清單加 output_fields=連署人 就拿得到每一件的連署人：翻完全部委員提案（八頁）就有，不必逐人逐會期
   查 `連署人=<姓名>`（那要上百個請求）。實測兩種做法的件數相同。
+- 議案的「會期」是**最新進度**的會期，不是提案的會期（第 1 會期提、第 5 會期撤案的案子寫 5）：
+  一件提案算在一讀那一次院會（「會議代碼」）的會期，見 bill_session。LYAPI 的會期篩選也是看最新
+  進度，所以議案一律抓整屆、在這裡篩。
 - /votes 不支援用會期篩選：抓整屆（三頁）、在這裡篩。
 - 同一個人在不同端點的寫法不一定一樣：會議資料寫「伍麗華Saidhai Tahovecahe」，表決與名冊寫
   「伍麗華Saidhai‧Tahovecahe」。比對一律用 name_key（去空白、去間隔號），顯示仍用原樣。
@@ -68,7 +71,8 @@ MEETING_KINDS: tuple[tuple[str, str], ...] = (
 # 「委員會代號:str」要連「委員會代號」一起要，否則是空的
 _MEET_FIELDS = ("會議代碼", "屆", "會期", "會議種類", "日期", "會議標題", "委員會代號", "委員會代號:str",
                 "會議資料", "議事錄")
-_BILL_FIELDS = ("議案編號", "屆", "會期", "議案名稱", "議案狀態", "提案人", "連署人", "提案日期", "url")
+_BILL_FIELDS = ("議案編號", "屆", "會期", "會議代碼", "議案名稱", "議案狀態", "提案人", "連署人", "提案日期",
+                "url")
 _VOTE_FIELDS = ("表決代碼", "屆", "session_period", "會議代碼", "表決時間", "表決議題", "投票委員",
                 "贊成", "反對", "棄權")
 
@@ -233,12 +237,29 @@ def parse_meeting(row: object, kind: str) -> MeetingRecord | None:
                          attendees=attendees or None, url=url)
 
 
+_FIRST_READING_RE = re.compile(r"^院會-(\d+)-(\d+)-")
+
+
+def bill_session(row: dict) -> int | None:
+    """一件提案算在哪個會期：一讀（交付審查）的那一次院會的會期。
+
+    不用「會期」欄位：那是**最新進度**的會期（2026-10 實測，第 11 屆 7,402 件裡有 176 件不同）——
+    第 1 會期提的案到第 5 會期撤案，「會期」就變成 5。「會議代碼」才是一讀的院會（「院會-11-1-10」）。
+    讀不出來、或讀出不存在的會期（2024-11 有兩件寫「院會-11-9-2」，「會期」是 2）才退回「會期」。
+    """
+    match = _FIRST_READING_RE.match(str(row.get("會議代碼") or "").strip())
+    first_reading = int(match.group(2)) if match else None
+    if first_reading is not None and 1 <= first_reading <= MAX_SESSION_NUMBER:
+        return first_reading
+    return _int(row.get("會期"))
+
+
 def parse_bill(row: object) -> BillRecord | None:
     """/bills 的一筆。沒有連署人欄位的（黨團提案）就是沒有連署人。"""
     if not isinstance(row, dict):
         return None
     bill_no = str(row.get("議案編號") or "").strip()
-    term, number = _int(row.get("屆")), _int(row.get("會期"))
+    term, number = _int(row.get("屆")), bill_session(row)
     if not bill_no or term is None or number is None:
         return None
     return BillRecord(bill_no=bill_no, term=term, session_number=number,
@@ -360,9 +381,10 @@ class LyRecordsSource:
             rows = self._rows("meets", "會議代碼", {"會議種類": label, **by_session}, _MEET_FIELDS)
             self._keep(fetched, fetched.meetings, rows, lambda row, k=kind: parse_meeting(row, k),
                        f"會議（{label}）")
-        rows = self._rows("bills", "議案編號", {"提案來源": "委員提案", **by_session}, _BILL_FIELDS)
+        # 議案也抓整屆、在 _keep 裡篩：LYAPI 的「會期」篩選看的是最新進度的會期，不是一讀的（見
+        # bill_session）。/votes 則根本不支援用會期篩選
+        rows = self._rows("bills", "議案編號", {"提案來源": "委員提案"}, _BILL_FIELDS)
         self._keep(fetched, fetched.bills, rows, parse_bill, "議案")
-        # /votes 不支援用會期篩選，抓整屆、在 _keep 裡篩
         rows = self._rows("votes", "表決代碼", {}, _VOTE_FIELDS)
         self._keep(fetched, fetched.votes, rows, parse_vote, "表決")
         return fetched
