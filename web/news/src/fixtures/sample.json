@@ -1,5 +1,5 @@
 {
-  "_note": "完全虛構的示範資料。姓名（範例一～範例六）、影片 id（9000xx；新北那篇的檔案 key 以 900 結尾）與發言內容都不對應任何真實人物或片段，網址也指向 example.invalid。USE_FIXTURE=1 時用它，讓 API 掛掉仍然可以展示畫面。 有摘要卡（brief）的三篇、沒有的兩篇，示範兩種版面；新北那篇是兩黨議員同一段的聯合質詢，示範多個政黨標籤。 人物側寫：people 是名冊（同來源、同名對到哪個人；範例四刻意不在名冊裡，示範沒有側寫的發言者），sessions 是會期，文章的 session_id 是假資料才有的欄位（真的 API 在後端篩）。profiles 的第11屆第5會期與新北那一期照上面的文章算（範例一 1 篇、197 秒、4 個數字、1 項帶期限的要求），同儕人數與百分位是編的；第11屆第4會期沒有對應的文章，數字全是編的，用來示範有百分位的具體度與「同儕不足」——它的「看這 N 篇」會是空清單。 議題分布：有摘要卡的單獨發言文章多一個假資料才有的 topic（評估通過的分類器給的主領域），聯合質詢與沒有摘要卡的不分類。範例一兩個會期的側寫有議題區塊：第11屆第5會期照上面的文章算（1 篇，指標全是「樣本不足」），第11屆第4會期的分布與百分位是編的、「看這 N 篇」是空清單；新北的側寫沒有議題區塊，示範分類器沒通過評估的來源整塊不顯示。分類器名稱與準確率也是編的。",
+  "_note": "完全虛構的示範資料。姓名（範例一～範例六）、影片 id（9000xx；新北那篇的檔案 key 以 900 結尾）與發言內容都不對應任何真實人物或片段，網址也指向 example.invalid。USE_FIXTURE=1 時用它，讓 API 掛掉仍然可以展示畫面。 有摘要卡（brief）的三篇、沒有的兩篇，示範兩種版面；新北那篇是兩黨議員同一段的聯合質詢，示範多個政黨標籤。 人物側寫：people 是名冊（同來源、同名對到哪個人；範例四刻意不在名冊裡，示範沒有側寫的發言者），sessions 是會期，文章的 session_id 是假資料才有的欄位（真的 API 在後端篩）。profiles 的第11屆第5會期與新北那一期照上面的文章算（範例一 1 篇、197 秒、4 個數字、1 項帶期限的要求），同儕人數與百分位是編的；第11屆第4會期沒有對應的文章，數字全是編的，用來示範有百分位的具體度與「同儕不足」——它的「看這 N 篇」會是空清單。 議題分布：有摘要卡的單獨發言文章多一個假資料才有的 topic（評估通過的分類器給的主領域），聯合質詢與沒有摘要卡的不分類。範例一兩個會期的側寫有議題區塊：第11屆第5會期照上面的文章算（1 篇，指標全是「樣本不足」），第11屆第4會期的分布與百分位是編的、「看這 N 篇」是空清單；新北的側寫沒有議題區塊，示範分類器沒通過評估的來源整塊不顯示。分類器名稱與準確率也是編的。 追問（側寫第三步）：範例一兩個會期的側寫示範判斷器通過評估的版面——第11屆第5會期照上面的文章算（那篇唯一帶期限的要求 9 月 27 日到期，計算時在觀察期內，所以追問率沒有分母）；第11屆第4會期的要求、狀態、追問率與百分位都是編的，出處文章不存在（點進去是 404），只有「無人機交機進度」那一項的再提指到上面範例一那篇，引用也真的在它的逐字稿裡。範例二的側寫照上面的文章算，示範判斷器沒通過評估的版面：沒有追問率、只有待追蹤。真的後端只有一個追問判斷器，同一時間所有人不是都通過就是都沒通過；這裡兩種並存只為了看版面。判斷器名稱與準確率也是編的。",
   "articles": [
     {
       "slug": "2026-08-27-900001",
@@ -708,6 +708,45 @@
             "labeled": 20,
             "evaluated_at": "2026-09-30T22:40:00+08:00"
           }
+        },
+        {
+          "key": "followup",
+          "title": "追問",
+          "indicators": [
+            {
+              "key": "followup_rate",
+              "label": "追問率",
+              "unit": "%",
+              "value": null,
+              "n": 0,
+              "n_unit": "項",
+              "percentile": null,
+              "peers": 18,
+              "sample_ok": false
+            }
+          ],
+          "asks": [
+            {
+              "article": {
+                "slug": "2026-08-27-900001",
+                "title": "2026-08-27 範例一－第11屆第5會期第23次會議",
+                "date": "2026-08-27"
+              },
+              "request": "提出分機種交機時程清冊，含剩餘架數、預計月份、卡關原因與零組件替代方案",
+              "deadline": "一個月內",
+              "due_date": "2026-09-27",
+              "state": "watching",
+              "followed_by": null,
+              "quote": ""
+            }
+          ],
+          "unparsed": 0,
+          "judge": {
+            "name": "qwen3.5:9b#followup-v1#3f9a1c2e",
+            "accuracy": 0.9,
+            "labeled": 30,
+            "evaluated_at": "2026-09-30T23:05:00+08:00"
+          }
         }
       ]
     },
@@ -850,6 +889,283 @@
             "labeled": 20,
             "evaluated_at": "2026-09-30T22:40:00+08:00"
           }
+        },
+        {
+          "key": "followup",
+          "title": "追問",
+          "indicators": [
+            {
+              "key": "followup_rate",
+              "label": "追問率",
+              "unit": "%",
+              "value": 60.0,
+              "n": 5,
+              "n_unit": "項",
+              "percentile": 57.4,
+              "peers": 22,
+              "sample_ok": true
+            }
+          ],
+          "asks": [
+            {
+              "article": {
+                "slug": "2025-09-23-900011",
+                "title": "2025-09-23 範例一－第11屆第4會期第3次會議",
+                "date": "2025-09-23"
+              },
+              "request": "說明營舍修繕預算的執行進度與延宕原因",
+              "deadline": "兩週內",
+              "due_date": "2025-10-07",
+              "state": "followed",
+              "followed_by": {
+                "slug": "2025-10-21-900018",
+                "title": "2025-10-21 範例一－第11屆第4會期第7次會議",
+                "date": "2025-10-21"
+              },
+              "quote": "營舍修繕的進度上次請你們兩週內說明"
+            },
+            {
+              "article": {
+                "slug": "2025-10-14-900012",
+                "title": "2025-10-14 範例一－第11屆第4會期第6次會議",
+                "date": "2025-10-14"
+              },
+              "request": "公開各型戰車的妥善率統計",
+              "deadline": "一個月內",
+              "due_date": "2025-11-14",
+              "state": "not_followed",
+              "followed_by": null,
+              "quote": ""
+            },
+            {
+              "article": {
+                "slug": "2025-11-04-900013",
+                "title": "2025-11-04 範例一－第11屆第4會期第9次會議",
+                "date": "2025-11-04"
+              },
+              "request": "提出後備動員系統的資安檢測報告",
+              "deadline": "年底前",
+              "due_date": "2025-12-31",
+              "state": "followed",
+              "followed_by": {
+                "slug": "2026-01-13-900019",
+                "title": "2026-01-13 範例一－第11屆第4會期第19次會議",
+                "date": "2026-01-13"
+              },
+              "quote": "後備動員系統的資安檢測報告到現在還沒有送來"
+            },
+            {
+              "article": {
+                "slug": "2025-11-18-900014",
+                "title": "2025-11-18 範例一－第11屆第4會期第11次會議",
+                "date": "2025-11-18"
+              },
+              "request": "說明軍事院校招生缺額的改善方案",
+              "deadline": "三個月內",
+              "due_date": "2026-02-18",
+              "state": "not_followed",
+              "followed_by": null,
+              "quote": ""
+            },
+            {
+              "article": {
+                "slug": "2025-12-16-900016",
+                "title": "2025-12-16 範例一－第11屆第4會期第15次會議",
+                "date": "2025-12-16"
+              },
+              "request": "公布無人機各機種的交機進度與延遲原因",
+              "deadline": "半年內",
+              "due_date": "2026-06-16",
+              "state": "followed",
+              "followed_by": {
+                "slug": "2026-08-27-900001",
+                "title": "2026-08-27 範例一－第11屆第5會期第23次會議",
+                "date": "2026-08-27"
+              },
+              "quote": "所以真正到部隊手上的，連一半都不到"
+            },
+            {
+              "article": {
+                "slug": "2026-01-06-900017",
+                "title": "2026-01-06 範例一－第11屆第4會期第18次會議",
+                "date": "2026-01-06"
+              },
+              "request": "檢討志願役的薪資結構與留營誘因",
+              "deadline": "半年內",
+              "due_date": "2026-07-06",
+              "state": "watching",
+              "followed_by": null,
+              "quote": ""
+            },
+            {
+              "article": {
+                "slug": "2025-12-02-900015",
+                "title": "2025-12-02 範例一－第11屆第4會期第13次會議",
+                "date": "2025-12-02"
+              },
+              "request": "提出營區周邊噪音補償的修法草案",
+              "deadline": "一年內",
+              "due_date": "2026-12-02",
+              "state": "pending",
+              "followed_by": null,
+              "quote": ""
+            }
+          ],
+          "unparsed": 2,
+          "judge": {
+            "name": "qwen3.5:9b#followup-v1#3f9a1c2e",
+            "accuracy": 0.9,
+            "labeled": 30,
+            "evaluated_at": "2026-09-30T23:05:00+08:00"
+          }
+        }
+      ]
+    },
+    {
+      "person_id": 2,
+      "source": "ly",
+      "session_id": 3,
+      "computed_at": "2026-10-01T06:12:00+08:00",
+      "blocks": [
+        {
+          "key": "volume",
+          "title": "投入量",
+          "indicators": [
+            {
+              "key": "speeches",
+              "label": "發言次數",
+              "unit": "次",
+              "value": 1,
+              "n": 1,
+              "n_unit": "篇",
+              "percentile": 9.3,
+              "peers": 113,
+              "sample_ok": true
+            },
+            {
+              "key": "speaking_minutes",
+              "label": "發言總時長",
+              "unit": "分鐘",
+              "value": 4.0,
+              "n": 1,
+              "n_unit": "篇",
+              "percentile": 8.4,
+              "peers": 113,
+              "sample_ok": true
+            }
+          ]
+        },
+        {
+          "key": "specificity",
+          "title": "具體度",
+          "indicators": [
+            {
+              "key": "numbers_per_speech",
+              "label": "每篇落地數字數",
+              "unit": "個／篇",
+              "value": 3.0,
+              "n": 1,
+              "n_unit": "篇",
+              "percentile": null,
+              "peers": 41,
+              "sample_ok": false
+            },
+            {
+              "key": "deadline_asks_per_speech",
+              "label": "每篇帶期限的要求數",
+              "unit": "項／篇",
+              "value": 1.0,
+              "n": 1,
+              "n_unit": "篇",
+              "percentile": null,
+              "peers": 41,
+              "sample_ok": false
+            },
+            {
+              "key": "sourced_number_share",
+              "label": "有來源的數字占比",
+              "unit": "%",
+              "value": 33.3,
+              "n": 3,
+              "n_unit": "個數字",
+              "percentile": null,
+              "peers": 3,
+              "sample_ok": false
+            }
+          ]
+        },
+        {
+          "key": "topics",
+          "title": "議題分布",
+          "indicators": [
+            {
+              "key": "topic_focus",
+              "label": "聚焦度",
+              "unit": "%",
+              "value": 100.0,
+              "n": 1,
+              "n_unit": "篇",
+              "percentile": null,
+              "peers": 36,
+              "sample_ok": false
+            },
+            {
+              "key": "topic_breadth",
+              "label": "廣度",
+              "unit": "個",
+              "value": 1,
+              "n": 1,
+              "n_unit": "篇",
+              "percentile": null,
+              "peers": 36,
+              "sample_ok": false
+            },
+            {
+              "key": "committee_alignment",
+              "label": "委員會職掌內的比例",
+              "unit": "%",
+              "value": 100.0,
+              "n": 1,
+              "n_unit": "篇",
+              "percentile": null,
+              "peers": 36,
+              "sample_ok": false
+            }
+          ],
+          "distribution": [
+            {
+              "key": "welfare",
+              "count": 1
+            }
+          ],
+          "classifier": {
+            "name": "qwen3.5:9b#topic-v1",
+            "accuracy": 0.85,
+            "labeled": 20,
+            "evaluated_at": "2026-09-30T22:40:00+08:00"
+          }
+        },
+        {
+          "key": "followup",
+          "title": "追問",
+          "indicators": [],
+          "asks": [
+            {
+              "article": {
+                "slug": "2026-08-26-900002",
+                "title": "2026-08-26 範例二－第11屆第5會期第22次會議",
+                "date": "2026-08-26"
+              },
+              "request": "改用留任率作為護理人力政策的主要指標",
+              "deadline": "三個月內",
+              "due_date": "2026-11-26",
+              "state": "pending",
+              "followed_by": null,
+              "quote": ""
+            }
+          ],
+          "unparsed": 0,
+          "judge": null
         }
       ]
     },
