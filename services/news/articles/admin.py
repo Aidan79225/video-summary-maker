@@ -6,9 +6,9 @@ from django.urls import reverse
 from django.utils import timezone
 from django.utils.html import format_html
 
-from . import topics
-from .models import (Article, ArticleStatus, Membership, Person, ProfileStat, Session, Slide, Topic,
-                     TopicEvaluation, TopicLabel)
+from . import followups, topics
+from .models import (Article, ArticleStatus, FollowUp, FollowUpEvaluation, FollowUpLabel, Membership,
+                     Person, ProfileStat, Session, Slide, Topic, TopicEvaluation, TopicLabel)
 from .profiles import compute_profiles
 
 
@@ -288,3 +288,157 @@ class TopicEvaluationAdmin(_ReadOnlyAdmin):
             return
         compute_profiles()
         self.message_user(request, "上線的分類器變了，已經重算人物側寫", messages.INFO)
+
+
+# --- 追問率 ---
+
+
+class _FollowedSelect(forms.NullBooleanSelect):
+    """有沒有追問：還沒標／有／沒有。預設的「未知／是／否」讀起來像在問別的事。"""
+
+    def __init__(self, attrs=None):
+        super().__init__(attrs)
+        self.choices = [("unknown", "（還沒標）"), ("true", "有追問"), ("false", "沒有追問")]
+
+
+class FollowUpLabelForm(forms.ModelForm):
+    followed = forms.NullBooleanField(label="有沒有追問", required=False, widget=_FollowedSelect)
+
+    class Meta:
+        model = FollowUpLabel
+        fields = ("followed", "note")
+
+
+class FollowUpLabelledFilter(admin.SimpleListFilter):
+    title = "標註狀態"
+    parameter_name = "labelled"
+
+    def lookups(self, request, model_admin):
+        return (("no", "還沒標"), ("yes", "已標"))
+
+    def queryset(self, request, queryset):
+        if self.value() == "no":
+            return queryset.filter(followed__isnull=True)
+        if self.value() == "yes":
+            return queryset.filter(followed__isnull=False)
+        return queryset
+
+
+def _pre(text: str):
+    return format_html('<div style="white-space: pre-line; max-width: 28em">{}</div>', text)
+
+
+@admin.register(FollowUpLabel)
+class FollowUpLabelAdmin(admin.ModelAdmin):
+    """追問標註：盲標。清單上直接顯示舊的要求、當時的回應、後來那篇的一句話與挑出來的那段逐字稿
+    （跟送給判斷器的是同一段），「有沒有追問」在清單上直接選。
+
+    **不要在這裡（或 ArticleAdmin）加任何 FollowUp 的欄位、篩選或搜尋**：看得到模型的答案，人就會
+    跟著它標，評估量到的就變成「模型跟自己有多像」。
+
+    不能在這裡新增：標註集要用 sample_followup_labels 抽，人手挑的對會偏向好判的。
+    """
+
+    form = FollowUpLabelForm
+    list_display = ("pair_links", "old_request", "old_response", "new_one_liner", "new_excerpt",
+                    "followed", "note", "labeled_at")
+    # 文章欄是連到兩篇文章的連結，不是這一筆的編輯頁：標註就在清單上做
+    list_display_links = None
+    list_editable = ("followed", "note")
+    list_filter = (FollowUpLabelledFilter, "article__source")
+    search_fields = ("article__speaker", "article__ivod_id", "candidate__ivod_id")
+    list_per_page = 20
+    fields = ("pair_links", "old_request", "old_response", "new_one_liner", "new_excerpt",
+              "followed", "note", "labeled_at")
+    readonly_fields = ("pair_links", "old_request", "old_response", "new_one_liner", "new_excerpt",
+                       "labeled_at")
+
+    def get_queryset(self, request):
+        return super().get_queryset(request).select_related("article", "candidate")
+
+    def get_changelist_form(self, request, **kwargs):
+        # 清單上的表單預設不用 self.form；不指定的話下拉選單會是預設的「未知／是／否」
+        kwargs.setdefault("form", FollowUpLabelForm)
+        return super().get_changelist_form(request, **kwargs)
+
+    def has_add_permission(self, request) -> bool:
+        return False
+
+    def save_model(self, request, obj, form, change):
+        if "followed" in form.changed_data:
+            obj.labeled_at = timezone.now() if obj.followed is not None else None
+        super().save_model(request, obj, form, change)
+
+    @admin.display(description="兩篇文章")
+    def pair_links(self, label: FollowUpLabel):
+        return format_html(
+            '要求：<a href="{}">{} {}</a>（<a href="{}" target="_blank" rel="noopener">影片</a>）<br>'
+            '後來：<a href="{}">{} {}</a>（<a href="{}" target="_blank" rel="noopener">影片</a>）',
+            reverse("admin:articles_article_change", args=[label.article_id]),
+            label.article.date, label.article.speaker, label.article.ivod_url,
+            reverse("admin:articles_article_change", args=[label.candidate_id]),
+            label.candidate.date, label.candidate.speaker, label.candidate.ivod_url)
+
+    @admin.display(description="舊的要求")
+    def old_request(self, label: FollowUpLabel):
+        ask = followups.ask_at(label.article.brief, label.ask_index)
+        deadline = ask.deadline if ask and ask.request == label.request else ""
+        return _pre(f"{label.request}\n（期限：{deadline or '—'}）")
+
+    @admin.display(description="當時的回應")
+    def old_response(self, label: FollowUpLabel):
+        ask = followups.ask_at(label.article.brief, label.ask_index)
+        return _pre(ask.response if ask and ask.request == label.request and ask.response else "—")
+
+    @admin.display(description="後來那篇的一句話")
+    def new_one_liner(self, label: FollowUpLabel):
+        return _pre(label.candidate.one_liner or "—")
+
+    @admin.display(description="後來那篇的逐字稿（挑出來的那段）")
+    def new_excerpt(self, label: FollowUpLabel):
+        # 跟送給判斷器的是同一個函式：標的人跟模型讀的是同一段
+        return format_html('<div style="white-space: pre-line; max-width: 40em; max-height: 24em; '
+                           'overflow-y: auto">{}</div>',
+                           followups.excerpt_for(label.request, label.candidate.transcript_text or ""))
+
+
+@admin.register(FollowUp)
+class FollowUpAdmin(_ReadOnlyAdmin):
+    """模型的判斷。刪掉一筆，下一輪 check_followups 會重建那一項、重判它的候選。"""
+
+    list_display = ("article", "ask_index", "request", "deadline_text", "due_date", "followed_by",
+                    "classifier", "checked_at")
+    list_filter = ("classifier", "article__source")
+    search_fields = ("article__speaker", "article__ivod_id", "request")
+    list_select_related = ("article", "followed_by")
+
+
+@admin.register(FollowUpEvaluation)
+class FollowUpEvaluationAdmin(_ReadOnlyAdmin):
+    """評估紀錄。刪掉通過的評估會改變上線條件：退回較舊的通過版本，或沒有追問率。
+
+    刪完之後上線的判斷器變了，就當場重算人物側寫（同 TopicEvaluationAdmin）。
+    """
+
+    list_display = ("classifier", "labeled", "correct", "accuracy_percent", "passed", "ran_at")
+    list_filter = ("passed", "classifier")
+
+    @admin.display(description="準確率", ordering="accuracy")
+    def accuracy_percent(self, evaluation: FollowUpEvaluation) -> str:
+        return f"{evaluation.accuracy * 100:.1f}%"
+
+    def delete_model(self, request, obj) -> None:
+        before = followups.passing_judge()
+        super().delete_model(request, obj)
+        self._recompute_if_the_gate_moved(request, before)
+
+    def delete_queryset(self, request, queryset) -> None:
+        before = followups.passing_judge()
+        super().delete_queryset(request, queryset)
+        self._recompute_if_the_gate_moved(request, before)
+
+    def _recompute_if_the_gate_moved(self, request, before: str | None) -> None:
+        if followups.passing_judge() == before:
+            return
+        compute_profiles()
+        self.message_user(request, "上線的判斷器變了，已經重算人物側寫", messages.INFO)

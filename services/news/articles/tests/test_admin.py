@@ -313,3 +313,140 @@ class TopicEvaluationDeleteTests(TestCase):
                                {"post": "yes"}, follow=True)
         self.assertNotContains(res, "已經重算人物側寫")
         self.assertEqual(list(ProfileStat.objects.order_by("id").values_list("id", flat=True)), before)
+
+
+# --- 追問率 ---
+
+FOLLOWUP_TRANSCRIPT = "00:00 王立 部長，我再問一次「交機時程清冊到現在還沒給」，什麼時候給？"
+
+
+def _followup_pair():
+    """王立 3/2 要求交清冊（回應「部長允諾」），3/20 那篇後來又問了。"""
+    source = _article("s1", ArticleStatus.READY, speaker="王立")
+    Article.objects.filter(pk=source.pk).update(brief={
+        "one_liner": "國防部無人機交機不到一半", "key_numbers": [],
+        "asks": [{"request": "提出無人機交機時程清冊", "deadline": "一個月內", "response": "部長允諾"}]})
+    candidate = _article("s2", ArticleStatus.READY, speaker="王立")
+    Article.objects.filter(pk=candidate.pk).update(
+        brief={"one_liner": "無人機交機時程清冊還沒交", "key_numbers": [], "asks": []},
+        transcript_text=FOLLOWUP_TRANSCRIPT)
+    source.refresh_from_db()
+    candidate.refresh_from_db()
+    return source, candidate
+
+
+class FollowUpLabelAdminTests(TestCase):
+    """追問標註頁：舊的要求、當時的回應、後來那篇的一句話與逐字稿片段、兩篇的連結；在清單上直接
+    標有沒有追問；**看不到模型的判斷**。"""
+
+    # 刻意取不會出現在頁面其他地方的字串，出現了就是洩漏
+    SECRET_JUDGE = "secret-model-xyz#followup-v9#ffff"
+    SECRET_QUOTE = "模型自己挑的那句引用"
+
+    def setUp(self):
+        from articles.models import FollowUp, FollowUpLabel
+
+        user = get_user_model().objects.create_superuser("admin7", "g@example.com", "pw")
+        self.client.force_login(user)
+        self.source, self.candidate = _followup_pair()
+        # 模型說有追問——人還沒標
+        FollowUp.objects.create(article=self.source, ask_index=0, request="提出無人機交機時程清冊",
+                                deadline_text="一個月內", due_date=date(2026, 9, 27),
+                                followed_by=self.candidate, quote=self.SECRET_QUOTE,
+                                classifier=self.SECRET_JUDGE, checked=[self.candidate.id])
+        self.label = FollowUpLabel.objects.create(article=self.source, ask_index=0,
+                                                  request="提出無人機交機時程清冊", candidate=self.candidate)
+
+    def _changelist(self, query=""):
+        return self.client.get(f"/admin/articles/followuplabel/{query}")
+
+    def test_the_list_shows_both_sides_and_links_to_both_articles(self):
+        res = self._changelist()
+        self.assertEqual(res.status_code, 200)
+        for text in ("提出無人機交機時程清冊", "（期限：一個月內）", "部長允諾", "無人機交機時程清冊還沒交",
+                     "交機時程清冊到現在還沒給"):
+            self.assertContains(res, text)
+        for article in (self.source, self.candidate):
+            self.assertContains(res, f"/admin/articles/article/{article.pk}/change/")
+        self.assertContains(res, 'name="form-0-followed"')
+        self.assertContains(res, "（還沒標）")
+        self.assertContains(res, "沒有追問")
+
+    def test_the_model_judgment_is_never_shown(self):
+        pages = [self._changelist(), self._changelist("?labelled=no"),
+                 self.client.get(f"/admin/articles/followuplabel/{self.label.pk}/change/"),
+                 self.client.get(f"/admin/articles/article/{self.candidate.pk}/change/")]
+        for res in pages:
+            self.assertEqual(res.status_code, 200)
+            body = res.content.decode()
+            for leak in (self.SECRET_JUDGE, self.SECRET_QUOTE):
+                self.assertNotIn(leak, body, res.request["PATH_INFO"])
+        # 還沒標的那一列，下拉選單停在「還沒標」，不是模型的「有追問」
+        self.assertContains(self._changelist("?labelled=no"),
+                            '<option value="unknown" selected>（還沒標）</option>', html=True)
+
+    def test_labelling_in_the_list_saves_the_answer_and_the_time(self):
+        def post(value):
+            return self.client.post("/admin/articles/followuplabel/", {
+                "form-TOTAL_FORMS": "1", "form-INITIAL_FORMS": "1",
+                "form-MIN_NUM_FORMS": "0", "form-MAX_NUM_FORMS": "1000",
+                "form-0-id": str(self.label.pk), "form-0-followed": value,
+                "form-0-note": "追的是同一份清冊", "_save": "儲存"})
+
+        self.assertEqual(post("false").status_code, 302)
+        self.label.refresh_from_db()
+        self.assertEqual((self.label.followed, self.label.note), (False, "追的是同一份清冊"))
+        self.assertIsNotNone(self.label.labeled_at)
+        self.assertEqual(self._changelist("?labelled=yes").context["cl"].result_list[0], self.label)
+        # 改回還沒標：時間也清掉
+        post("unknown")
+        self.label.refresh_from_db()
+        self.assertEqual((self.label.followed, self.label.labeled_at), (None, None))
+
+    def test_labels_come_only_from_sampling(self):
+        self.assertEqual(self.client.get("/admin/articles/followuplabel/add/").status_code, 403)
+
+
+class FollowUpReadOnlyAdminTests(TestCase):
+    def setUp(self):
+        from articles.models import FollowUp, FollowUpEvaluation
+
+        user = get_user_model().objects.create_superuser("admin8", "h@example.com", "pw")
+        self.client.force_login(user)
+        source, candidate = _followup_pair()
+        self.followup = FollowUp.objects.create(
+            article=source, ask_index=0, request="提出無人機交機時程清冊", deadline_text="一個月內",
+            due_date=date(2026, 9, 27), followed_by=candidate, quote="q", classifier="m#followup-v1#x")
+        self.evaluation = FollowUpEvaluation.objects.create(
+            classifier="m#followup-v1#x", labeled=30, correct=27, accuracy=0.9, passed=True,
+            ran_at=timezone.now())
+
+    def test_followups_and_evaluations_are_listed_and_viewable(self):
+        res = self.client.get("/admin/articles/followup/")
+        self.assertEqual(res.status_code, 200)
+        self.assertContains(res, "提出無人機交機時程清冊")
+        res = self.client.get("/admin/articles/followupevaluation/")
+        self.assertEqual(res.status_code, 200)
+        self.assertContains(res, "90.0%")
+        for url in (f"/admin/articles/followup/{self.followup.pk}/change/",
+                    f"/admin/articles/followupevaluation/{self.evaluation.pk}/change/"):
+            res = self.client.get(url)
+            self.assertEqual(res.status_code, 200)
+            self.assertNotContains(res, 'name="_save"')
+
+    def test_nothing_can_be_added_by_hand(self):
+        self.assertEqual(self.client.get("/admin/articles/followup/add/").status_code, 403)
+        self.assertEqual(self.client.get("/admin/articles/followupevaluation/add/").status_code, 403)
+
+    def test_deleting_the_live_evaluation_recomputes_at_once(self):
+        from articles.models import Membership, Person, ProfileStat
+        from articles.profiles import compute_profiles
+
+        Membership.objects.create(person=Person.objects.create(name="王立"), source="ly", name="王立")
+        Article.objects.update(meeting="第11屆第5會期財政委員會第3次全體委員會議")
+        compute_profiles()
+        self.assertTrue(ProfileStat.objects.filter(indicator="followup_rate").exists())
+        res = self.client.post(f"/admin/articles/followupevaluation/{self.evaluation.pk}/delete/",
+                               {"post": "yes"}, follow=True)
+        self.assertContains(res, "已經重算人物側寫")
+        self.assertFalse(ProfileStat.objects.filter(indicator="followup_rate").exists())
