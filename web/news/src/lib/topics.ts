@@ -53,6 +53,14 @@ export const COMMITTEE_AREAS: readonly { committee: string; areas: readonly stri
 export const TOPIC_MIN_LABELS = 20;
 export const TOPIC_MIN_ACCURACY = 0.8;
 
+/**
+ * 議案分類的門檻（後端 eval_bill_topics 的門檻）：議案名稱另有自己的人工標註集，
+ * 數字跟質詢的一樣，但兩邊各自評估、各自上線。API 不回議案分類器的評估結果，
+ * 網站擋不到這一道，只在方法頁寫出來；後端改門檻時這裡要跟著改。
+ */
+export const BILL_TOPIC_MIN_LABELS = 20;
+export const BILL_TOPIC_MIN_ACCURACY = 0.8;
+
 /** 廣度的門檻：占比至少這麼多的領域才算一個（後端同一個數字） */
 export const TOPIC_BREADTH_SHARE = 10;
 

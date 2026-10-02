@@ -6,7 +6,8 @@
  * 所以這裡沒有總分、沒有名次，每個指標各自一格；每格都能點回算它用的那幾篇。
  * 議題分布多一張各領域的長條圖（ProfileTopics），只有後端給了才出現——
  * 那個來源的分類器沒通過人工標註的評估，就整塊不上線。
- * 立委多一塊院內紀錄（ProfileChamber）：八個指標分成出席、提案、表決三組。追問整塊交給
+ * 立委多一塊院內紀錄（ProfileChamber）：八個指標分成出席、提案、表決三組；兩道分類門檻都過時
+ * 提案組多一張提案與質詢一致率，它的「質詢 M 篇」取自議題分布。追問整塊交給
  * ProfileFollowups，放在最後：它有自己的清單與錨點（#followups），判斷器沒通過時也還有待追蹤清單。
  */
 import type { Profile } from '../lib/types';
@@ -16,6 +17,7 @@ import ProfileTopics from './ProfileTopics.astro';
 import ProfileChamber from './ProfileChamber.astro';
 import ProfileFollowups from './ProfileFollowups.astro';
 import { FOLLOWUP_BLOCK } from '../lib/followups';
+import { alignmentSpeeches } from '../lib/records';
 
 interface Props {
   profile: Profile;
@@ -45,6 +47,8 @@ const sessionHref = (id: number) => `${basePath}?source=${profile.source}&sessio
 // 只有立法院有這份資料：後端只替立委算，別的議會萬一帶了也不畫（跟議題分布的門檻一樣兩邊各擋一次）
 const chamber = profile.blocks.find((b) => b.key === 'chamber');
 const showChamber = chamber && profile.source === 'ly';
+// 提案與質詢一致率的卡片要寫「質詢 M 篇」：M 就是議題分布的基礎篇數，從同一份側寫拿
+const speeches = alignmentSpeeches(profile.blocks);
 // 追問整塊放在最後（院內紀錄之後）
 const followupBlock = profile.blocks.find((b) => b.key === FOLLOWUP_BLOCK);
 ---
@@ -140,7 +144,7 @@ const followupBlock = profile.blocks.find((b) => b.key === FOLLOWUP_BLOCK);
         </section>
       ))
     }
-    {showChamber && <ProfileChamber block={chamber} minSample={profile.min_sample} />}
+    {showChamber && <ProfileChamber block={chamber} minSample={profile.min_sample} speeches={speeches} />}
     {followupBlock && <ProfileFollowups block={followupBlock} minSample={profile.min_sample} />}
   </div>
 </section>

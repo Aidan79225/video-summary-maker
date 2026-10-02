@@ -22,7 +22,7 @@ import type {
   TopicShare,
 } from './types';
 import { toSource } from './sources';
-import { fixtureChamberBlock, fixtureRecords, normalizeRecords } from './records';
+import { dropUnverifiedAlignment, fixtureChamberBlock, fixtureRecords, normalizeRecords } from './records';
 import { ANY_TOPIC, TOPIC_AREAS, TOPIC_MIN_ACCURACY, TOPIC_MIN_LABELS, topicOrder } from './topics';
 import { FOLLOWUP_ANCHOR, FOLLOWUP_BLOCK, normalizeFollowupBlock } from './followups';
 import fixture from '../fixtures/sample.json';
@@ -517,9 +517,10 @@ export function normalizeProfile(raw: unknown): Profile | null {
   const session = normalizeSession(o.session);
   if (personId === null || !session) return null;
 
-  const blocks = (Array.isArray(o.blocks) ? o.blocks : [])
-    .map(normalizeBlock)
-    .filter((b): b is ProfileBlock => b !== null);
+  // 議題分布被門檻擋掉時，院內紀錄的提案與質詢一致率也要拿掉：它的質詢那一半就是那份分布
+  const blocks = dropUnverifiedAlignment(
+    (Array.isArray(o.blocks) ? o.blocks : []).map(normalizeBlock).filter((b): b is ProfileBlock => b !== null),
+  );
   if (blocks.length === 0) return null;
 
   const sessions = (Array.isArray(o.sessions) ? o.sessions : [])
@@ -580,8 +581,10 @@ function fixtureProfile(personId: number, query: ProfileQuery): Result<unknown> 
   // 證據連結用這個人在該來源的寫法，跟後端一樣
   const name = (fx.people ?? []).find((p) => p.id === personId && p.source === source)?.name ?? '';
   const evidence = `/speaker/${encodeURIComponent(name)}?source=${source}&session=${picked.s.id}`;
-  // 院內紀錄放在 records.json：指標由假紀錄照後端的公式算，n 才會等於證據頁的筆數
-  const chamber = fixtureChamberBlock(personId, picked.s.id);
+  // 院內紀錄放在 records.json：指標由假紀錄照後端的公式算，n 才會等於證據頁的筆數。
+  // 提案與質詢一致率的質詢那一半是這個會期的議題分布；沒有議題區塊（分類器沒通過）就沒有這張卡
+  const topics = picked.p.blocks.find((b) => b.key === 'topics');
+  const chamber = fixtureChamberBlock(personId, picked.s.id, topics?.distribution ?? null);
   return {
     ok: true,
     data: {

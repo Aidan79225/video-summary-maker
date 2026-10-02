@@ -135,7 +135,8 @@ export type ProfileIndicator = {
   /**
    * 沒有值的原因：'no_committee_data'＝有分類過的報導，但沒有他這個會期的委員會資料；
    * 'no_caucus'＝他那個會期沒有參加黨團（院內紀錄的黨團一致率與跨黨投票）；
-   * 'rejudging'＝追問率：換了判斷器，他還有要求是舊的判斷器判的，重新判斷完之前不給
+   * 'rejudging'＝追問率：換了判斷器，他還有要求是舊的判斷器判的，重新判斷完之前不給；
+   * 'few_speeches'＝提案與質詢一致率：分過議題的質詢不到最小樣本，質詢那一邊的分布不可靠，不給值
    */
   reason?: string;
 };
@@ -282,6 +283,13 @@ export type MeetingRecord = {
   url: string;
 };
 
+/** 議案名稱分到的領域（議題分布的 12 個領域之一） */
+export type BillArea = {
+  /** 領域代碼，跟議題分布的 key 同一套 */
+  key: string;
+  label: string;
+};
+
 /** 一件委員提案 */
 export type BillRecord = {
   bill_no: string;
@@ -292,6 +300,11 @@ export type BillRecord = {
   status: string;
   proposers: string[];
   url: string;
+  /**
+   * 議案分類器（通過評估、正在上線的那一版）給的主領域。分類器沒通過、或這一件還沒分類時
+   * 是 null：提案與質詢一致率只算有領域的，證據頁要標得出哪幾件算進去了
+   */
+  area: BillArea | null;
 };
 
 /** 一張票：贊成、反對、棄權 */

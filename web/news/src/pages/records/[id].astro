@@ -8,6 +8,9 @@
  * 人名、會期與指標的數字都從側寫 API 拿：會期以側寫為準（網址沒帶就用側寫的預設），
  * 這一頁顯示的數字才會跟發言者頁上的卡片是同一份。清單本身另外向紀錄 API 要。
  * 數字一律照後端給的寫，網站不重算；清單的筆數另外寫出來，讀者可以自己對。
+ *
+ * 主提案清單同時是提案與質詢一致率的證據：議案分類器上線時每件標出領域（沒分類的標
+ * 「還沒分類」），上方除了主提案數也列出一致率與它的 n（分過領域的件數）。
  */
 import Base from '../../layouts/Base.astro';
 import Notice from '../../components/Notice.astro';
@@ -16,7 +19,7 @@ import RecordMeeting from '../../components/RecordMeeting.astro';
 import RecordVote from '../../components/RecordVote.astro';
 import { getProfile, getRecords, safeInternalPath, statusFor } from '../../lib/api';
 import { formatMetric } from '../../lib/format';
-import { RECORD_KINDS, isRecordKind, reasonText, recordKindInfo } from '../../lib/records';
+import { ALIGNMENT_KEY, RECORD_KINDS, isRecordKind, reasonText, recordKindInfo } from '../../lib/records';
 import type { ApiError, Profile, ProfileIndicator, RecordKind } from '../../lib/types';
 
 const url = Astro.url;
@@ -63,6 +66,9 @@ const indicatorOf = (key: string): ProfileIndicator | null =>
   chamber?.indicators.find((i) => i.key === key) ?? null;
 // 這一頁對應的指標：每一類剛好一個（一致率有自己的「黨團有多數」清單），筆數等於它的 n
 const shownIndicator = indicatorOf(info.indicator);
+// 主提案清單另外是提案與質詢一致率的證據：它的 n 是其中分過領域的件數，放在主提案數旁邊
+const alignment = kind === 'proposed' ? indicatorOf(ALIGNMENT_KEY) : null;
+const shownIndicators = [shownIndicator, alignment].filter((i): i is ProfileIndicator => i !== null);
 
 /** 切換列每一類的筆數：就是那一類對應指標的 n；沒有那個指標（或沒有黨團）就不寫數字 */
 function kindCount(k: RecordKind): number | null {
@@ -72,7 +78,7 @@ function kindCount(k: RecordKind): number | null {
 const kindHref = (k: RecordKind) => `/records/${personId}?session=${session?.id ?? ''}&kind=${k}`;
 
 function indicatorValue(ind: ProfileIndicator): string {
-  if (ind.value === null) return reasonText(ind.reason) || '—';
+  if (ind.value === null) return reasonText(ind.reason, profile?.min_sample) || '—';
   return `${formatMetric(ind.value)}${ind.unit === '%' ? '%' : ` ${ind.unit}`}`;
 }
 
@@ -83,6 +89,10 @@ const dropped = list?.dropped ?? 0;
 const meetings = list && (list.kind === 'plenary' || list.kind === 'committee') ? list.items : [];
 const votes = list && (list.kind === 'votes' || list.kind === 'caucus_votes' || list.kind === 'defections') ? list.items : [];
 const bills = list && (list.kind === 'proposed' || list.kind === 'cosigned' || list.kind === 'passed') ? list.items : [];
+// 議案分類器上線時（有一致率的卡片，或清單上有議案帶領域），主提案的每一件都要標：
+// 有領域的寫領域，沒有的寫「還沒分類」，讀者才數得出一致率的 n 是哪幾件
+const classified = bills.filter((b) => b.area).length;
+const areasLive = kind === 'proposed' && (alignment !== null || classified > 0);
 const noCaucus = indicatorOf('caucus_agreement')?.reason === 'no_caucus';
 // 沒有參加黨團時，黨團的兩類清單是空的；寫原因，不寫成「他從不跨黨」
 const emptyText =
@@ -197,17 +207,19 @@ const pageTitle = profile && session ? `${name}・${info.title}・${session.name
             <p class="mt-2 text-[0.85rem] leading-relaxed text-muted">{info.description}</p>
 
             {
-              shownIndicator && (
+              shownIndicators.length > 0 && (
                 <dl class="mt-4 flex flex-wrap gap-x-8 gap-y-3 rounded-xl border border-line-soft bg-surface px-4 py-3">
-                  <div>
-                    <dt class="text-[0.72rem] text-muted">{shownIndicator.label}</dt>
-                    <dd class="tabular mt-0.5 text-[0.95rem] text-ink">
-                      <span class="font-semibold">{indicatorValue(shownIndicator)}</span>
-                      <span class="ml-2 text-[0.72rem] text-muted">
-                        n = {shownIndicator.n} {shownIndicator.n_unit}
-                      </span>
-                    </dd>
-                  </div>
+                  {shownIndicators.map((ind) => (
+                    <div>
+                      <dt class="text-[0.72rem] text-muted">{ind.label}</dt>
+                      <dd class="tabular mt-0.5 text-[0.95rem] text-ink">
+                        <span class="font-semibold">{indicatorValue(ind)}</span>
+                        <span class="ml-2 text-[0.72rem] text-muted">
+                          n = {ind.n} {ind.n_unit}
+                        </span>
+                      </dd>
+                    </div>
+                  ))}
                 </dl>
               )
             }
@@ -235,6 +247,12 @@ const pageTitle = profile && session ? `${name}・${info.title}・${session.name
                       <>：與所屬黨團一致率只算他有投票、黨團也有多數的那幾次，見<a href={kindHref('caucus_votes')} class={inlineLink}>黨團有多數</a>。</>
                     )}
                   </p>
+                  {/* 中文的連結前後不留空白，所以寫成一行 */}
+                  {areasLive && (
+                    <p class="mt-1 text-[0.75rem] leading-relaxed text-muted">
+                      其中 {classified} 件已由議案分類器從議案名稱分了領域，標在每一件旁邊{alignment ? '；提案與質詢一致率只算這幾件' : ''}。領域是模型分的，可能分錯，見<a href="/method#profile-chamber-alignment" class={inlineLink}>方法說明</a>。
+                    </p>
+                  )}
                   {/* 讀不懂的筆沒有畫出來：清單會比指標的 n 少，照實說，不讓讀者以為數字算錯了 */}
                   {dropped > 0 && (
                     <p class="mt-1 text-[0.75rem] text-muted">
@@ -248,7 +266,7 @@ const pageTitle = profile && session ? `${name}・${info.title}・${session.name
                   ) : (
                     <ol class="mt-3 grid gap-2.5" aria-labelledby="records-heading">
                       {meetings.map((m) => <RecordMeeting meeting={m} />)}
-                      {bills.map((b) => <RecordBill bill={b} />)}
+                      {bills.map((b) => <RecordBill bill={b} areasLive={areasLive} />)}
                       {votes.map((v) => <RecordVote vote={v} />)}
                     </ol>
                   )}

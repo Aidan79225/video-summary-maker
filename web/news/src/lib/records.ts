@@ -7,10 +7,14 @@
  * 3. 假資料模式：照後端的公式從假紀錄組出指標。指標與清單從同一份紀錄來，
  *    n 才保證等於清單的筆數（手寫兩份，一改就對不上）。
  *
+ * 提案與質詢一致率是這一塊唯一有模型參與的指標（議案名稱由議題分類器分領域），
+ * 另外要過兩道門檻；它的對照、重疊公式與「質詢那一道沒過就拿掉」也放在這裡。
+ *
  * 後端改了指標或類別，這裡跟方法頁要一起改。
  */
 import type {
   Ballot,
+  BillArea,
   BillRecord,
   MeetingRecord,
   ProfileBlock,
@@ -21,7 +25,11 @@ import type {
   Result,
   VoteRecord,
 } from './types';
+import { isTopicKey, topicLabel } from './topics';
 import fixture from '../fixtures/records.json';
+
+/** 後端的 MIN_SAMPLE：比例類指標的分母不到這個數就不比較 */
+const MIN_SAMPLE = 5;
 
 /* ------------------------------------------------------------------
    類別與指標
@@ -151,20 +159,32 @@ export type ChamberIndicatorInfo = {
   rate: boolean;
 };
 
-/** 院內紀錄的八個指標，順序就是側寫上的順序 */
+/**
+ * 提案與質詢一致率的 key。它跟其他院內紀錄的指標不一樣：要兩道門檻（議案分類、質詢的
+ * 議題分類）都過才有，n 是分過領域的主提案件數（不一定等於主提案數），證據清單上每件
+ * 旁邊要標領域——頁面有好幾處要認得它
+ */
+export const ALIGNMENT_KEY = 'proposal_alignment';
+
+/**
+ * 院內紀錄的指標，順序就是側寫上的順序。提案與質詢一致率排在提案組最後：
+ * 它要兩道門檻都過才出現，有沒有它都不會讓前面三張卡換位置
+ */
 export const CHAMBER_INDICATORS: readonly ChamberIndicatorInfo[] = [
   { key: 'plenary_attendance', label: '院會出席率', unit: '%', n_unit: '場', kind: 'plenary', group: 'attendance', rate: true },
   { key: 'committee_attendance', label: '委員會出席率', unit: '%', n_unit: '場', kind: 'committee', group: 'attendance', rate: true },
   { key: 'bills_proposed', label: '主提案數', unit: '件', n_unit: '件', kind: 'proposed', group: 'bills', rate: false },
   { key: 'bills_cosigned', label: '連署數', unit: '件', n_unit: '件', kind: 'cosigned', group: 'bills', rate: false },
   { key: 'bills_passed', label: '三讀數', unit: '件', n_unit: '件', kind: 'passed', group: 'bills', rate: false },
+  // 證據是主提案清單（每件旁邊標領域）；n 是分過領域的主提案件數，套最小樣本
+  { key: ALIGNMENT_KEY, label: '提案與質詢一致率', unit: '%', n_unit: '件', kind: 'proposed', group: 'bills', rate: true },
   // n_unit 跟後端（chamber.py）一樣寫「次」；連結文字另外照清單的單位寫成「次表決」
   { key: 'vote_participation', label: '投票出席率', unit: '%', n_unit: '次', kind: 'votes', group: 'votes', rate: true },
   { key: 'caucus_agreement', label: '與所屬黨團一致率', unit: '%', n_unit: '次', kind: 'caucus_votes', group: 'votes', rate: true },
   { key: 'caucus_defections', label: '跨黨投票數', unit: '次', n_unit: '次', kind: 'defections', group: 'votes', rate: false },
 ];
 
-/** 側寫上院內紀錄區塊的分組：八張卡混在一起排，出席率會跟連署數擠在同一列 */
+/** 側寫上院內紀錄區塊的分組：八、九張卡混在一起排，出席率會跟連署數擠在同一列 */
 export const CHAMBER_GROUPS: readonly { key: ChamberGroup; title: string }[] = [
   { key: 'attendance', title: '出席' },
   { key: 'bills', title: '提案' },
@@ -195,7 +215,10 @@ export function recordKindOfPath(path: string | null | undefined): RecordKind | 
  * 寫出筆數。單位照連結指到的那一類清單寫：後端的 n_unit 是「次」，「看這 88 次」讀不出
  * 是表決；認不得類別才退回 n_unit。
  */
-export function recordEvidenceLabel(ind: Pick<ProfileIndicator, 'n' | 'n_unit' | 'evidence_url'>): string {
+export function recordEvidenceLabel(ind: Pick<ProfileIndicator, 'key' | 'n' | 'n_unit' | 'evidence_url'>): string {
+  // 一致率的 n 是分過領域的件數，主提案清單可能比它多（還沒分類的也列著），
+  // 「看這 6 件」點進去看到 7 件會以為數字錯了；寫明要看的是領域
+  if (ind.key === ALIGNMENT_KEY) return `看這 ${ind.n} 件提案的領域`;
   const kind = recordKindOfPath(ind.evidence_url);
   return `看這 ${ind.n} ${kind ? recordKindInfo(kind).unit : ind.n_unit}`;
 }
@@ -207,15 +230,81 @@ export const BALLOT_LABEL: Record<Ballot, string> = { yes: '贊成', no: '反對
  * 指標「沒有值」的原因，寫成讀者看得懂的字；不認得的原因是空字串（頁面退回樣本不足的說法）。
  * 側寫的卡片與證據頁共用，兩邊才不會一邊寫「沒有參加黨團」、一邊寫「—」。
  */
-const REASON_TEXT = new Map<string, string>([
-  ['no_committee_data', '沒有他這個會期的委員會資料'],
-  ['no_caucus', '沒有參加黨團'],
-  ['rejudging', '換了判斷器，他的要求正在重新判斷，判完才算'],
+const REASON_TEXT = new Map<string, (minSample: number) => string>([
+  ['no_committee_data', () => '沒有他這個會期的委員會資料'],
+  ['no_caucus', () => '沒有參加黨團'],
+  ['rejudging', () => '換了判斷器，他的要求正在重新判斷，判完才算'],
+  // n 是主提案件數，卡片上的「n = 6 件」看起來夠了；要寫清楚不夠的是另一邊（質詢）
+  ['few_speeches', (min) => `他這個會期分過議題的質詢不到 ${min} 篇，不算一致率`],
 ]);
 
-export function reasonText(reason: string | null | undefined): string {
+/** minSample：API 的 min_sample；few_speeches 的句子要寫出門檻 */
+export function reasonText(reason: string | null | undefined, minSample: number = MIN_SAMPLE): string {
   // 原因字串來自後端，用 Map 查：「constructor」之類的字不能查到原型上的東西
-  return (reason && REASON_TEXT.get(reason)) || '';
+  const text = reason ? REASON_TEXT.get(reason) : undefined;
+  return text ? text(minSample) : '';
+}
+
+/* ------------------------------------------------------------------
+   提案與質詢一致率
+   ------------------------------------------------------------------ */
+
+/** 各領域的件數：同一個代碼出現幾次 */
+export function countAreas(keys: readonly string[]): Map<string, number> {
+  const counts = new Map<string, number>();
+  for (const k of keys) counts.set(k, (counts.get(k) ?? 0) + 1);
+  return counts;
+}
+
+/**
+ * 兩個分布重疊的部分（%）＝ Σ 各領域 min(甲的占比, 乙的占比) × 100。
+ *
+ * 輸入是各領域的件數或篇數，占比在這裡換算：完全一樣是 100，完全沒有交集是 0。
+ * 任何一邊沒有東西就沒有分布可比，回 null（不是 0——0 是「完全不同方向」）。
+ * 網站不替真的資料重算這個數字；這裡只給假資料模式與方法頁的例子用，兩者才跟
+ * 後端是同一條公式。
+ */
+export function distributionOverlap(a: ReadonlyMap<string, number>, b: ReadonlyMap<string, number>): number | null {
+  const total = (m: ReadonlyMap<string, number>) => [...m.values()].reduce((sum, c) => sum + Math.max(0, c), 0);
+  const totalA = total(a);
+  const totalB = total(b);
+  if (totalA <= 0 || totalB <= 0) return null;
+  // 只要走一邊的領域：另一邊沒有的領域，min 一定是 0
+  let overlap = 0;
+  for (const [key, count] of a) overlap += Math.min(Math.max(0, count) / totalA, Math.max(0, b.get(key) ?? 0) / totalB);
+  return overlap * 100;
+}
+
+/**
+ * 一致率的另一半（質詢的分布）從哪來：議題分布區塊。各領域篇數加起來就是分過類的
+ * 基礎報導篇數（每篇剛好一個主領域），也就是一致率說明裡的「質詢 M 篇」。
+ * 沒有議題分布區塊就是 null。
+ */
+export function alignmentSpeeches(blocks: readonly ProfileBlock[]): number | null {
+  const topics = blocks.find((b) => b.key === 'topics');
+  return topics?.distribution ? topics.distribution.reduce((sum, t) => sum + t.count, 0) : null;
+}
+
+/** 卡片上的說明：兩邊各算了多少，讀者才知道這個百分比是拿什麼跟什麼比 */
+export function alignmentNote(ind: Pick<ProfileIndicator, 'n'>, speeches: number | null): string {
+  return speeches === null ? `提案 ${ind.n} 件` : `提案 ${ind.n} 件、質詢 ${speeches} 篇`;
+}
+
+/** n 是 0 時卡片底下那行：主提案可能有，只是還沒分過領域，不能寫成「沒有紀錄」 */
+export const ALIGNMENT_EMPTY = '這個會期還沒有分過領域的主提案';
+
+/**
+ * 一致率要兩道門檻都過（議案分類、質詢的議題分類）。後端只在兩個分類器都是上線版本時
+ * 給這張卡；網站再擋看得到的那一道：質詢的分類器結果就在議題分布區塊上，網站已經照
+ * 門檻再擋過一次（api.ts 的 normalizeBlock）。那一塊沒有了，一致率另一半的分布就沒有
+ * 通過驗證，卡片一起拿掉——跟議題分布「沒過就不上線」同一條底線，不只靠後端守。
+ * 議案分類器的評估 API 沒有回，網站擋不到，只能靠後端。
+ */
+export function dropUnverifiedAlignment(blocks: ProfileBlock[]): ProfileBlock[] {
+  if (blocks.some((b) => b.key === 'topics')) return blocks;
+  return blocks
+    .map((b) => (b.key === 'chamber' ? { ...b, indicators: b.indicators.filter((i) => i.key !== ALIGNMENT_KEY) } : b))
+    .filter((b) => b.key !== 'chamber' || b.indicators.length > 0);
 }
 
 /* ------------------------------------------------------------------
@@ -268,6 +357,19 @@ function normalizeMeeting(raw: unknown): MeetingRecord | null {
   };
 }
 
+/**
+ * 議案的領域：{key, label}，也收只有代碼的字串。名稱以後端給的為準（後端改了名稱不必
+ * 等網站），沒給才照網站的列舉補；兩邊都沒有名稱的代碼不畫——畫出「finance」這種代碼
+ * 讀者看不懂。讀不懂就當成沒分類，不讓整件議案被丟掉
+ */
+function billArea(v: unknown): BillArea | null {
+  const o = asObject(v);
+  const key = o ? text(o.key) : text(v);
+  if (!key) return null;
+  const label = (o && text(o.label)) || (isTopicKey(key) ? topicLabel(key) : '');
+  return label ? { key, label } : null;
+}
+
 function normalizeBill(raw: unknown): BillRecord | null {
   const o = asObject(raw);
   if (!o) return null;
@@ -280,6 +382,7 @@ function normalizeBill(raw: unknown): BillRecord | null {
     status: text(o.status),
     proposers: (Array.isArray(o.proposers) ? o.proposers : []).map(text).filter(Boolean),
     url: text(o.url),
+    area: billArea(o.area),
   };
 }
 
@@ -344,12 +447,15 @@ export function normalizeRecords(kind: RecordKind, raw: unknown): RecordList | n
    假資料模式（USE_FIXTURE=1）
 
    records.json 只存紀錄本身與編的同儕人數、百分位；三讀、黨團有多數、跨黨投票的清單
-   與八個指標的值、n 都照後端的公式從紀錄算出來。紀錄清單照後端 RecordListOut 的形狀
+   與指標的值、n 都照後端的公式從紀錄算出來。紀錄清單照後端 RecordListOut 的形狀
    回（id、title、中文的票），假資料模式走的就是正式站的整理路徑。
+
+   提案與質詢一致率：主提案在檔案裡寫領域代碼（area），質詢的分布拿 sample.json 那個
+   會期的議題分布，由 api.ts 傳進來——兩份假資料各管一半，跟後端一樣是兩個分類器。
    ------------------------------------------------------------------ */
 
-/** 後端的 MIN_SAMPLE：比例類指標的分母不到這個數就不比較 */
-const MIN_SAMPLE = 5;
+/** 假資料的議案：領域只寫代碼（area），名稱照網站的列舉補，跟後端回的 {key, label} 同形 */
+type FixtureBill = Omit<BillRecord, 'date' | 'area'> & { area?: string };
 
 type FixtureChamber = {
   person_id: number;
@@ -363,13 +469,22 @@ type FixtureChamber = {
   records: {
     plenary: MeetingRecord[];
     committee: MeetingRecord[];
-    proposed: Omit<BillRecord, 'date'>[];
-    cosigned: Omit<BillRecord, 'date'>[];
+    proposed: FixtureBill[];
+    cosigned: FixtureBill[];
     votes: Omit<VoteRecord, 'caucus'>[];
   };
 };
 
-const fx = fixture as unknown as { chamber?: FixtureChamber[] };
+/**
+ * bill_topics_live：假資料的議案分類器有沒有通過評估。false 時議案不帶領域、也沒有
+ * 一致率的卡片（後端的規則）；改成 false 就能看到議案分類器沒過的版面
+ */
+const fx = fixture as unknown as { chamber?: FixtureChamber[]; bill_topics_live?: boolean };
+
+/** 議案分類器沒通過就沒有領域：後端不會把沒通過的分類結果放進清單 */
+function fixtureBillArea(key: string | undefined): BillArea | null {
+  return fx.bill_topics_live === true && key && isTopicKey(key) ? { key, label: topicLabel(key) } : null;
+}
 
 function fixtureEntry(personId: number, sessionId: number): FixtureChamber | null {
   return (fx.chamber ?? []).find((c) => c.person_id === personId && c.session_id === sessionId) ?? null;
@@ -388,7 +503,8 @@ type FixtureLists = {
 
 /** 一份假紀錄的八類清單；三讀、黨團有多數與跨黨投票照後端的定義篩出來 */
 function fixtureLists(entry: FixtureChamber): FixtureLists {
-  const bills = (rows: Omit<BillRecord, 'date'>[]): BillRecord[] => rows.map((b) => ({ date: '', ...b }));
+  const bills = (rows: FixtureBill[]): BillRecord[] =>
+    rows.map(({ area, ...b }) => ({ date: '', ...b, area: fixtureBillArea(area) }));
   const votes: VoteRecord[] = entry.records.votes.map((v) => ({
     ...v,
     caucus: entry.caucus,
@@ -414,9 +530,28 @@ const share = (part: number, whole: number) => (whole > 0 ? (part / whole) * 100
 
 type FixtureValue = { value: number | null; n: number; reason?: string };
 
+/**
+ * 提案與質詢一致率：n 是分過領域的主提案件數；質詢（議題分布的篇數）不到最小樣本時
+ * 不給值（few_speeches）——一兩篇質詢的分布拿去比，重疊幾乎一定很低或很高
+ */
+function fixtureAlignment(lists: FixtureLists, speeches: ReadonlyMap<string, number>): FixtureValue {
+  const bills = countAreas(lists.proposed.flatMap((b) => (b.area ? [b.area.key] : [])));
+  const n = [...bills.values()].reduce((sum, c) => sum + c, 0);
+  const speechTotal = [...speeches.values()].reduce((sum, c) => sum + c, 0);
+  if (speechTotal < MIN_SAMPLE) return { value: null, n, reason: 'few_speeches' };
+  return { value: distributionOverlap(bills, speeches), n };
+}
+
 /** 一個指標的值與 n（公式見 spec 的指標表；方法頁寫的是同一套） */
-function fixtureValue(key: string, lists: FixtureLists, caucus: string): FixtureValue {
+function fixtureValue(
+  key: string,
+  lists: FixtureLists,
+  caucus: string,
+  speeches: ReadonlyMap<string, number>,
+): FixtureValue {
   switch (key) {
+    case ALIGNMENT_KEY:
+      return fixtureAlignment(lists, speeches);
     case 'plenary_attendance':
     case 'committee_attendance': {
       const all = key === 'plenary_attendance' ? lists.plenary : lists.committee;
@@ -444,13 +579,23 @@ function fixtureValue(key: string, lists: FixtureLists, caucus: string): Fixture
 /**
  * 假資料的院內紀錄區塊；這個人這個會期沒有假紀錄就是 null（跟後端「沒有同步過紀錄的
  * 會期就不給這個區塊」一樣）。
+ *
+ * speechAreas：那個會期議題分布各領域的篇數（sample.json 的 topics 區塊）；沒有議題分布
+ * （質詢的分類器沒通過）就是 null。兩道門檻有一道沒過就沒有一致率的卡片，跟後端一樣
  */
-export function fixtureChamberBlock(personId: number, sessionId: number): ProfileBlock | null {
+export function fixtureChamberBlock(
+  personId: number,
+  sessionId: number,
+  speechAreas: readonly { key: string; count: number }[] | null,
+): ProfileBlock | null {
   const entry = fixtureEntry(personId, sessionId);
   if (!entry) return null;
   const lists = fixtureLists(entry);
-  const indicators = CHAMBER_INDICATORS.map((info): ProfileIndicator => {
-    const { value, n, reason } = fixtureValue(info.key, lists, entry.caucus);
+  const speeches = new Map((speechAreas ?? []).map((t) => [t.key, t.count]));
+  const live = fx.bill_topics_live === true && speechAreas !== null;
+  const shown = CHAMBER_INDICATORS.filter((info) => info.key !== ALIGNMENT_KEY || live);
+  const indicators = shown.map((info): ProfileIndicator => {
+    const { value, n, reason } = fixtureValue(info.key, lists, entry.caucus, speeches);
     const sampleOk = !info.rate || n >= MIN_SAMPLE;
     const percentile = entry.percentiles[info.key];
     return {
@@ -473,7 +618,10 @@ export function fixtureChamberBlock(personId: number, sessionId: number): Profil
 const BALLOT_ZH: Record<Ballot, string> = { yes: '贊成', no: '反對', abstain: '棄權' };
 const ballotZh = (b: Ballot | null) => (b ? BALLOT_ZH[b] : null);
 
-/** 一筆假紀錄轉成後端 RecordOut 的形狀；unit、tally、voted_at 是後端目前沒給、網站會用的欄位 */
+/**
+ * 一筆假紀錄轉成後端 RecordOut 的形狀；unit、tally、voted_at 是後端目前沒給、網站會用的欄位。
+ * 議案的 area 是 {key, label}，沒分類（或議案分類器沒通過）是 null
+ */
 function apiRow(kind: RecordKind, row: MeetingRecord | BillRecord | VoteRecord): Record<string, unknown> {
   if (kind === 'plenary' || kind === 'committee') {
     const m = row as MeetingRecord;
@@ -481,7 +629,15 @@ function apiRow(kind: RecordKind, row: MeetingRecord | BillRecord | VoteRecord):
   }
   if (kind === 'proposed' || kind === 'cosigned' || kind === 'passed') {
     const b = row as BillRecord;
-    return { id: b.bill_no, date: b.date || null, title: b.name, url: b.url, status: b.status, proposers: b.proposers };
+    return {
+      id: b.bill_no,
+      date: b.date || null,
+      title: b.name,
+      url: b.url,
+      status: b.status,
+      proposers: b.proposers,
+      area: b.area,
+    };
   }
   const v = row as VoteRecord;
   return {

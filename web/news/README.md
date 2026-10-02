@@ -77,10 +77,12 @@ node ./dist/server/entry.mjs       # 等同 npm run preview / npm start
   - `/speaker/範例五?source=ntpc`：新北的聯合質詢，時長排在次數前面、具體度沒有分母；沒有議題分布（示範分類器沒通過評估的議會整塊不顯示）；追問區塊是空的——聯合質詢裡的要求不算給任何人，追問率 n＝0。
   - `/speaker/範例六?source=ntpc#followups`：換了判斷器之後的追問區塊——有兩項還是舊的判斷器判的，列在「待重判」一組，追問率卡片沒有值、寫明正在重新判斷（API 的 `reason` 是 `rejudging`）。這幾項要求與出處文章都是編的，點進去是 404。
   - `/speaker/範例三`（有 person_id、沒有側寫）與 `/speaker/範例四`（不在名冊）：側寫整段不顯示。
-- 院內紀錄（立委）：`src/fixtures/records.json` 存範例一兩個會期的假紀錄（會議出席、主提案、連署、記名表決），`/api/people/{id}/records` 也在本地模擬，回的是後端 `RecordListOut` 的形狀（`id`、`title`、中文的票），走的是正式站的整理路徑。三讀、黨團有多數與跨黨投票的清單、八個指標的值與 n 都由 `src/lib/records.ts` 照後端的公式從這些紀錄算，所以證據頁的筆數一定等於指標的 n；只有同儕人數與百分位是編的。看版面用：
-  - `/speaker/範例一?source=ly` 側寫最後的「院內紀錄」：出席、提案、記名表決三組卡片，每張卡連到 `/records/1?session=3&kind=…`。
+- 院內紀錄（立委）：`src/fixtures/records.json` 存範例一兩個會期的假紀錄（會議出席、主提案、連署、記名表決），`/api/people/{id}/records` 也在本地模擬，回的是後端 `RecordListOut` 的形狀（`id`、`title`、中文的票），走的是正式站的整理路徑。三讀、黨團有多數與跨黨投票的清單、各指標的值與 n 都由 `src/lib/records.ts` 照後端的公式從這些紀錄算，所以證據頁的筆數一定等於指標的 n；只有同儕人數與百分位是編的。
+  提案與質詢一致率：主提案多一個假資料才有的 `area`（議案分類器給的領域代碼；沒有的是還沒分類），清單照後端的形狀回 `area: {key, label}`；質詢那一邊拿 `sample.json` 同一個會期的議題分布，一致率照後端的重疊公式算。`bill_topics_live` 是假資料的議案分類器有沒有通過評估，改成 `false` 就看得到議案沒有領域、也沒有一致率卡片的版面；沒有議題分布的側寫（新北）也沒有這張卡。看版面用：
+  - `/speaker/範例一?source=ly` 側寫最後的「院內紀錄」：出席、提案、記名表決三組卡片，每張卡連到 `/records/1?session=3&kind=…`。提案組最後是「提案與質詢一致率」：這一期他只有 1 篇分過議題的質詢，卡片沒有值，寫「他這個會期分過議題的質詢不到 5 篇，不算一致率」（API 的 `reason` 是 `few_speeches`）。
   - `/records/1?session=3&kind=votes`：記名表決清單，有他的票、黨團多數、一次黨團並列（不算進一致率）與兩次「跟黨團不同」；切換列可以換成院會、委員會（含一場聯席會議）、主提案、連署、三讀、黨團有多數（一致率的分母，12 次）、跨黨投票。
-  - 第11屆第4會期（`/speaker/範例一?source=ly&session=2`）：他沒有參加黨團，一致率與跨黨投票寫「沒有參加黨團」；委員會只有 3 場，出席率是「樣本不足」；三讀 0 件。
+  - 第11屆第4會期（`/speaker/範例一?source=ly&session=2`）：他沒有參加黨團，一致率與跨黨投票寫「沒有參加黨團」；委員會只有 3 場，出席率是「樣本不足」；三讀 0 件。提案與質詢一致率有值與百分位（72.2%，提案 6 件、質詢 9 篇）。
+  - `/records/1?session=2&kind=proposed`：主提案 7 件，6 件標了領域、1 件標「還沒分類」；上方除了主提案數，也列出提案與質詢一致率與它的 n（分過領域的 6 件）。
 - 頁面最上方會出現一條「示範資料模式」橫幅，避免把假資料當成真的。
 - 截圖檔案實際上不存在，圖片會自動換成同尺寸的佔位方塊（版面不會塌）。
 
@@ -95,8 +97,8 @@ node ./dist/server/entry.mjs       # 等同 npm run preview / npm start
 | `/` | 最新報導。支援 `?date=`、`?speaker=`、`?q=`、`?page=`；第一頁無篩選時，最新一篇會以大版面呈現。 |
 | `/article/[slug]` | 單篇報導。逐段排版（截圖＋小標＋條列＋完整敘述），每段可點時間戳連回 IVOD 原片，最後是可折疊的完整逐字稿。 |
 | `/speaker/[name]` | 某位委員的報導列表（含分頁與其他委員快捷鍵）。有 `person_id` 且側寫 API 成功時，清單上方是人物側寫；側寫失敗或 404 就整段不顯示。支援 `?source=`、`?session=`（會期 id）、`?solo=1`（只看單獨發言）、`?brief=1`（只看有摘要卡的）、`?topic=`（主領域代碼，只認 `src/lib/topics.ts` 列舉裡的；`any` 是不限領域、只要分過類，議題指標的「看這 N 篇」帶的是它），有篩選時清單上方顯示條件與「清除」，翻頁時條件跟著走。 |
-| `/method` | 方法說明。`#profile` 寫人物側寫的原則、公式、會期與同儕、百分位、最小樣本、資料限制與還沒做的指標；`#profile-topics` 寫議題分布的 12 個領域、分類的輸入、人工標註與門檻、上線條件、公式、委員會對照與限制；`#profile-followups` 寫追問率的期限換算表、候選與篩選、判斷與落地檢查、各種狀態（含換了判斷器之後的待重判）、公式、標註集與門檻、限制（規則與門檻在 `src/lib/followups.ts`）。改後端的計算時這一頁要跟著改。 |
-| `/records/[id]` | 院內紀錄清單（只有立委），側寫「院內紀錄」每張卡的證據。`[id]` 是 person_id；`?session=`（會期 id，沒帶就用側寫預設的會期）、`?kind=`（`plenary`、`committee`、`proposed`、`cosigned`、`passed`、`votes`、`caucus_votes`、`defections`，跟後端的 `chamber.KIND_KEYS` 一樣，清單在 `lib/records.ts` 的 `RECORD_KIND_KEYS`；不認得的當成 `plenary`；`caucus_votes` 是與所屬黨團一致率的分母——他有投票、黨團也有多數的表決，設計只列了七類，但一致率的 n 跟投票出席率不同，要有自己的清單筆數才對得上）。標題寫是誰、哪個會期、哪一類，上方是類別切換列與那一類的指標，底下每一筆附官方連結，另有回發言者頁的連結。那個會期沒有院內紀錄（側寫沒有 `chamber` 區塊）時回 404。公式與資料限制寫在 `/method#profile-chamber`。 |
+| `/method` | 方法說明。`#profile` 寫人物側寫的原則、公式、會期與同儕、百分位、最小樣本、資料限制與還沒做的指標；`#profile-topics` 寫議題分布的 12 個領域、分類的輸入、人工標註與門檻、上線條件、公式、委員會對照與限制；`#profile-followups` 寫追問率的期限換算表、候選與篩選、判斷與落地檢查、各種狀態（含換了判斷器之後的待重判）、公式、標註集與門檻、限制（規則與門檻在 `src/lib/followups.ts`）；`#profile-chamber` 寫院內紀錄，其中 `#profile-chamber-alignment` 寫提案與質詢一致率的定義、重疊公式與算好的例子（例子用 `lib/records.ts` 的 `distributionOverlap` 算，改了件數不會算錯）、兩道門檻、為什麼只送議案名稱與限制。改後端的計算時這一頁要跟著改。 |
+| `/records/[id]` | 院內紀錄清單（只有立委），側寫「院內紀錄」每張卡的證據。`[id]` 是 person_id；`?session=`（會期 id，沒帶就用側寫預設的會期）、`?kind=`（`plenary`、`committee`、`proposed`、`cosigned`、`passed`、`votes`、`caucus_votes`、`defections`，跟後端的 `chamber.KIND_KEYS` 一樣，清單在 `lib/records.ts` 的 `RECORD_KIND_KEYS`；不認得的當成 `plenary`；`caucus_votes` 是與所屬黨團一致率的分母——他有投票、黨團也有多數的表決，設計只列了七類，但一致率的 n 跟投票出席率不同，要有自己的清單筆數才對得上）。標題寫是誰、哪個會期、哪一類，上方是類別切換列與那一類的指標，底下每一筆附官方連結，另有回發言者頁的連結。主提案清單也是提案與質詢一致率的證據：議案帶了領域（後端每件的 `area`，`{key, label}`）就標在每一件旁邊，沒帶的標「還沒分類」，上方多列一致率與它的 n；議案分類器沒上線時整份清單都沒有領域，就不標。那個會期沒有院內紀錄（側寫沒有 `chamber` 區塊）時回 404。公式與資料限制寫在 `/method#profile-chamber`，一致率在 `/method#profile-chamber-alignment`。 |
 | 其他 | `src/pages/404.astro` |
 
 IVOD 的網址不吃時間參數，所以時間戳只顯示 `mm:ss` 並連到 `ivod_url`（從頭播放），
@@ -215,7 +217,7 @@ web/news/
 │  │  ├─ api.ts              # 所有 API 呼叫、逾時、錯誤分類、假資料模式
 │  │  ├─ types.ts            # 對應後端契約的型別
 │  │  ├─ topics.ts           # 議題的 12 個領域與委員會對照（方法頁用；跟後端一起改）
-│  │  ├─ records.ts          # 院內紀錄的類別與指標對照、紀錄清單的整理、假資料
+│  │  ├─ records.ts          # 院內紀錄的類別與指標對照、紀錄清單的整理、一致率的重疊公式與門檻、假資料
 │  │  ├─ followups.ts        # 追問的期限換算表、狀態、門檻與區塊整理（跟後端一起改）
 │  │  └─ format.ts           # mm:ss、日期、逐字稿拆行、query string
 │  ├─ fixtures/sample.json   # 假資料（USE_FIXTURE=1）
