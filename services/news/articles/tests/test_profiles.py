@@ -913,13 +913,28 @@ class FollowupRateTests(TestCase):
 
     def test_only_the_passing_judges_verdicts_count(self):
         _requests("甲", followed=2, not_followed=1)
-        _requests("甲", followed=5, not_followed=5, classifier="old#followup-v0#x")
         # 一個候選都沒有的：沒有判斷器也算數（程式篩出來的）
         _requests("甲", not_followed=1, classifier="")
         _judge()
         compute_profiles(now=FOLLOWUP_NOW)
         row = _stats("followup_rate")["甲"]
         self.assertEqual((row.value, row.n), (50.0, 4))
+
+    def test_a_judge_switch_withholds_the_rate_instead_of_dropping_it(self):
+        """攔的 bug：換了判斷器之後，舊版本找到的追問不算、新的又還沒判到，只用判完的那幾項算，
+        追問率掉到 0%。他還有待重判的要求時不給值，也不進同儕（別人的百分位不被它拉低）。"""
+        names = [f"議員{i}" for i in range(5)]
+        for name in names:
+            _member(name)
+            _requests(name, followed=3, not_followed=2)
+        _requests("甲", followed=4, classifier="old#followup-v0#x")
+        _requests("甲", not_followed=5, classifier="")              # 沒有候選：不必重判
+        _judge()
+        compute_profiles(now=FOLLOWUP_NOW)
+        rows = _stats("followup_rate")
+        self.assertEqual((rows["甲"].value, rows["甲"].n, rows["甲"].percentile), (None, 0, None))
+        self.assertEqual({rows[name].peers for name in names}, {5})
+        self.assertEqual({rows[name].value for name in names}, {60.0})
 
     def test_the_states_depend_on_the_day_of_the_recompute(self):
         _requests("甲", followed=1, watching=1)

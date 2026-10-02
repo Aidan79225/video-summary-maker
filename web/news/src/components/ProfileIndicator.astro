@@ -29,6 +29,8 @@ const { indicator: ind, minSample, evidenceLabel: labelOverride, emptyNote } = A
 const hasValue = ind.value !== null;
 // 委員會職掌沒有值的時候，常常不是樣本不足，而是沒有他這個會期的委員會資料：照實說
 const noCommittee = ind.reason === 'no_committee_data';
+// 追問率：換了判斷器，他還有要求是舊的判斷器判的。值是空的不是因為樣本不足，是還在重判
+const rejudging = ind.reason === 'rejudging';
 const pct = ind.percentile;
 // 頁面四捨五入到整數；長條的位置用原值，兩個同儕在 63.5 與 64.4 時記號不會疊在一起
 const pctLabel = pct !== null ? `第 ${Math.round(pct)} 百分位，在 ${ind.peers} 位同儕中` : '';
@@ -109,7 +111,9 @@ const tightUnit = ind.unit === '%';
           </svg>
           {noCommittee
             ? '沒有他這個會期的委員會資料'
-            : ind.sample_ok
+            : rejudging
+              ? '換了判斷器，他的要求正在重新判斷，判完才算'
+              : ind.sample_ok
               ? '同儕不足，不比較'
               : `樣本不足（需至少 ${minSample} ${ind.n_unit}）`}
         </p>
@@ -128,7 +132,7 @@ const tightUnit = ind.unit === '%';
         </a>
       ) : (
         <span class="text-muted">
-          {ind.n > 0 || noCommittee
+          {ind.n > 0 || noCommittee || rejudging
             ? ''
             : (emptyNote ?? `這個會期沒有可計算的${ind.n_unit === '篇' ? '報導' : '數字'}`)}
         </span>

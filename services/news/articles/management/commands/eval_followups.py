@@ -5,7 +5,8 @@
 存一筆評估（FollowUpEvaluation），印出準確率、通過與否，以及每一筆判錯的。通過 = 已標註至少
 30 對、而且準確率至少 85%。有通過的評估，追問率才會出現在網站上，而且只算那個判斷器判的。
 
-評估不會改動任何要求的判斷：換了模型的話，先跑這個，通過了再 check_followups --recheck。
+評估不會改動任何要求的判斷：換了模型的話，先跑這個；通過之後，舊版本判的要求每晚的 check_followups
+會在上限內重判（重判完之前那些人的追問率不給），想一次補完就跑 check_followups --recheck。
 """
 from __future__ import annotations
 

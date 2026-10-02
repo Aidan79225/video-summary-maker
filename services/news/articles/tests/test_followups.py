@@ -443,15 +443,19 @@ class StateBoundaryTests(SimpleTestCase):
                     self.assertIsNone(self._state(today, followed_by=7, judge=None,
                                                   classifier=classifier))
 
-    def test_another_versions_verdicts_wait_for_the_live_judge(self):
-        """有通過的判斷器、但這一項是別的版本判的：到期後是觀察中（等上線的判斷器看），不從清單上消失。"""
+    def test_another_versions_verdicts_are_waiting_to_be_rejudged(self):
+        """攔的 bug：換了判斷器之後，舊版本找到追問的那一項被列成「觀察中」（讀起來是還沒找到）。
+
+        有通過的判斷器、但這一項是別的版本判的：不管到期了沒有、舊版本說了什麼，都是待重判。
+        """
         old = "old#followup-v0#x"
-        self.assertEqual(self._state(self.DUE, followed_by=7, classifier=old), FollowUpState.PENDING)
-        for today in (self.DUE + timedelta(days=1), self.END + timedelta(days=1)):
+        for today in (self.DUE - timedelta(days=1), self.DUE + timedelta(days=1), self.END + timedelta(days=1)):
             with self.subTest(today=today):
-                # 舊版本說有追問、或觀察期結束後確認過沒有，都不算數
-                self.assertEqual(self._state(today, classifier=old), FollowUpState.WATCHING)
-                self.assertEqual(self._state(today, followed_by=7, classifier=old), FollowUpState.WATCHING)
+                self.assertEqual(self._state(today, classifier=old), FollowUpState.REJUDGING)
+                self.assertEqual(self._state(today, followed_by=7, classifier=old), FollowUpState.REJUDGING)
+        # 一個候選都沒有的（程式篩出來的）不必重判；沒有上線的判斷器時沒有「舊版本」可言
+        self.assertEqual(self._state(self.END + timedelta(days=1), classifier=""), FollowUpState.NOT_FOLLOWED)
+        self.assertEqual(self._state(self.DUE, classifier=old, judge=None), FollowUpState.PENDING)
 
     def test_an_unparsed_deadline_has_no_state(self):
         self.assertIsNone(self._state(self.DUE, due=None))
@@ -778,18 +782,78 @@ class CheckTests(TestCase):
         self.assertEqual(len(gpu.pairs), 1)
         self.assertEqual(sorted(FollowUp.objects.get().checked), sorted([first.id, second.id]))
 
-    def test_recheck_starts_over_the_requests_of_other_judges(self):
+    def _pass(self, classifier=CLASSIFIER):
+        FollowUpEvaluation.objects.create(classifier=classifier, labeled=30, correct=30, accuracy=1.0,
+                                          passed=True, ran_at=timezone.now())
+
+    def test_the_nightly_run_rejudges_other_judges_requests_oldest_first_within_the_limit(self):
+        """攔的 bug：換了判斷器之後，舊版本判過的要求只有手動 --recheck 才重判；舊版本找到追問的
+        那幾項永遠不會再判，那個人的追問率就一直少了它們。"""
+        followed = self._candidate("2026-03-20", "無人機交機時程清冊", followed=True)
+        later = _article(day="2026-03-05", asks=[("無人機交機的預算", "一個月內", "")], membership=self.member)
+        self._run(FakeFollowupGpu(classifier="old#followup-v1#x"))
+        self.assertEqual(set(FollowUp.objects.values_list("followed_by", flat=True)), {followed.id})
+        self._pass()
+        gpu, report = self._run(limit=1)
+        self.assertEqual(len(gpu.pairs), 1)
+        oldest = FollowUp.objects.get(article=self.source)
+        self.assertEqual((oldest.classifier, oldest.followed_by_id, oldest.checked),
+                         (CLASSIFIER, followed.id, [followed.id]))
+        self.assertEqual(FollowUp.objects.get(article=later).classifier, "old#followup-v1#x")
+        self.assertEqual(report.rejudge_left, 1)
+        self.assertIn("換了判斷器還沒重判完的要求 1（他們先不給追問率）", str(report))
+        # 下一晚把剩下的補完；之後判斷器自己判的不再重判
+        self._run(limit=1)
+        self.assertEqual(FollowUp.objects.get(article=later).classifier, CLASSIFIER)
+        gpu, report = self._run()
+        self.assertEqual((gpu.pairs, report.rejudge_left), ([], 0))
+
+    def test_a_rejudge_that_finds_nothing_takes_back_the_old_follow_up(self):
+        first = self._candidate("2026-03-20", "無人機交機時程清冊", followed=True)
+        second = self._candidate("2026-03-25", "無人機交機")
+        self._run(FakeFollowupGpu(classifier="old#followup-v1#x"))
+        self._pass()
+        self._run(FakeFollowupGpu(answer=lambda pair: (False, "")))
+        fu = FollowUp.objects.get()
+        self.assertEqual((fu.classifier, fu.followed_by_id, fu.quote, sorted(fu.checked)),
+                         (CLASSIFIER, None, "", sorted([first.id, second.id])))
+
+    def test_recheck_puts_rejudging_before_new_candidates(self):
         self._candidate("2026-03-20", "無人機交機", followed=True)
         self._run(FakeFollowupGpu(classifier="old#followup-v1#x"))
-        FollowUpEvaluation.objects.create(classifier=CLASSIFIER, labeled=30, correct=30, accuracy=1.0,
-                                          passed=True, ran_at=timezone.now())
-        gpu, report = self._run(recheck=True)
-        self.assertEqual((report.reset, len(gpu.pairs)), (1, 1))
-        self.assertEqual(FollowUp.objects.get().classifier, CLASSIFIER)
-        self.assertIn("換判斷器清掉重判 1 項", str(report))
-        # 判斷器自己判的不重判
-        gpu, report = self._run(recheck=True)
-        self.assertEqual((report.reset, gpu.pairs), (0, []))
+        self._pass()
+        fresh = _article(day="2026-03-05", asks=[("長照據點的預算", "一個月內", "")], membership=self.member)
+        self._candidate("2026-03-21", "長照據點")
+        gpu, _ = self._run(limit=1)
+        self.assertEqual(gpu.pairs[0]["card"], "一句話：長照據點")         # 平常：新的候選先
+        FollowUp.objects.filter(article=fresh).update(checked=[], checked_at=None, classifier="")
+        gpu, _ = self._run(limit=1, recheck=True)
+        self.assertEqual(gpu.pairs[0]["card"], "一句話：無人機交機")       # --recheck：重判先
+        self.assertEqual(FollowUp.objects.get(article=self.source).classifier, CLASSIFIER)
+
+    def test_rejudging_stops_when_the_gpu_is_not_running_the_live_judge(self):
+        """GPU 回來的不是上線的判斷器：重判出來的還是別的版本，不再占名額重判下去。"""
+        for i in range(3):
+            _article(day=f"2026-03-0{i + 3}", asks=[(f"無人機交機第{i}批", "一個月內", "")],
+                     membership=self.member)
+        self._candidate("2026-03-20", "無人機交機")
+        self._run(FakeFollowupGpu(classifier="old#followup-v1#x"))
+        self._pass()
+        gpu, report = self._run(FakeFollowupGpu(classifier="other#followup-v3#z"))
+        self.assertEqual(len(gpu.pairs), 1)
+        self.assertEqual(report.rejudge_left, 4)
+
+    def test_a_rejudging_request_without_candidates_left_follows_the_program(self):
+        """舊版本判過的候選都不在了：沒有東西可以重判，照「一個候選都沒有」算，不會永遠待重判。"""
+        candidate = self._candidate("2026-03-20", "無人機交機")
+        self._run(FakeFollowupGpu(classifier="old#followup-v1#x"))
+        self._pass()
+        Article.objects.filter(pk=candidate.pk).update(speaker="王立、甲")
+        after = _aware(2026, 7, 2, 4, 30)
+        gpu, report = self._run(now=after)
+        fu = FollowUp.objects.get()
+        self.assertEqual((gpu.pairs, fu.classifier, fu.checked, fu.checked_at), ([], "", [], after))
+        self.assertEqual(report.rejudge_left, 0)
 
     def test_a_request_is_marked_checked_again_after_its_window_closes(self):
         """未追問要靠觀察期結束之後的確認：期間記過的不算數，結束後的那一輪要再記一次。"""

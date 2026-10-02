@@ -2,7 +2,7 @@
  * 追問率（側寫第三步）：固定的規則，以及 API 追問區塊的整理。
  *
  * 唯一的來源在後端（services/news/articles/followups.py）：狀態、到期日、追問率都由後端
- * 算好，網站只排版。這裡留一份規則，是因為方法頁要把期限換算表、四種狀態與門檻公開給
+ * 算好，網站只排版。這裡留一份規則，是因為方法頁要把期限換算表、各種狀態與門檻公開給
  * 讀者看；後端改了規則，這裡跟方法頁要一起改。
  *
  * 跟議題分布一樣，模型參與的部分「判斷器沒通過人工標註的評估就不上線」：後端擋過，
@@ -53,11 +53,14 @@ export type FollowupStateInfo = {
    * 沒驗證過的判斷器不替讀者說「沒找到」，這時只講日期決定的那一半
    */
   unjudgedDescription?: string;
+  /** 沒有項目時整組不列（也不寫「這個會期都沒有」）：只在換判斷器之後的一段時間才會有 */
+  hiddenWhenEmpty?: boolean;
 };
 
 /**
- * 四種狀態，順序就是清單分組的順序：先列有結果的（已追問、未追問），再列還在等的。
+ * 各種狀態，順序就是清單分組的順序：先列有結果的（已追問、未追問），再列還在等的。
  * 「待追蹤」不靠模型——還沒到期就是還沒到期——所以判斷器沒通過時只剩它。
+ * 「待重判」只在換了判斷器之後出現：舊判斷器找到的再提不算數，但也不能寫成「還沒找到」。
  */
 export const FOLLOWUP_STATES: readonly FollowupStateInfo[] = [
   {
@@ -77,6 +80,14 @@ export const FOLLOWUP_STATES: readonly FollowupStateInfo[] = [
     label: '觀察中',
     description: `已經到期，還在 ${FOLLOWUP_WATCH_DAYS} 天的觀察期內，目前還沒找到他再提。`,
     judged: true,
+  },
+  {
+    key: 'rejudging',
+    label: '待重判',
+    description:
+      '換了判斷器，這幾項還是舊的判斷器判的，要等現在的判斷器重新判斷；在那之前不算進追問率，他的追問率也先不顯示。',
+    judged: true,
+    hiddenWhenEmpty: true,
   },
   {
     key: 'pending',
@@ -246,15 +257,17 @@ export function normalizeFollowupBlock(block: ProfileBlock, raw: Record<string, 
   };
 }
 
-/** 清單分組：照 FOLLOWUP_STATES 的順序；判斷器沒通過時只有待追蹤一組 */
+/**
+ * 清單分組：照 FOLLOWUP_STATES 的順序；判斷器沒通過時只有待追蹤一組。
+ * 「待重判」沒有項目時整組不列：平常根本不會有，每個人都多一個「待重判 0 項」只是雜訊。
+ */
 export function groupFollowups(
   asks: readonly FollowupAsk[],
   judged: boolean,
 ): { state: FollowupStateInfo; items: FollowupAsk[] }[] {
-  return FOLLOWUP_STATES.filter((s) => judged || !s.judged).map((state) => ({
-    state,
-    items: asks.filter((a) => a.state === state.key),
-  }));
+  return FOLLOWUP_STATES.filter((s) => judged || !s.judged)
+    .map((state) => ({ state, items: asks.filter((a) => a.state === state.key) }))
+    .filter((g) => g.items.length > 0 || !g.state.hiddenWhenEmpty);
 }
 
 /**

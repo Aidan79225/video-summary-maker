@@ -168,7 +168,7 @@ const stateLabel = (key: string) => FOLLOWUP_STATES.find((s) => s.key === key)?.
   </ul>
 </div>
 
-<h4 id="profile-followups-states" class={cls.h4}>四種狀態</h4>
+<h4 id="profile-followups-states" class={cls.h4}>狀態</h4>
 <div class="prose-cn mt-2">
   <p>每一項要求的狀態，在每天重算側寫時依日期決定：</p>
 </div>
@@ -223,13 +223,13 @@ const stateLabel = (key: string) => FOLLOWUP_STATES.find((s) => s.key === key)?.
 <div class="prose-cn">
   <ul class={cls.list}>
     <li>
-      「{stateLabel('watching')}」「{stateLabel('pending')}」還沒有結果，不算進分母；所以會期剛結束時，追問率的 n 通常很小，之後才慢慢補齊。
+      「{stateLabel('watching')}」「{stateLabel('pending')}」「{stateLabel('rejudging')}」還沒有結果，不算進分母；所以會期剛結束時，追問率的 n 通常很小，之後才慢慢補齊。
     </li>
     <li>
       n 是分母（已追問 ＋ 未追問的項數）。n 不到 5 時不跟別人比，只顯示原始的值（見「最小樣本」）；同儕是母體中這一項 n 至少 5 的人（見「百分位」）。
     </li>
     <li>
-      追問率底下的「看這 n 項（已追問、未追問）」連到側寫裡的追問清單。清單依序分成已追問、未追問、觀察中、待追蹤四組，前兩組加起來就是分母的那 n 項；每一項都有出處報導的連結。
+      追問率底下的「看這 n 項（已追問、未追問）」連到側寫裡的追問清單。清單依序分成已追問、未追問、觀察中、待追蹤幾組（換了判斷器之後的一段時間還會有「{stateLabel('rejudging')}」），前兩組加起來就是分母的那 n 項；每一項都有出處報導的連結。
     </li>
     <li>追問率高不代表比較好：官員已經照辦的事，本來就不必再問。側寫只描述，不評價。</li>
   </ul>
@@ -263,6 +263,9 @@ const stateLabel = (key: string) => FOLLOWUP_STATES.find((s) => s.key === key)?.
     </li>
     <li>
       每個判斷器只看<strong class={cls.term}>它自己最近一次</strong>的評估：以前通過過、但在更多標註上重新評估沒通過，就下架。舊判斷器判過的要求，要用正在用的判斷器重新判斷之後才算數，所以頁面上寫的準確率，永遠是判出這些結果的那個判斷器的準確率。
+    </li>
+    <li>
+      <strong class={cls.term}>換了判斷器之後</strong>：舊判斷器判過的要求列在「{stateLabel('rejudging')}」，每晚在判斷的數量上限內、從最早提出的開始，用現在的判斷器重新判斷。一個人還有「{stateLabel('rejudging')}」的要求時，<strong class={cls.term}>先不顯示他的追問率</strong>：舊判斷器找到的再提不算、新的又還沒判到，只用判完的那幾項算，比率會偏低，而且看不出來。
     </li>
     <li>
       <strong class={cls.term}>還沒通過時</strong>：側寫上不顯示追問率，追問清單只列「{stateLabel('pending')}」——還沒到期的要求不需要模型判斷，讀者可以自己盯——並寫明比率要等人工驗證。期限換算不出來的項數照常列出。

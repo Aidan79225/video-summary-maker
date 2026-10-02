@@ -286,6 +286,8 @@ class _Tally:
     # 追問率：他當來源的要求裡，通過的判斷器判出已追問／未追問的項數
     followed: int = 0
     not_followed: int = 0
+    # 他有待重判的要求（換了判斷器、還是舊的判斷器判的）：重判完之前不給追問率
+    followup_rejudging: bool = False
 
     def add_brief(self, brief: object) -> None:
         numbers, deadline_asks, sourced = brief_counts(brief)
@@ -416,11 +418,20 @@ COMMITTEE_ALIGNMENT = Indicator(
 
 TOPIC_INDICATORS = (TOPIC_FOCUS, TOPIC_BREADTH, COMMITTEE_ALIGNMENT)
 
+def _followup_rate(t: _Tally) -> tuple[float | None, int]:
+    """已追問 ÷（已追問＋未追問）× 100。
+
+    分母只算判斷得出結果的：還沒到期、還在觀察期內的不知道會不會追，不能算成沒追。
+    有待重判的要求就整個不給（值是空的、n 是 0，也就不進同儕）：舊的判斷器找到的追問不算、
+    新的又還沒判到，只用判完的那幾項算，比率會往 0% 掉，而且看起來像真的。
+    """
+    if t.followup_rejudging:
+        return None, 0
+    return _ratio(t.followed, t.followed + t.not_followed, 100.0), t.followed + t.not_followed
+
+
 FOLLOWUP_RATE = Indicator(
-    "followup_rate", FOLLOWUP_BLOCK, "追問率", "%", "項",
-    # 分母只算判斷得出結果的：還沒到期、還在觀察期內的不知道會不會追，不能算成沒追
-    lambda t: (_ratio(t.followed, t.followed + t.not_followed, 100.0), t.followed + t.not_followed),
-    min_sample=True)
+    "followup_rate", FOLLOWUP_BLOCK, "追問率", "%", "項", _followup_rate, min_sample=True)
 
 INDICATOR_BY_KEY = {i.key: i for i in (*INDICATORS, *TOPIC_INDICATORS, FOLLOWUP_RATE)}
 
@@ -612,9 +623,9 @@ def _followup_rows(session: Session, roster: _Roster, tallies: dict[int, _Tally]
                    now: datetime) -> list[ProfileStat]:
     """追問率：他當來源的要求（依來源文章的會期）裡，已追問 ÷（已追問＋未追問）。
 
-    狀態依今天的日期決定（followups.state_for），只算判斷都出自通過的判斷器的；講者對人的方式
-    跟其他指標同一套（同來源、同名、任期涵蓋發言日）。列上記下判斷器：API 只在它等於現在上線
-    的判斷器時才給比率。
+    狀態依今天的日期決定（followups.state_for），只算判斷都出自通過的判斷器的；有待重判的要求
+    （換了判斷器、還是舊版本判的）的人整個不給比率，也不進同儕。講者對人的方式跟其他指標同一套
+    （同來源、同名、任期涵蓋發言日）。列上記下判斷器：API 只在它等於現在上線的判斷器時才給比率。
     """
     for speaker, day, state in followups.session_states(session, judge, timezone.localdate(now)):
         tally = tallies.get(roster.person_for(speaker, day))
@@ -622,8 +633,10 @@ def _followup_rows(session: Session, roster: _Roster, tallies: dict[int, _Tally]
             continue
         if state == followups.FollowUpState.FOLLOWED:
             tally.followed += 1
-        else:
+        elif state == followups.FollowUpState.NOT_FOLLOWED:
             tally.not_followed += 1
+        else:
+            tally.followup_rejudging = True
     rows = _rank(FOLLOWUP_RATE, session, tallies, now)
     for row in rows:
         row.classifier = judge

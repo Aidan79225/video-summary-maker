@@ -11,7 +11,8 @@
   GPU 的 `followup` 工作，第一篇判定有追問就停；每一對只判斷一次，記在 FollowUp.checked。
 - 落地檢查（grounded）：模型說有追問時，引用去掉空白與標點後至少 6 個字、而且出現在後來那篇
   的逐字稿裡，才算數。
-- 狀態（state_for）：依日期與判斷結果決定 pending／watching／followed／not_followed。
+- 狀態（state_for）：依日期與判斷結果決定 pending／watching／followed／not_followed；換了判斷器、
+  還是舊版本判的是 rejudging（待重判），每晚在上限內重判，重判完之前那個人不給追問率。
 - 評估與上線條件（evaluate、passing_evaluation）：每個判斷器只看自己最新的一次評估，
   準確率 ≥ 85% 而且至少 30 對才通過。追問率只算通過的那個判斷器判出來的。
 """
@@ -71,6 +72,7 @@ class FollowUpState(StrEnum):
     WATCHING = "watching"          # 觀察中：已到期、在觀察期內、還沒找到追問
     FOLLOWED = "followed"          # 已追問
     NOT_FOLLOWED = "not_followed"  # 未追問：觀察期結束、沒有找到
+    REJUDGING = "rejudging"        # 待重判：換了判斷器，這一項還是舊的判斷器判的
 
 
 # --- 期限換算 ---
@@ -587,25 +589,37 @@ def state_for(due: date | None, followed_by: int | None, classifier: str,
     - 判斷算數的條件：有通過評估的判斷器（judge），而且這一項的判斷都出自它（classifier）；
       一個候選都沒有、從來不必判斷的（classifier 空字串）也算——那是程式篩出來的結果。
     - 沒有通過的判斷器時只給 pending：還沒到期是日期決定的；到期之後是不是追了，要靠判斷。
-    - 有通過的判斷器、但這一項是別的版本判的（換了模型，還沒 --recheck）：到期之後是觀察中
-      ——上線的判斷器還沒看過它的候選，跟「還有候選沒判斷完」是同一回事。不能讓它從清單上消失：
-      清單不靠模型的部分永遠要給。舊版本說有追問也不算，所以不分有沒有 followed_by。
+    - 有通過的判斷器、但這一項是別的版本判的（換了模型或提示詞，每晚的判斷還沒重判到它）：
+      待重判，不管到期了沒有。舊版本說有追問、沒追問都不算；但也不能當成觀察中——舊版本找到的
+      追問會被讀成「還沒找到」，同一個人的追問率也不能在這時候算（見 is_rejudging）。
+      不能讓它從清單上消失：清單不靠模型的部分永遠要給。
     - 觀察期過了，還要在觀察期結束**之後**確認過所有候選都判斷完（checked_at），才是未追問：
       還沒看完不能說沒有。
     """
     if due is None:
         return None
-    trusted = judge is not None and classifier in ("", judge)
+    if is_rejudging(classifier, judge):
+        return FollowUpState.REJUDGING
+    trusted = judge is not None
     if trusted and followed_by:
         return FollowUpState.FOLLOWED
     if today <= due:
         return FollowUpState.PENDING
     if not trusted:
-        return None if judge is None else FollowUpState.WATCHING
+        return None
     end = window_end(due)
     if today <= end or checked_at is None or timezone.localdate(checked_at) <= end:
         return FollowUpState.WATCHING
     return FollowUpState.NOT_FOLLOWED
+
+
+def is_rejudging(classifier: str, judge: str | None) -> bool:
+    """這一項的判斷出自上線的判斷器以外的版本：要等上線的判斷器重判。
+
+    一個候選都沒有、從來不必判斷的（classifier 空字串）不算：那是程式篩出來的結果，跟判斷器無關。
+    沒有上線的判斷器時也不算：沒有「現在的版本」可言，那時本來就只給待追蹤。
+    """
+    return judge is not None and classifier not in ("", judge)
 
 
 def state_of(followup: FollowUp, today: date, judge: str | None) -> FollowUpState | None:
@@ -823,21 +837,6 @@ def sync_followups() -> SyncReport:
     return report
 
 
-def reset_untrusted(judge: str | None) -> int:
-    """把不是通過的判斷器判的要求清掉重來（check_followups --recheck；換模型或提示詞之後用）。
-
-    那些判斷本來就不算進追問率，清掉不會少掉任何數字。沒有通過的判斷器時什麼都不動：
-    沒有「舊版本」可言。
-    """
-    if judge is None:
-        return 0
-    stale = list(FollowUp.objects.exclude(classifier__in=["", judge]))
-    for followup in stale:
-        _clear_judgments(followup)
-    FollowUp.objects.bulk_update(stale, _FOLLOWUP_FIELDS)
-    return len(stale)
-
-
 # --- 每晚判斷 ---
 
 
@@ -860,8 +859,8 @@ class CheckReport:
     ungrounded: int = 0
     # 送出之後內容變了（同時有人重產），結果不存、下一輪重判
     stale: int = 0
-    # --recheck 清掉重來的要求數
-    reset: int = 0
+    # 換了判斷器、還沒重判完的要求：這些要求的人先不給追問率，積壓要講出來
+    rejudge_left: int = 0
     # --retry-failed 清掉失敗次數的要求數
     retried: int = 0
     # 還有候選沒判斷的要求：積壓要講出來，否則一晚 200 個的上限會無聲地一直排著
@@ -886,16 +885,22 @@ class CheckReport:
                      "（GPU 端修好之後用 --retry-failed 重新排隊）")
         if self.waiting:
             text += f"、觀察期裡還有報導沒做完、先不算未追問的要求 {self.waiting}"
-        if self.reset:
-            text += f"、換判斷器清掉重判 {self.reset} 項"
+        if self.rejudge_left:
+            text += f"、換了判斷器還沒重判完的要求 {self.rejudge_left}（他們先不給追問率）"
         if self.retried:
             text += f"、清掉失敗次數重新排隊 {self.retried} 項"
         return text + (f"（{self.stop_reason or 'GPU 不可用'}，這一輪提前結束）" if self.stopped else "")
 
 
-def _open_followups():
-    """還沒找到追問、期限換得出來的要求，到期早的先判：觀察期快結束的先有答案。"""
-    return (FollowUp.objects.filter(due_date__isnull=False, followed_by__isnull=True)
+def _work_followups(judge: str | None):
+    """這一輪要看的要求（期限換得出來的）：還沒找到追問的，加上換了判斷器要重判的（找到了也要）。
+
+    到期早的先判：觀察期快結束的先有答案。重判的另外照發言日排（見 _Round.run）。
+    """
+    wanted = Q(followed_by__isnull=True)
+    if judge is not None:
+        wanted |= ~Q(classifier__in=["", judge])
+    return (FollowUp.objects.filter(wanted, due_date__isnull=False)
             .select_related("article").defer("article__transcript_text", "article__source_note")
             .order_by("due_date", "id"))
 
@@ -907,16 +912,27 @@ class _Item:
     followup: FollowUp
     candidates: list[Doc]
     prior_failures: dict[str, int]
+    # 這一輪開始時是舊的判斷器判的（待重判）：排在重判那一段
+    rejudge: bool = False
 
     def prior(self, doc: Doc) -> int:
         return int(self.prior_failures.get(str(doc.id), 0))
+
+    def oldest_first(self) -> tuple:
+        article = self.followup.article
+        return article.date, article.id, self.followup.ask_index
+
+
+# 一輪裡的三段：新的候選、換了判斷器要重判的、之前失敗過一次的
+_FRESH, _REJUDGE, _RETRY = "fresh", "rejudge", "retry"
 
 
 class _Round:
     """一輪 check_followups：預算、報告、失敗處理都在這裡，判斷一對的細節分成小函式。"""
 
     def __init__(self, client: GpuApiClient, limit: int, timeout: float, now: datetime,
-                 waiting: WaitingIndex | None = None):
+                 waiting: WaitingIndex | None = None, judge: str | None = None,
+                 rejudge_first: bool = False):
         self.client = client
         self.budget = max(0, limit)
         self.timeout = timeout
@@ -924,29 +940,52 @@ class _Round:
         self.today = timezone.localdate(now)
         self.report = CheckReport()
         self.waiting = waiting or WaitingIndex({}, {}, {})
+        # 上線的判斷器；None 是沒有通過的（沒有「舊版本」要重判）
+        self.judge = judge
+        self.rejudge_first = rejudge_first
+        # GPU 這一輪回來的判斷器：不是上線的那個，重判出來的還是別的版本，就不必再重判下去
+        self.gpu_classifier: str | None = None
         # 開頭連續被拒的計數只算沒失敗過的對：之前就失敗過的再失敗一次，不代表 GPU 端有問題
         self.fresh_failed = 0
 
     def run(self, items: list[_Item]) -> None:
-        """先判沒失敗過的對、再判之前失敗過一次的，最後記下每一項是不是全部判完了。
+        """依序判三段，最後記下每一項是不是全部判完了。
 
-        失敗過的排在後面：一對每次都失敗（或每次都卡到逾時）的話，照到期日排它每晚都在最前面，
-        後面的要求永遠輪不到。
+        1. 新的候選（沒失敗過的對），到期早的先。
+        2. 換了判斷器要重判的要求，發言早的先（--recheck 時排第一段）。重判沒做完，那個人的追問率
+           就一直不給，所以每晚都要在上限內做一些，不能只靠手動 --recheck。
+        3. 之前失敗過一次的對：一對每次都失敗（或每次都卡到逾時）的話，照到期日排它每晚都在
+           最前面，後面的要求永遠輪不到。
         """
-        for retry in (False, True):
-            for item in items:
-                self._judge_item(item, retry)
+        rejudge = sorted((item for item in items if item.rejudge), key=_Item.oldest_first)
+        tiers = (_REJUDGE, _FRESH, _RETRY) if self.rejudge_first else (_FRESH, _REJUDGE, _RETRY)
+        for tier in tiers:
+            for item in rejudge if tier == _REJUDGE else items:
+                if tier == _FRESH and item.rejudge:
+                    continue
+                self._judge_item(item, tier)
         for item in items:
             self._settle(item)
 
-    def _judge_item(self, item: _Item, retry: bool) -> None:
-        """依重疊高到低判這一段（沒失敗過／失敗過一次）還沒判過的候選，第一篇有追問就停。"""
+    def _judge_item(self, item: _Item, tier: str) -> None:
+        """依重疊高到低判這一段還沒判過的候選，第一篇有追問就停。
+
+        待重判的要求：舊版本的 checked 與 followed_by 都不算數，每個候選都要用上線的判斷器重判；
+        第一個結果存進去時（_record）整項換成新的判斷器，之後就跟一般的要求一樣。
+        """
         for doc in item.candidates:
             followup = item.followup
-            if followup.followed_by_id:
+            rejudging = is_rejudging(followup.classifier, self.judge)
+            if rejudging and self.gpu_classifier not in (None, self.judge):
+                # GPU 現在跑的不是上線的判斷器：重判出來的還是別的版本，白白占掉名額
                 return
+            if not rejudging:
+                if followup.followed_by_id:
+                    return
+                if doc.id in followup.checked:
+                    continue
             prior = item.prior(doc)
-            if doc.id in followup.checked or prior >= MAX_PAIR_FAILURES or (prior > 0) != retry:
+            if prior >= MAX_PAIR_FAILURES or (prior > 0) != (tier == _RETRY):
                 continue
             if self.report.stopped or self.budget <= 0:
                 return
@@ -966,6 +1005,7 @@ class _Round:
             candidate = Article.objects.prefetch_related("slides").get(pk=doc.id)
             pair = pair_input(ask, candidate)
             result = judge_pair(self.client, pair, self.timeout)
+            self.gpu_classifier = result.classifier
             fresh = _fresh_pair(followup.pk, doc.id, pair)
             if fresh is None:
                 self.report.stale += 1
@@ -1028,6 +1068,18 @@ class _Round:
         觀察中，除非別的候選判出有追問。
         """
         followup = item.followup
+        if is_rejudging(followup.classifier, self.judge):
+            if item.candidates:
+                if any(_failures_of(followup, doc.id) < MAX_PAIR_FAILURES for doc in item.candidates):
+                    self.report.rejudge_left += 1
+                else:
+                    self.report.skipped += 1
+                return
+            # 一個候選都沒有了（那幾篇不再是基礎文章）：舊版本的判斷沒有對象可以重判，
+            # 清掉之後就是「一個候選都沒有」，照程式篩出來的結果算；不清的話他永遠待重判
+            _clear_judgments(followup)
+            followup.save(update_fields=["checked", "failures", "followed_by", "quote", "classifier",
+                                         "checked_at"])
         checked = set(followup.checked or [])
         unchecked = [doc for doc in item.candidates if doc.id not in checked]
         if not followup.followed_by_id and unchecked:
@@ -1127,19 +1179,23 @@ def check_followups(client: GpuApiClient, limit: int, recheck: bool = False,
     判不完的要求照樣記下「還沒判完」（checked_at 清掉），不會被當成未追問。每一對的失敗次數記在
     FollowUp.failures：失敗過的排在沒失敗過的後面，失敗 2 次就不再送。
 
-    recheck=True：先把不是通過的判斷器判的要求清掉重來（換模型或提示詞、新版本評估通過之後用）。
+    換了判斷器（新版本評估通過）之後，舊版本判的要求每晚在上限內重判，發言早的先；重判完之前
+    那些人的追問率不給（見 is_rejudging）。舊的判斷不先清掉：清掉就看不出還有誰沒重判完。
+
+    recheck=True：重判排在新的候選前面（換判斷器之後想一次補完時，配大一點的 limit 用）。
     retry_failed=True：先清掉每一對的失敗次數，跳過的對重新排隊（GPU 端修好之後用）。
     """
     timeout = timeout or settings.GPU_JOB_TIMEOUT_SECONDS
-    round_ = _Round(client, limit, timeout, now or timezone.now(), WaitingIndex.load())
+    judge = passing_judge()
+    round_ = _Round(client, limit, timeout, now or timezone.now(), WaitingIndex.load(), judge,
+                    rejudge_first=recheck)
     round_.report.sync = sync_followups()
-    if recheck:
-        round_.report.reset = reset_untrusted(passing_judge())
     if retry_failed:
         round_.report.retried = reset_failures()
     index = CandidateIndex.load()
-    round_.run([_Item(followup, index.candidates(followup), dict(followup.failures or {}))
-                for followup in _open_followups()])
+    round_.run([_Item(followup, index.candidates(followup), dict(followup.failures or {}),
+                      rejudge=is_rejudging(followup.classifier, judge))
+                for followup in _work_followups(judge)])
     return round_.report
 
 
@@ -1396,12 +1452,15 @@ def _session_followups(session: Session):
 
 
 def session_states(session: Session, judge: str, today: date) -> Iterator[tuple[str, date, FollowUpState]]:
-    """(講者, 發言日, 狀態)：只給算進追問率的已追問與未追問。profiles 用它算 followup_rate。"""
+    """(講者, 發言日, 狀態)：算進追問率的已追問與未追問，加上待重判（有的話那個人不給比率）。
+
+    profiles 用它算 followup_rate。
+    """
     rows = _session_followups(session).values_list(
         "article__speaker", "article__date", "due_date", "followed_by_id", "classifier", "checked_at")
     for speaker, day, due, followed_by, classifier, checked_at in rows.iterator():
         state = state_for(due, followed_by, classifier, checked_at, today, judge)
-        if state in (FollowUpState.FOLLOWED, FollowUpState.NOT_FOLLOWED):
+        if state in (FollowUpState.FOLLOWED, FollowUpState.NOT_FOLLOWED, FollowUpState.REJUDGING):
             yield speaker.strip(), day, state
 
 

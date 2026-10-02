@@ -275,9 +275,9 @@ uv run python manage.py eval_topics
 - 文章重產時，它當來源的要求刪掉重建，它當候選的判斷從別的要求裡拿掉，下一輪用新內容重判。
 
 ```bash
-uv run python manage.py check_followups              # 建立／更新要求、判斷新的候選對，上限 FOLLOWUP_DAILY_LIMIT（預設 200）
+uv run python manage.py check_followups              # 建立／更新要求、判斷新的候選對與待重判的要求，上限 FOLLOWUP_DAILY_LIMIT（預設 200）
 uv run python manage.py check_followups --limit 50
-uv run python manage.py check_followups --recheck    # 不是通過的判斷器判的要求清掉重判（新版本評估通過之後用）
+uv run python manage.py check_followups --recheck    # 待重判的要求排在新的候選前面（新版本評估通過之後想一次補完時用）
 uv run python manage.py check_followups --retry-failed   # 失敗 2 次而跳過的對重新排隊（GPU 端修好之後用）
 ```
 
@@ -299,6 +299,7 @@ uv run python manage.py check_followups --retry-failed   # 失敗 2 次而跳過
 | `pending` 待追蹤 | 還沒到期、也還沒找到追問 |
 | `watching` 觀察中 | 已到期、在觀察期內、還沒找到追問；觀察期過了但還有候選沒判斷完的也是（包括有一對失敗 2 次而跳過的） |
 | `followed` 已追問 | 找到追問（不管在觀察期的哪個時候） |
+| `rejudging` 待重判 | 有通過的判斷器，但這一項是別的判斷器版本判的（換了模型或提示詞）：不管到期了沒有、舊版本說了什麼都不算，等上線的判斷器重判 |
 | `not_followed` 未追問 | 觀察期結束、而且結束之後確認過所有候選都判斷完了，都沒有追問；同一個人在觀察期裡還有沒做完的文章（等待處理、處理中，或失敗但還會重試）時不算，等它們做完 |
 
 「確認過所有候選都判斷完了」記在 `FollowUp.checked_at`：還沒看完不能說沒有。同一個人＝講者欄位正好是他在那個來源的某個名字（任期上的名字，或來源文章的講者寫法）；觀察期結束之後才補匯入他觀察期裡的質詢，已經記下的確認會收回來，等那幾篇做完再判。期限改短、觀察期跟著縮的話，落在新觀察期之外的追問不算了，那一項重新開始找。
@@ -329,9 +330,11 @@ uv run python manage.py check_followups --retry-failed   # 失敗 2 次而跳過
 
 ```bash
 uv run python manage.py eval_followups               # 先用新版本評估，不動既有的判斷
-uv run python manage.py check_followups --recheck --limit 100000   # 通過了才把舊版本判的重判
+uv run python manage.py check_followups --recheck --limit 100000   # 通過了想一次補完舊版本判的（不跑也會每晚補）
 uv run python manage.py compute_profiles
 ```
+
+新版本通過之後，舊版本判的要求都是**待重判**：每晚的 `check_followups` 在上限內重判它們（新的候選先、再來是待重判的、發言早的先；`--recheck` 讓待重判的排最前面），舊的判斷不先清掉——清掉就看不出誰還沒重判完。一項要求重判出第一個結果時整項換成新的判斷器（舊版本的追問、確認都不算了）。GPU 回來的判斷器不是上線的那個時，重判出來的還是別的版本，那一輪就不再重判下去。舊版本判過的候選都不在了（不再是基礎文章）的要求，沒有東西可重判，照「一個候選都沒有」算。
 
 ### 指標與清單（區塊 `followup`，標題「追問」）
 
@@ -341,10 +344,12 @@ uv run python manage.py compute_profiles
 
 只算判斷都出自通過的判斷器的要求（一個候選都沒有、從來不必判斷的也算——那是程式篩出來的）；n < 5 不給百分位，同儕是母體中 n ≥ 5 的人，不足 5 人誰都不比。存進 `ProfileStat` 時 `classifier` 欄記下判斷器，API 只在它等於現在上線的判斷器時才給比率。
 
+**他還有待重判的要求時，整個不給比率**（值是空的、n 是 0、不進同儕）：舊版本找到的追問不算、新的判斷器又還沒判到，只用判完的那幾項算，比率會往 0% 掉而且看起來像真的。API 看的是當下的清單，不靠側寫重算過沒有。
+
 API 的 `followup` 區塊永遠在：
 
-- `indicators`：`[followup_rate]`，判斷器沒通過（或側寫還沒用上線的判斷器重算）時是空清單。證據網址指到發言者頁的 `#followups`。
-- `asks`：該會期他的要求（來源文章要有頁面），每項 `{article: {slug, title, date}, request, deadline, due_date, state, followed_by, quote}`，依到期日排序；已追問的附上追問的那篇與引用。**判斷器沒通過時只有 `pending`**：到期之後是不是追了要靠判斷，不給。
+- `indicators`：`[followup_rate]`，判斷器沒通過（或側寫還沒用上線的判斷器重算）時是空清單。證據網址指到發言者頁的 `#followups`。他有待重判的要求時照樣有這一項，但 `value` 是 `null`、`n` 是 0、`reason` 是 `"rejudging"`。
+- `asks`：該會期他的要求（來源文章要有頁面），每項 `{article: {slug, title, date}, request, deadline, due_date, state, followed_by, quote}`，依到期日排序；已追問的附上追問的那篇與引用。`state` 是 `pending`／`watching`／`followed`／`not_followed`／`rejudging`。**判斷器沒通過時只有 `pending`**：到期之後是不是追了要靠判斷，不給。
 - `unparsed`：期限寫法無法換算的要求數。
 - `judge`：`{name, accuracy, labeled, evaluated_at}`，沒有通過的判斷器是 `null`。
 
