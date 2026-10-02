@@ -162,18 +162,48 @@ def _calendar_month_end(match: re.Match, text: str, spoken: _Spoken) -> date | N
     return due if due >= spoken.day else _month_end(spoken.day.year + 1, month)
 
 
+# 範圍的連接詞：「1到2個月內」「三至六個月內」「2~3週內」「一、兩個月內」「1或2天內」。
+# 只看緊貼在數字前面的「數字＋連接詞」：規則比對到的只有後面那個數，前面那一半要另外看
+_RANGE_BEFORE = re.compile(rf"[{_NUMERALS}][到至~～\-－、或]$")
+# 「N 年內」的 N 大到這裡就是年份、不是年數：民國年（115）與西元年（2026）都比它大
+_MAX_YEAR_COUNT = 99
+_ERA_BEFORE = re.compile(r"(?:民國|西元|公元)$")
+
+
+def _count(match: re.Match, text: str) -> int | None:
+    """「N 天內」「N 個月內」的 N；前面接著「數字＋範圍連接詞」就是 None。
+
+    「1到2個月內」是講者自己也沒定的範圍（同「一兩個月內」）：只讀後面那個數等於替他把
+    期限定在最寬的那一頭，讀前面那個又太嚴，寧可換不出來。
+    """
+    if _RANGE_BEFORE.search(text[:match.start(1)]):
+        return None
+    return _to_int(match.group(1))
+
+
 def _days(n: int) -> Callable[[re.Match, str, _Spoken], date | None]:
     def rule(match: re.Match, text: str, spoken: _Spoken) -> date | None:
-        count = _to_int(match.group(1))
+        count = _count(match, text)
         return spoken.day + timedelta(days=count * n) if count else None
     return rule
 
 
 def _months(n: int) -> Callable[[re.Match, str, _Spoken], date | None]:
     def rule(match: re.Match, text: str, spoken: _Spoken) -> date | None:
-        count = _to_int(match.group(1)) if match.groups() else 1
+        count = _count(match, text) if match.groups() else 1
         return add_months(spoken.day, count * n) if count else None
     return rule
+
+
+def _years(match: re.Match, text: str, spoken: _Spoken) -> date | None:
+    """N 年內：+ N 年。「115年內」「民國115年內」「2026年內」是「那一年之內」，不是 115 年。
+
+    寫的是年份就跟「明年3月底」一樣是寫了年的期限：不猜（而且照年數算會變成兩千年後）。
+    """
+    count = _count(match, text)
+    if count is None or count > _MAX_YEAR_COUNT or _ERA_BEFORE.search(text[:match.start()]):
+        return None
+    return add_months(spoken.day, count * 12)
 
 
 def _this_month_end(match: re.Match, text: str, spoken: _Spoken) -> date:
@@ -183,6 +213,18 @@ def _this_month_end(match: re.Match, text: str, spoken: _Spoken) -> date:
 def _next_month_end(match: re.Match, text: str, spoken: _Spoken) -> date:
     following = add_months(spoken.day.replace(day=1), 1)
     return _month_end(following.year, following.month)
+
+
+def _next_month_day(match: re.Match, text: str, spoken: _Spoken) -> date | None:
+    """下個月 N 日（號）：次月的第 N 天；那個月沒有這一天就取月底（「下個月31日」在二月）。
+
+    講者明講了哪一天，就不能照「下個月」放寬到月底：那會替他多給半個月。
+    """
+    day = _to_int(match.group(1))
+    if day is None or day > 31:
+        return None
+    following = add_months(spoken.day.replace(day=1), 1)
+    return following.replace(day=min(day, calendar.monthrange(following.year, following.month)[1]))
 
 
 def _year_end(match: re.Match, text: str, spoken: _Spoken) -> date:
@@ -219,8 +261,11 @@ _RULES: tuple[tuple[re.Pattern, Callable[[re.Match, str, _Spoken], date | None]]
     (re.compile(_NUM + r"個?(?:週|周|星期|禮拜)" + _WITHIN), _days(7)),
     (re.compile(_NUM + r"個?月" + _WITHIN), _months(1)),
     (re.compile(r"半年" + _WITHIN), _months(6)),
-    (re.compile(_NUM + r"年" + _WITHIN), _months(12)),
-    (re.compile(r"下個?月"), _next_month_end),
+    (re.compile(_NUM + r"年" + _WITHIN), _years),
+    (re.compile(rf"下個?月([{_NUMERALS}]+)[日號]"), _next_month_day),
+    # 「下個月初」「下個月中（旬）」「下個月上旬」沒有確定的一天，換不出來；後面接著數字的是上一條
+    # （換不出來的「下個月0日」也不能退回月底）
+    (re.compile(rf"下個?月(?![初中上下旬{_NUMERALS}])"), _next_month_end),
     (re.compile(rf"(?:本|這個?)月底|(?<![{_NUMERALS}個上下本這])月底"), _this_month_end),
     (re.compile(rf"今年年?底|今年內|(?<![{_NUMERALS}明後去隔前今年])年底"), _year_end),
     (re.compile(r"本會期|這個?會期|會期內|會期結束前"), _session_end),
@@ -240,7 +285,12 @@ def parse_deadline(text: str, spoken: date, source: str,
     context = _Spoken(spoken, str(source), session_number)
     for pattern, rule in _RULES:
         for match in pattern.finditer(normalized):
-            due = rule(match, normalized, context)
+            try:
+                due = rule(match, normalized, context)
+            except (OverflowError, ValueError):
+                # 「99999天內」「99999個月內」算出來超出日期的範圍：多半是抽錯了，當成換不出來。
+                # 不能讓一項怪期限的例外冒出去，整晚的 sync_followups 都會停在它身上
+                due = None
             if due is not None:
                 return due
     return None

@@ -190,6 +190,37 @@ class DeadlineTableTests(SimpleTestCase):
         self._check([(text, None) for text in (
             "明年3月底前", "2027年底前", "明年底", "明年年底", "115年10月1日前", "後年內")])
 
+    def test_a_year_before_within_is_a_calendar_year_not_a_count(self):
+        """攔的 bug：「115年內」被讀成 115 年後（2141 年）、「2026年內」讀成西元 4052 年。"""
+        self._check([(text, None) for text in (
+            "115年內", "民國115年內", "2026年內", "2026年以內", "２０２６年之內", "民國99年內", "西元2年內")])
+        # 年數照算
+        self._check([("3年內", "2029-03-10"), ("十年內", "2036-03-10"), ("99年內", "2125-03-10")])
+
+    def test_a_date_out_of_range_is_unconvertible_rather_than_an_error(self):
+        """攔的 bug：「99999個月內」在加月份時丟 ValueError、「9999999天內」丟 OverflowError，整輪同步停掉。"""
+        self._check([(text, None) for text in ("99999個月內", "9999999天內", "999999週內")])
+
+    def test_a_range_of_numbers_is_not_converted(self):
+        """攔的 bug：「1到2個月內」只讀到後面的 2，等於替講者把期限定在最寬的那一頭。"""
+        self._check([(text, None) for text in (
+            "1到2個月內", "一、兩個月內", "1~2個月內", "1～2個月內", "三到六個月內", "2~3週內", "3到5天內",
+            "3-5天內", "3－5天內", "十到十五天內", "1至2年內", "1或2個月內", "兩到三個禮拜內")])
+        # 連接詞前面不是數字的照算
+        self._check([("在2個月內", "2026-05-10"), ("到2個月內", "2026-05-10")])
+
+    def test_a_day_of_next_month(self):
+        self._check([("下個月15日前", "2026-04-15"), ("下個月15號", "2026-04-15"), ("下月5日", "2026-04-05"),
+                     ("下個月十日前", "2026-04-10"), ("下個月１日", "2026-04-01")])
+        # 那個月沒有這一天就取月底；跨年
+        self._check([("下個月31日前", "2026-02-28")], spoken=date(2026, 1, 10))
+        self._check([("下個月10號前", "2027-01-10")], spoken=date(2026, 12, 20))
+        # 沒有確定的一天：不放寬成月底
+        self._check([(text, None) for text in (
+            "下個月初", "下個月中", "下個月中旬", "下個月上旬", "下個月下旬", "下月初", "下個月0日", "下個月32日")])
+        # 沒寫哪一天的照舊是月底
+        self._check([("下個月", "2026-04-30"), ("下月底前", "2026-04-30"), ("下個月內", "2026-04-30")])
+
 
 class DeadlineNumeralTests(SimpleTestCase):
     SPOKEN = date(2026, 3, 10)

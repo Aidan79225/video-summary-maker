@@ -115,8 +115,17 @@ export const DEADLINE_RULES: readonly { phrase: string; due: string; example: st
     example: '1 月 31 日說「一個月內」→ 2 月 28 日（閏年 29 日）',
   },
   { phrase: '半年內', due: '發言日 ＋ 6 個月', example: '8 月 27 日說「半年內」→ 隔年 2 月 27 日' },
-  { phrase: 'N 年內', due: '發言日 ＋ N 年', example: '8 月 27 日說「一年內」→ 隔年 8 月 27 日' },
+  {
+    phrase: 'N 年內',
+    due: '發言日 ＋ N 年（「115年內」「2026年內」寫的是年份，不是年數，換算不出日期）',
+    example: '8 月 27 日說「一年內」→ 隔年 8 月 27 日',
+  },
   { phrase: '本月底、月底前', due: '發言當月的最後一天', example: '8 月 27 日說「月底前」→ 8 月 31 日' },
+  {
+    phrase: '下個月 N 日前、下個月 N 號、下月 N 日',
+    due: '下個月的第 N 天（那個月沒有這一天就取月底）',
+    example: '1 月 10 日說「下個月 31 日前」→ 2 月 28 日（閏年 29 日）',
+  },
   { phrase: '下個月', due: '下個月的最後一天', example: '8 月 27 日說「下個月」→ 9 月 30 日' },
   {
     phrase: '年底前、今年底、今年內',
