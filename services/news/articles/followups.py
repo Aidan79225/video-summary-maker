@@ -726,11 +726,13 @@ class _Round:
 
     def _judge(self, followup: FollowUp, doc: Doc) -> FollowUp | None:
         """判一對、存起來，回傳存好的 FollowUp；失敗或內容變了回 None。"""
+        ask = ask_at(followup.article.brief, followup.ask_index)
+        if ask is None:
+            # 這一輪開頭才同步過，還對不上就是剛好有人改了摘要卡：當成內容變了，下一輪重來
+            self.report.stale += 1
+            return None
         try:
-            ask = ask_at(followup.article.brief, followup.ask_index)
             candidate = Article.objects.prefetch_related("slides").get(pk=doc.id)
-            if ask is None:
-                raise JobFailed("摘要卡裡已經沒有這一項要求")
             pair = pair_input(ask, candidate)
             result = judge_pair(self.client, pair, self.timeout)
             fresh = _fresh_pair(followup.pk, doc.id, pair)
