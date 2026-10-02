@@ -35,6 +35,10 @@ const areaCount = Math.max(distribution.length, TOPIC_AREAS.length);
 const accuracy = formatPercent(classifier.accuracy * 100);
 // 跟側寫的「計算於」一樣換成臺灣時間：直接切字串的話，後端給 UTC 時日期會差一天
 const evaluated = formatDateTime(classifier.evaluated_at);
+// 分類器的名字是「模型#提示詞版本#提示指紋」。指紋是給程式比對版本用的，讀者看模型與版本就好，
+// 完整字串留在 title 裡給要追究的人看
+const [modelName = '', promptVersion = ''] = (classifier.name || '').split('#');
+const classifierLabel = promptVersion ? `${modelName}（提示詞 ${promptVersion}）` : modelName;
 ---
 
 <p class="mt-1 text-[0.78rem] leading-relaxed text-muted">
@@ -49,7 +53,7 @@ const evaluated = formatDateTime(classifier.evaluated_at);
 {
   (classifier.name || evaluated) && (
     <p class="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-[0.72rem] text-muted">
-      {classifier.name && <span class="break-all">分類器 {classifier.name}</span>}
+      {classifier.name && <span class="break-all" title={classifier.name}>分類器 {classifierLabel}</span>}
       {classifier.name && evaluated && (
         <span aria-hidden="true" class="hidden text-line sm:inline">
           ·
