@@ -1,0 +1,70 @@
+---
+/**
+ * 紀錄清單的一次記名表決：日期、議題、會議代碼、全院票數、他的票與他黨團的多數。
+ *
+ * 「他的票」與「黨團多數」並排成兩欄，讀者自己就能核對一致率；兩者不同時多一個
+ * 「跟黨團不同」的標籤，黨團並列沒有多數時寫明這一次不算進一致率。標籤用強調色而
+ * 不是警示的紅：跟黨團不一致不代表好或壞。
+ */
+import type { VoteRecord } from '../lib/types';
+import { formatDateWithWeekday } from '../lib/format';
+import { BALLOT_LABEL } from '../lib/records';
+import OfficialLink from './OfficialLink.astro';
+
+interface Props {
+  vote: VoteRecord;
+}
+
+const { vote: v } = Astro.props;
+// 後端給了日期就照網站的日期格式；沒給就寫原文（LYAPI 的表決時間是民國年的中文字串）
+const when = formatDateWithWeekday(v.date) || v.voted_at || '日期不詳';
+const mine = v.vote ? BALLOT_LABEL[v.vote] : '沒有投票';
+const majority = v.caucus_majority
+  ? BALLOT_LABEL[v.caucus_majority]
+  : v.caucus
+    ? '沒有多數（票數並列）'
+    : '沒有參加黨團';
+const differs = Boolean(v.vote && v.caucus_majority && v.vote !== v.caucus_majority);
+// 他有投票、有黨團，但黨團並列：這一次不算進一致率與跨黨投票，要講清楚為什麼
+const tie = Boolean(v.vote && v.caucus && !v.caucus_majority);
+---
+
+<li class="rounded-xl border border-line-soft px-4 py-3">
+  <div class="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
+    <p class="tabular text-[0.75rem] text-muted">{when}</p>
+    {
+      differs && (
+        <p class="inline-flex items-center rounded-full border border-accent/50 bg-accent-soft px-2.5 py-0.5 text-[0.75rem] font-medium text-accent-ink">
+          跟黨團不同
+        </p>
+      )
+    }
+  </div>
+  <p class="mt-1 text-[0.92rem] leading-relaxed text-ink">{v.topic}</p>
+
+  <dl class="mt-2 grid grid-cols-2 gap-x-4 gap-y-1 text-[0.8rem] sm:max-w-md">
+    <div>
+      <dt class="text-[0.7rem] text-muted">他的票</dt>
+      <dd class:list={['font-medium', v.vote ? 'text-ink' : 'text-muted']}>{mine}</dd>
+    </div>
+    <div>
+      <dt class="text-[0.7rem] text-muted">{v.caucus ? `${v.caucus}多數` : '黨團多數'}</dt>
+      <dd class:list={['font-medium', v.caucus_majority ? 'text-ink' : 'text-muted']}>{majority}</dd>
+    </div>
+  </dl>
+  {tie && <p class="mt-1 text-[0.72rem] text-muted">黨團票數並列、沒有多數，這一次不算進一致率與跨黨投票。</p>}
+
+  <div class="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[0.72rem] text-muted">
+    {
+      v.tally && (
+        <span class="tabular">
+          全院 贊成 {v.tally.yes}、反對 {v.tally.no}、棄權 {v.tally.abstain}
+        </span>
+      )
+    }
+    {v.meeting_code && <span class="font-mono break-all">{v.meeting_code}</span>}
+    <span class="ml-auto">
+      <OfficialLink url={v.url} label={v.topic} />
+    </span>
+  </div>
+</li>
