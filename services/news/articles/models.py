@@ -219,8 +219,9 @@ class ProfileStat(models.Model):
     # 同儕人數：頁面寫「在 N 位同儕中」
     peers = models.PositiveIntegerField(default=0)
     # 議題分布的列是哪個分類器分出來的（其他指標留空）。API 只在它等於現在上線的分類器時才給
-    # 議題區塊：重算失敗、或跟評估同時跑時，不會把 A 版算的數字掛上 B 版的名字
-    classifier = models.CharField(max_length=200, blank=True, default="")
+    # 議題區塊：重算失敗、或跟評估同時跑時，不會把 A 版算的數字掛上 B 版的名字。
+    # 提案與質詢一致率記兩個：「議案分類器｜質詢分類器」，所以是兩個分類器欄位的長度加分隔字
+    classifier = models.CharField(max_length=401, blank=True, default="")
     computed_at = models.DateTimeField()
 
     class Meta:
@@ -415,6 +416,75 @@ class LyVote(models.Model):
 
     def __str__(self) -> str:
         return f"{self.code} {self.topic[:40]}"
+
+
+# --- 議案分類：提案與質詢一致率要替委員提案分政策領域（bill_topics），議案名稱另有自己的標註集與門檻 ---
+
+
+class BillTopic(models.Model):
+    """一件委員提案的政策領域，由 GPU 的 topic 工作分的（bill_topics.classify_bill_topics）。
+
+    跟 Topic 一樣不設 choices（寫入只有 topics.parse_result 一個入口，會擋掉清單外的代碼）。
+    議案名稱在同步時變了（ly_records 存檔時），這一筆刪掉、下一輪重分：分類讀的就是名稱。
+    """
+
+    bill = models.OneToOneField(LyBill, related_name="topic", on_delete=models.CASCADE)
+    primary = models.CharField(max_length=16, db_index=True)
+    # 空字串＝沒有次領域
+    secondary = models.CharField(max_length=16, blank=True)
+    # GPU 回來的那串（模型＋提示詞版本）。一致率只認議案分類通過評估的那個版本
+    classifier = models.CharField(max_length=200, db_index=True)
+    labeled_at = models.DateTimeField()
+
+    class Meta:
+        ordering = ["-labeled_at", "-id"]
+        verbose_name = verbose_name_plural = "議案分類（模型）"
+
+    def __str__(self) -> str:
+        return f"{self.bill} → {self.primary}"
+
+
+class BillTopicLabel(models.Model):
+    """人工標註的主領域：議案分類器的標註集（sample_bill_topic_labels 抽、admin 標、eval_bill_topics 評）。
+
+    議案名稱改了也不刪（同 TopicLabel）：改名多半是更正錯字，議案是哪個領域不會因此改變。
+    """
+
+    bill = models.OneToOneField(LyBill, related_name="topic_label", on_delete=models.CASCADE)
+    # 空字串＝還沒標
+    primary = models.CharField(max_length=16, blank=True, db_index=True)
+    note = models.CharField(max_length=300, blank=True)
+    labeled_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["bill_id"]
+        verbose_name = verbose_name_plural = "議案議題標註"
+
+    def __str__(self) -> str:
+        return f"{self.bill} 標註：{self.primary or '還沒標'}"
+
+
+class BillTopicEvaluation(models.Model):
+    """議案分類器的一次評估。一致率只用「每個分類器自己最新的一次評估」裡通過、而且最晚的那一個。"""
+
+    classifier = models.CharField(max_length=200)
+    labeled = models.PositiveIntegerField()
+    correct = models.PositiveIntegerField()
+    # 0～1
+    accuracy = models.FloatField()
+    passed = models.BooleanField(db_index=True)
+    # 判錯的每一筆：[{bill, bill_no, name, human, model, error?}]，model 為 null 是分類失敗
+    mistakes = models.JSONField(default=list, blank=True)
+    ran_at = models.DateTimeField()
+
+    class Meta:
+        ordering = ["-ran_at", "-id"]
+        verbose_name = verbose_name_plural = "議案分類評估"
+
+    def __str__(self) -> str:
+        return f"{self.classifier} {self.correct}/{self.labeled}{'（通過）' if self.passed else ''}"
+
+
 class FollowUp(models.Model):
     """摘要卡裡一項帶期限的要求，與「後來有沒有再追問」的判斷（followups.check_followups）。
 

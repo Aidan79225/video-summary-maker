@@ -159,6 +159,9 @@ TOPIC_DAILY_LIMIT = int(os.environ.get("TOPIC_DAILY_LIMIT", "200"))
 # 每晚最多送幾個追問判斷（一對要求與後來那篇是一個，幾秒）。第一次部署的積壓分幾晚消化；
 # 判不完的要求維持「觀察中」，不會被當成未追問。
 FOLLOWUP_DAILY_LIMIT = int(os.environ.get("FOLLOWUP_DAILY_LIMIT", "200"))
+# 每晚最多替幾件委員提案分政策領域（提案與質詢一致率）。一件只要幾秒；一屆七千多件，第一次部署的
+# 積壓分幾晚消化，新的會期先分。
+BILL_TOPIC_DAILY_LIMIT = int(os.environ.get("BILL_TOPIC_DAILY_LIMIT", "200"))
 
 # 由 Django 直接服務 /media。正式環境用 nginx 會更好，但 Pi 自用時
 # 少一個元件就少一個會壞的東西。

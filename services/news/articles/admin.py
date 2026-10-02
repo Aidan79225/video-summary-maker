@@ -6,10 +6,10 @@ from django.urls import reverse
 from django.utils import timezone
 from django.utils.html import format_html
 
-from . import followups, topics
-from .models import (Article, ArticleStatus, FollowUp, FollowUpEvaluation, FollowUpLabel,
-                     LyBill, LyMeeting, LyVote, Membership, Person, ProfileStat, Session,
-                     Slide, Topic, TopicEvaluation, TopicLabel)
+from . import bill_topics, followups, topics
+from .models import (Article, ArticleStatus, BillTopic, BillTopicEvaluation, BillTopicLabel, FollowUp,
+                     FollowUpEvaluation, FollowUpLabel, LyBill, LyMeeting, LyVote, Membership, Person,
+                     ProfileStat, Session, Slide, Topic, TopicEvaluation, TopicLabel)
 from .profiles import compute_profiles
 
 
@@ -443,6 +443,8 @@ class FollowUpEvaluationAdmin(_ReadOnlyAdmin):
             return
         compute_profiles()
         self.message_user(request, "上線的判斷器變了，已經重算人物側寫", messages.INFO)
+
+
 # --- 立法院的院內紀錄：sync_ly_records 每週從 LYAPI 整批 upsert，手改會被下一次同步蓋掉 ---
 
 
@@ -470,3 +472,127 @@ class LyVoteAdmin(_ReadOnlyAdmin):
     list_display = ("code", "topic", "meeting_code", "date", "session_number")
     list_filter = ("term", "session_number")
     search_fields = ("code", "topic", "meeting_code")
+
+
+# --- 議案分類（提案與質詢一致率） ---
+
+
+class BillTopicLabelForm(forms.ModelForm):
+    """主領域用下拉選單選，選項來自 topics.TOPICS（同議題標註）；空的就是還沒標。"""
+
+    primary = forms.ChoiceField(label="主領域", required=False,
+                                choices=[("", "（還沒標）"), *topics.TOPIC_CHOICES])
+
+    class Meta:
+        model = BillTopicLabel
+        fields = ("primary", "note")
+
+
+@admin.register(BillTopicLabel)
+class BillTopicLabelAdmin(admin.ModelAdmin):
+    """議案議題標註：盲標。清單上直接顯示議案名稱（就是分類器讀到的那段文字）與議事網的議案頁，
+    主領域在清單上直接選。
+
+    **不要在這裡（或 LyBillAdmin）加任何 BillTopic 的欄位、篩選或搜尋**：看得到模型的答案，人就會
+    跟著它標，評估量到的就變成「模型跟自己有多像」。
+
+    不能在這裡新增：標註集要用 sample_bill_topic_labels 隨機抽，人手挑的議案會偏向好分的。
+    """
+
+    form = BillTopicLabelForm
+    list_display = ("bill_link", "session_number", "classifier_text", "primary", "note", "labeled_at")
+    # 議案欄是連到議事網的連結，不是這一筆的編輯頁：標註就在清單上做
+    list_display_links = None
+    list_editable = ("primary", "note")
+    # 篩「還沒標」跟議題標註同一個篩選器：兩張表都用 primary 的空字串表示還沒標
+    list_filter = (LabelledFilter, "bill__session_number")
+    search_fields = ("bill__bill_no", "bill__name")
+    list_per_page = 20
+    fields = ("bill_link", "classifier_text", "primary", "note", "labeled_at")
+    readonly_fields = ("bill_link", "classifier_text", "labeled_at")
+
+    def get_queryset(self, request):
+        return super().get_queryset(request).select_related("bill")
+
+    def get_changelist_form(self, request, **kwargs):
+        # 清單上的表單預設不用 self.form；不指定的話主領域會變成沒有選項的文字框
+        kwargs.setdefault("form", BillTopicLabelForm)
+        return super().get_changelist_form(request, **kwargs)
+
+    def has_add_permission(self, request) -> bool:
+        return False
+
+    def save_model(self, request, obj, form, change):
+        if "primary" in form.changed_data:
+            obj.labeled_at = timezone.now() if obj.primary else None
+        super().save_model(request, obj, form, change)
+
+    @admin.display(description="議案")
+    def bill_link(self, label: BillTopicLabel):
+        bill = label.bill
+        if not bill.url:
+            return bill.bill_no
+        return format_html('{}<br><a href="{}" target="_blank" rel="noopener">議事網的議案頁</a>',
+                           bill.bill_no, bill.url)
+
+    @admin.display(description="會期", ordering="bill__session_number")
+    def session_number(self, label: BillTopicLabel) -> str:
+        return f"第{label.bill.term}屆第{label.bill.session_number}會期"
+
+    @admin.display(description="分類器讀到的文字")
+    def classifier_text(self, label: BillTopicLabel):
+        # 跟送給 GPU 的是同一個函式：標的人跟模型讀的是同一段文字
+        return format_html('<div style="white-space: pre-line; max-width: 40em">{}</div>',
+                           bill_topics.bill_input(label.bill.name))
+
+
+@admin.register(BillTopic)
+class BillTopicAdmin(_ReadOnlyAdmin):
+    """模型分的議案領域。刪掉一筆，下一輪 classify_bill_topics 會重分那件。"""
+
+    list_display = ("bill", "primary_label", "secondary_label", "classifier", "labeled_at")
+    list_filter = ("classifier", "primary", "bill__session_number")
+    search_fields = ("bill__bill_no", "bill__name")
+    list_select_related = ("bill",)
+
+    @admin.display(description="主領域", ordering="primary")
+    def primary_label(self, topic: BillTopic) -> str:
+        area = topics.TOPIC_BY_KEY.get(topic.primary)
+        return area.label if area else topic.primary
+
+    @admin.display(description="次領域")
+    def secondary_label(self, topic: BillTopic) -> str:
+        area = topics.TOPIC_BY_KEY.get(topic.secondary)
+        return area.label if area else (topic.secondary or "—")
+
+
+@admin.register(BillTopicEvaluation)
+class BillTopicEvaluationAdmin(_ReadOnlyAdmin):
+    """評估紀錄。刪掉通過的評估會改變上線條件：退回較舊的通過版本，或沒有一致率。
+
+    刪完之後上線的議案分類器變了，就當場重算人物側寫（同 TopicEvaluationAdmin）：API 每次都看最新的
+    評估，側寫裡的一致率卻是上一次重算時的分類器算的，不重算的話卡片要到明早才回來。
+    """
+
+    list_display = ("classifier", "labeled", "correct", "accuracy_percent", "passed", "ran_at")
+    list_filter = ("passed", "classifier")
+
+    @admin.display(description="準確率", ordering="accuracy")
+    def accuracy_percent(self, evaluation: BillTopicEvaluation) -> str:
+        return f"{evaluation.accuracy * 100:.1f}%"
+
+    def delete_model(self, request, obj) -> None:
+        before = bill_topics.passing_classifier()
+        super().delete_model(request, obj)
+        self._recompute_if_the_gate_moved(request, before)
+
+    def delete_queryset(self, request, queryset) -> None:
+        before = bill_topics.passing_classifier()
+        super().delete_queryset(request, queryset)
+        self._recompute_if_the_gate_moved(request, before)
+
+    def _recompute_if_the_gate_moved(self, request, before: str | None) -> None:
+        if bill_topics.passing_classifier() == before:
+            return
+        compute_profiles()
+        self.message_user(request, "上線的議案分類器變了，已經重算人物側寫", messages.INFO)

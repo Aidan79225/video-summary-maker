@@ -6,6 +6,7 @@ import io
 import itertools
 import re
 import unittest
+from collections import Counter
 from datetime import date, datetime
 from pathlib import Path
 from unittest import mock
@@ -18,8 +19,8 @@ from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 
 from articles import chamber
-from articles.models import (Article, ArticleStatus, LyBill, LyMeeting, LyVote, Membership, Person,
-                             ProfileStat, Session)
+from articles.models import (Article, ArticleStatus, BillTopic, BillTopicEvaluation, LyBill, LyMeeting,
+                             LyVote, Membership, Person, ProfileStat, Session, Topic, TopicEvaluation)
 from articles.profiles import MIN_SAMPLE, compute_profiles
 
 NOW = timezone.make_aware(datetime(2026, 10, 4, 3, 40))
@@ -534,3 +535,324 @@ class RecordKindContractTests(SimpleTestCase):
         match = re.search(r"export const RECORD_KIND_KEYS = \[(.*?)\] as const", source, re.S)
         self.assertIsNotNone(match, "records.ts 要有 RECORD_KIND_KEYS（後端 chamber.KIND_KEYS 的對照）")
         self.assertEqual(tuple(re.findall(r"'([a-z_]+)'", match.group(1))), chamber.KIND_KEYS)
+
+
+# --- 提案與質詢一致率 ---
+
+SPEECH_MODEL = "speech-model#topic-v1"
+BILL_MODEL = "bill-model#topic-v1"
+STAMP = f"{BILL_MODEL}｜{SPEECH_MODEL}"
+S5_MEETING = "第11屆第5會期財政委員會第3次全體委員會議"
+
+
+def _speeches(name, *areas, classifier=SPEECH_MODEL, meeting=S5_MEETING, solo=True, brief=True):
+    """他在第 5 會期的質詢：每個領域一篇基礎文章（單獨發言、有摘要卡），由 classifier 分好類。"""
+    for area in areas:
+        n = next(_ids)
+        article = Article.objects.create(
+            ivod_id=f"a{n}", slug=f"2026-03-10-a{n}", source="ly", title="t",
+            speaker=name if solo else f"{name}、路人", meeting=meeting, date=date(2026, 3, 10),
+            ivod_url="https://example.invalid/a", status=ArticleStatus.READY,
+            brief={"one_liner": "一句話", "key_numbers": [], "asks": []} if brief else None)
+        Topic.objects.create(article=article, primary=area, classifier=classifier, labeled_at=NOW)
+
+
+def _proposals(name, *areas, classifier=BILL_MODEL, session=5):
+    """他主提案的議案，每個領域一件，由 classifier 分好類。"""
+    bills = []
+    for area in areas:
+        bill = _bill([name], session=session)
+        BillTopic.objects.create(bill=bill, primary=area, classifier=classifier, labeled_at=NOW)
+        bills.append(bill)
+    return bills
+
+
+def _bill_gate(classifier=BILL_MODEL, passed=True, day=1):
+    return BillTopicEvaluation.objects.create(
+        classifier=classifier, labeled=20, correct=18 if passed else 10, accuracy=0.9 if passed else 0.5,
+        passed=passed, ran_at=timezone.make_aware(datetime(2026, 10, day, 9, 30)))
+
+
+def _speech_gate(classifier=SPEECH_MODEL, passed=True, day=1):
+    return TopicEvaluation.objects.create(
+        source="ly", classifier=classifier, labeled=20, correct=18 if passed else 10,
+        accuracy=0.9 if passed else 0.5, passed=passed,
+        ran_at=timezone.make_aware(datetime(2026, 10, day, 9, 30)))
+
+
+class OverlapTests(SimpleTestCase):
+    """一致率 ＝ Σ 各領域 min(提案占比, 質詢占比) × 100。"""
+
+    def test_two_worked_examples(self):
+        # 提案一半財經、一半衛福；質詢 75% 財經、25% 勞動：只有財經重疊，min(50%, 75%) = 50%
+        self.assertEqual(chamber.distribution_overlap(Counter(finance=2, welfare=2),
+                                                      Counter(finance=3, labor=1)), 50.0)
+        # 提案 75% 教育、25% 財經；質詢各一半：min(75%, 50%) + min(25%, 50%) = 75%
+        self.assertEqual(chamber.distribution_overlap(Counter(education=3, finance=1),
+                                                      Counter(education=1, finance=1)), 75.0)
+
+    def test_the_same_shares_are_100_and_nothing_shared_is_0(self):
+        # 三分之一加三分之二：用分數算，剛好 100，不是 99.99999999999999
+        self.assertEqual(chamber.distribution_overlap(Counter(finance=1, welfare=2),
+                                                      Counter(finance=2, welfare=4)), 100.0)
+        self.assertEqual(chamber.distribution_overlap(Counter(finance=3), Counter(labor=5)), 0.0)
+
+    def test_it_is_symmetric_and_zero_counts_do_not_matter(self):
+        a, b = Counter(finance=2, welfare=1, labor=0), Counter(finance=1, defense=4)
+        self.assertEqual(chamber.distribution_overlap(a, b), chamber.distribution_overlap(b, a))
+        self.assertEqual(chamber.distribution_overlap(a, b), 20.0)
+
+    def test_an_empty_side_has_no_value(self):
+        self.assertIsNone(chamber.distribution_overlap(Counter(), Counter(finance=5)))
+        self.assertIsNone(chamber.distribution_overlap(Counter(finance=5), Counter(finance=0)))
+
+
+class AlignmentTests(TestCase):
+    """第 5 會期，議案與質詢的分類器名字不同（各自評估通過）。"""
+
+    def setUp(self):
+        self.s5 = _session()
+        for name in ("甲", "乙", "丙", "丁", "戊", "己", "庚"):
+            _legislator(name)
+
+    def _both_gates(self):
+        _bill_gate()
+        _speech_gate()
+
+    def test_the_value_is_the_overlap_and_n_the_classified_proposals(self):
+        self._both_gates()
+        # 質詢：財經 3、勞動 1、教育 1（60%、20%、20%）；提案：財經 2、衛福 2（各 50%）
+        _speeches("甲", "finance", "finance", "finance", "labor", "education")
+        _proposals("甲", "finance", "welfare", "finance", "welfare")
+        _bill(["甲"])                                                  # 還沒分類
+        _proposals("甲", "labor", classifier="old-model#topic-v0")    # 不是上線的版本
+        _proposals("甲", "labor", session=4)                          # 別的會期
+        _proposals("乙", "labor")                                     # 別人的
+        compute_profiles()
+        stat = _stats("proposal_alignment")["甲"]
+        self.assertEqual((stat.value, stat.n, stat.classifier), (50.0, 4, STAMP))
+        # 4 件不到最小樣本：照給值，不給百分位
+        self.assertIsNone(stat.percentile)
+
+    def test_only_solo_speeches_with_a_brief_classified_by_the_live_version_count(self):
+        self._both_gates()
+        _speeches("甲", "finance", "finance", "finance", "finance", "finance")
+        _speeches("甲", "labor", solo=False)
+        _speeches("甲", "labor", brief=False)
+        _speeches("甲", "labor", classifier="old-model#topic-v0")
+        _proposals("甲", "finance", "labor")
+        compute_profiles()
+        self.assertEqual(_values("proposal_alignment")["甲"], (50.0, 2))
+
+    def test_too_few_speeches_gives_no_value(self):
+        self._both_gates()
+        _speeches("甲", "finance", "finance", "finance", "finance")
+        _proposals("甲", *["finance"] * 6)
+        compute_profiles()
+        self.assertEqual(_values("proposal_alignment")["甲"], (None, 6))
+        # 沒有質詢、也沒有提案的人照樣有一列（API 用它確認算過）
+        self.assertEqual(_values("proposal_alignment")["乙"], (None, 0))
+
+    def test_peers_have_enough_on_both_sides_and_get_mid_ranks(self):
+        """乙到己：質詢 5 篇財經，提案 5 件裡 i 件財經 → 20%～100%。甲質詢不夠、庚提案不夠：不是同儕。"""
+        self._both_gates()
+        for i, name in enumerate(("乙", "丙", "丁", "戊", "己"), start=1):
+            _speeches(name, *["finance"] * 5)
+            _proposals(name, *["finance"] * i, *["welfare"] * (5 - i))
+        _speeches("甲", *["finance"] * 4)
+        _proposals("甲", *["finance"] * 5)
+        _speeches("庚", *["finance"] * 5)
+        _proposals("庚", *["finance"] * 4)
+        compute_profiles()
+        stats = _stats("proposal_alignment")
+        self.assertEqual([stats[n].value for n in ("乙", "丙", "丁", "戊", "己")],
+                         [20.0, 40.0, 60.0, 80.0, 100.0])
+        self.assertEqual([stats[n].percentile for n in ("乙", "丙", "丁", "戊", "己")],
+                         [10.0, 30.0, 50.0, 70.0, 90.0])
+        self.assertEqual({s.peers for s in stats.values()}, {5})
+        self.assertEqual((stats["甲"].value, stats["甲"].percentile), (None, None))
+        self.assertEqual((stats["庚"].value, stats["庚"].n, stats["庚"].percentile), (100.0, 4, None))
+
+    def test_fewer_than_five_peers_means_nobody_is_ranked(self):
+        self._both_gates()
+        for name in ("乙", "丙", "丁", "戊"):
+            _speeches(name, *["finance"] * 5)
+            _proposals(name, *["finance"] * 5)
+        compute_profiles()
+        self.assertEqual({(s.peers, s.percentile) for s in _stats("proposal_alignment").values()},
+                         {(4, None)})
+
+    def test_both_gates_must_pass(self):
+        _speeches("甲", *["finance"] * 5)
+        _proposals("甲", *["finance"] * 5)
+
+        def rows():
+            compute_profiles()
+            return ProfileStat.objects.filter(indicator="proposal_alignment").count()
+
+        self.assertEqual(rows(), 0)
+        bill = _bill_gate()
+        self.assertEqual(rows(), 0)                                    # 只有議案分類通過
+        bill.delete()
+        _speech_gate()
+        self.assertEqual(rows(), 0)                                    # 只有議題分類通過
+        self.assertTrue(ProfileStat.objects.filter(indicator="topic_focus").exists())
+        _bill_gate()
+        self.assertEqual(rows(), 7)
+        # 議案分類器自己在更多標註上重評沒通過：下架，一致率跟著不算
+        _bill_gate(passed=False, day=2)
+        self.assertEqual(rows(), 0)
+        _bill_gate(day=3)
+        _speech_gate(passed=False, day=2)
+        self.assertEqual(rows(), 0)
+
+    def test_the_report_says_which_classifiers_were_used(self):
+        self.assertIn("提案與質詢一致率：議案分類與立法院的議題分類沒有通過的評估，不計算",
+                      str(compute_profiles()))
+        _speech_gate()
+        self.assertIn("提案與質詢一致率：議案分類沒有通過的評估，不計算", str(compute_profiles()))
+        _bill_gate()
+        self.assertIn(f"提案與質詢一致率：用議案分類器 {BILL_MODEL}、質詢分類器 {SPEECH_MODEL}（評估都通過）",
+                      str(compute_profiles()))
+
+    def test_stale_rows_are_detected(self):
+        _proposals("甲", "finance")
+        compute_profiles()
+        self.assertFalse(chamber.alignment_stats_stale())
+        # 兩道門檻剛通過、還沒重算：有院內紀錄卻沒有一致率列
+        self._both_gates()
+        self.assertTrue(chamber.alignment_stats_stale())
+        compute_profiles()
+        self.assertFalse(chamber.alignment_stats_stale())
+        _bill_gate("new-model#topic-v2", day=2)
+        self.assertTrue(chamber.alignment_stats_stale())
+        compute_profiles()
+        self.assertFalse(chamber.alignment_stats_stale())
+        self.assertEqual(set(ProfileStat.objects.filter(indicator="proposal_alignment")
+                             .values_list("classifier", flat=True)), {f"new-model#topic-v2｜{SPEECH_MODEL}"})
+        BillTopicEvaluation.objects.all().delete()
+        self.assertTrue(chamber.alignment_stats_stale())
+        compute_profiles()
+        self.assertFalse(chamber.alignment_stats_stale())
+
+    def test_the_query_count_does_not_grow_with_the_number_of_bills(self):
+        """議案的領域一個會期查一次，不逐件查（SD 卡上的 SQLite）。"""
+        self._both_gates()
+        _speeches("甲", *["finance"] * 5)
+
+        def queries(count):
+            LyBill.objects.all().delete()
+            _proposals("甲", *["finance"] * count)
+            with CaptureQueriesContext(connection) as ctx:
+                compute_profiles()
+            return len(ctx.captured_queries)
+
+        queries(1)
+        self.assertEqual(queries(5), queries(40))
+
+
+class AlignmentApiTests(TestCase):
+    """第 5 會期：甲質詢 5 篇（財經 4、勞動 1）、提案 4 件分過類（財經 2、衛福 2）＋1 件還沒分類；
+    乙質詢只有 3 篇。兩道門檻都過。"""
+
+    def setUp(self):
+        self.s5 = _session()
+        self.m = {name: _legislator(name) for name in ("甲", "乙")}
+        _speeches("甲", "finance", "finance", "finance", "finance", "labor")
+        self.classified = _proposals("甲", "finance", "welfare", "finance", "welfare")
+        self.unclassified = _bill(["甲"], ["乙"])
+        _speeches("乙", "finance", "finance", "finance")
+        _proposals("乙", "finance")
+        _bill_gate()
+        _speech_gate()
+        compute_profiles()
+
+    def _chamber(self, name):
+        res = self.client.get(f"/api/people/{self.m[name].person_id}/profile",
+                              {"session": self.s5.id}).json()
+        return {b["key"]: b for b in res["blocks"]}.get("chamber")
+
+    def _card(self, name):
+        return next((i for i in self._chamber(name)["indicators"] if i["key"] == "proposal_alignment"), None)
+
+    def _proposed(self, name, kind="proposed"):
+        return self.client.get(f"/api/people/{self.m[name].person_id}/records",
+                               {"session": self.s5.id, "kind": kind}).json()
+
+    def test_the_card_sits_with_the_proposals(self):
+        keys = [i["key"] for i in self._chamber("甲")["indicators"]]
+        self.assertEqual(keys, ["plenary_attendance", "committee_attendance", "bills_proposed",
+                                "bills_cosigned", "bills_passed", "proposal_alignment",
+                                "vote_participation", "caucus_agreement", "caucus_defections"])
+        card = self._card("甲")
+        # 提案財經 50%、衛福 50%；質詢財經 80%、勞動 20%：重疊 50%
+        self.assertEqual((card["label"], card["value"], card["unit"], card["n"], card["n_unit"]),
+                         ("提案與質詢一致率", 50.0, "%", 4, "件"))
+        self.assertEqual((card["speech_n"], card["reason"], card["sample_ok"]), (5, "", False))
+        self.assertEqual(card["evidence_url"],
+                         f"/records/{self.m['甲'].person_id}?session={self.s5.id}&kind=proposed")
+        # 其他卡片沒有質詢篇數
+        self.assertEqual({i["speech_n"] for i in self._chamber("甲")["indicators"]
+                          if i["key"] != "proposal_alignment"}, {None})
+
+    def test_too_few_speeches_says_why(self):
+        card = self._card("乙")
+        self.assertEqual((card["value"], card["n"], card["speech_n"], card["reason"]),
+                         (None, 1, 3, "few_speeches"))
+
+    def test_the_proposal_list_marks_each_classified_bill_and_the_marks_are_n(self):
+        """證據一致性：主提案清單上標了領域的筆數等於一致率的 n；沒分類的那件照列、不標。"""
+        body = _records(self.client, self._card("甲")["evidence_url"]).json()
+        self.assertEqual(body["count"], 5)
+        marked = [i for i in body["items"] if i["topic"] is not None]
+        self.assertEqual(len(marked), self._card("甲")["n"])
+        topics = {i["id"]: i["topic"] for i in body["items"]}
+        self.assertIsNone(topics[self.unclassified.bill_no])
+        self.assertEqual(topics[self.classified[1].bill_no], {"key": "welfare", "label": "衛生福利"})
+        self.assertEqual(body["bill_classifier"]["name"], BILL_MODEL)
+        self.assertEqual(body["bill_classifier"]["accuracy"], 0.9)
+
+    def test_only_the_proposal_list_is_marked(self):
+        body = self._proposed("乙", kind="cosigned")
+        self.assertEqual(body["count"], 1)
+        self.assertEqual(({i["topic"] for i in body["items"]}, body["bill_classifier"]), ({None}, None))
+
+    def test_marks_need_only_the_bill_gate(self):
+        TopicEvaluation.objects.all().delete()
+        self.assertIsNone(self._card("甲"))
+        body = self._proposed("甲")
+        self.assertEqual(sum(1 for i in body["items"] if i["topic"]), 4)
+        BillTopicEvaluation.objects.all().delete()
+        body = self._proposed("甲")
+        self.assertEqual(({i["topic"] for i in body["items"]}, body["bill_classifier"]), ({None}, None))
+
+    def test_no_card_without_both_gates_even_before_the_recompute(self):
+        BillTopicEvaluation.objects.all().delete()
+        self.assertIsNone(self._card("甲"))
+        _bill_gate()
+        self.assertIsNotNone(self._card("甲"))
+        TopicEvaluation.objects.all().delete()
+        self.assertIsNone(self._card("甲"))
+
+    def test_rows_from_other_versions_are_not_shown(self):
+        """攔的錯：上線的分類器換了、重算還沒跑（或失敗），舊版本算的一致率不能掛上新版本的名字。"""
+        _bill_gate("new-model#topic-v2", day=2)
+        self.assertIsNone(self._card("甲"))
+        compute_profiles()
+        # 新版本還沒分任何議案：算過、是空的
+        card = self._card("甲")
+        self.assertEqual((card["value"], card["n"]), (None, 0))
+        self.assertEqual(self._proposed("甲")["bill_classifier"]["name"], "new-model#topic-v2")
+        self.assertEqual(sum(1 for i in self._proposed("甲")["items"] if i["topic"]), 0)
+        # 質詢那一邊換了版本也一樣
+        _speech_gate("new-speech#topic-v2", day=2)
+        self.assertIsNone(self._card("甲"))
+
+    def test_a_stamp_with_only_one_matching_classifier_is_not_enough(self):
+        ProfileStat.objects.filter(indicator="proposal_alignment").update(
+            classifier=f"{BILL_MODEL}｜other#topic-v9")
+        self.assertIsNone(self._card("甲"))
+        ProfileStat.objects.filter(indicator="proposal_alignment").update(classifier=BILL_MODEL)
+        self.assertIsNone(self._card("甲"))
+        ProfileStat.objects.filter(indicator="proposal_alignment").update(classifier=STAMP)
+        self.assertIsNotNone(self._card("甲"))
