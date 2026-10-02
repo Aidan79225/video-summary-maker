@@ -99,6 +99,9 @@ const stateLabel = (key: string) => FOLLOWUP_STATES.find((s) => s.key === key)?.
 <div class="prose-cn">
   <ul class={cls.list}>
     <li>
+      講者自己沒定的範圍（「一兩個月內」「1 到 2 個月內」「三至六個月內」「2～3 週內」）、寫的是年份的「115 年內」「2026 年內」、沒有確定哪一天的「下個月初」「下個月中旬」，都換算不出日期：替講者挑一個日子，就等於替他定了期限。
+    </li>
+    <li>
       換算不出日期的要求<strong class={cls.term}>不算進追問率，也不進待追蹤清單</strong>：沒有到期日，就無從判斷「期限過了沒」。側寫上會另外寫「另有幾項要求的期限寫法換算不出日期」。
     </li>
     <li>
@@ -118,7 +121,7 @@ const stateLabel = (key: string) => FOLLOWUP_STATES.find((s) => s.key === key)?.
   <p class="mt-3">候選報導可能很多，不會每一篇都送給模型。程式先篩一次：</p>
   <ul class={cls.list}>
     <li>
-      把要求的文字，跟候選報導的一句話、各段小標與它自己提出的要求，各自切成<strong class={cls.term}>雙字組</strong>——每兩個相鄰的字算一組，例如「交機時程」切成「交機」「機時」「時程」——數兩邊共有幾組。到處都會出現的常用組合（停用字）不算。
+      把要求的文字，跟候選報導的一句話、各段小標與它自己提出的要求，各自切成<strong class={cls.term}>雙字組</strong>——每兩個相鄰的字算一組，例如「交機時程」切成「交機」「機時」「時程」——數兩邊共有幾組；「TPASS」「ECFA」這種英文縮寫整個算一組，全形半形、大小寫不分。到處都會出現的常用組合（停用字）不算。
     </li>
     <li>
       取共有最多的<strong class={cls.term}>前 {FOLLOWUP_TOP_CANDIDATES} 篇</strong>，而且至少要共有 1 組；一組都沒有共有的報導，不會送去判斷。
@@ -141,7 +144,7 @@ const stateLabel = (key: string) => FOLLOWUP_STATES.find((s) => s.key === key)?.
 <div class="prose-cn">
   <ul class={cls.list}>
     <li>
-      「最相關的一段」由程式挑：逐字稿裡跟要求共有最多雙字組的那一段，最多 {FOLLOWUP_EXCERPT_MAX_CHARS} 字。
+      「最相關的一段」由程式挑：逐字稿裡跟要求共有最多雙字組（跟篩選同一套，英文縮寫也算）的那一段，最多 {FOLLOWUP_EXCERPT_MAX_CHARS} 字。
     </li>
     <li>
       模型只回答兩件事：<strong class={cls.term}>有沒有再提</strong>（是或否），以及<strong class={cls.term}
@@ -165,7 +168,7 @@ const stateLabel = (key: string) => FOLLOWUP_STATES.find((s) => s.key === key)?.
   </ul>
 </div>
 
-<h4 id="profile-followups-states" class={cls.h4}>四種狀態</h4>
+<h4 id="profile-followups-states" class={cls.h4}>狀態</h4>
 <div class="prose-cn mt-2">
   <p>每一項要求的狀態，在每天重算側寫時依日期決定：</p>
 </div>
@@ -199,9 +202,12 @@ const stateLabel = (key: string) => FOLLOWUP_STATES.find((s) => s.key === key)?.
       觀察期是到期日之後的 {FOLLOWUP_WATCH_DAYS} 天：要給議會開會、排到質詢的時間，議會休會時可能好幾個月都沒有質詢。
     </li>
     <li>
-      日期的界線：到期日當天還是「{stateLabel('pending')}」，隔天起是「{stateLabel('watching')}」；到期日後第 {FOLLOWUP_WATCH_DAYS} 天是觀察期的最後一天，過了那一天還沒找到再提，就是「{stateLabel('not_followed')}」。觀察期結束後，要等那一晚的判斷把候選報導都看過，才改成「{stateLabel('not_followed')}」，在那之前仍是「{stateLabel('watching')}」。
+      日期的界線：到期日當天還是「{stateLabel('pending')}」，隔天起是「{stateLabel('watching')}」；到期日後第 {FOLLOWUP_WATCH_DAYS} 天是觀察期的最後一天，過了那一天還沒找到再提，就是「{stateLabel('not_followed')}」。觀察期結束後，要等那一晚的判斷把候選報導都看過，才改成「{stateLabel('not_followed')}」，在那之前仍是「{stateLabel('watching')}」。他在觀察期裡還有質詢影片沒做成報導（還在排隊、正在處理，或失敗了但還會重試）的話，也要等那幾篇做完、判斷過才算：做完的那一篇可能就是再提的那一次。
     </li>
     <li>找到再提的報導，不管是在期限前、期限後還是觀察期快結束時，都是「{stateLabel('followed')}」。</li>
+    <li>
+      有一篇候選報導連續兩次判斷失敗（例如模型的輸出格式壞掉，或等太久沒有結果），就先跳過它，不讓它每晚卡住其他要求的判斷。少判了一篇，就不能說他沒追：這一項會停在「{stateLabel('watching')}」，直到別篇判出他再提了。
+    </li>
   </ul>
 </div>
 
@@ -217,13 +223,13 @@ const stateLabel = (key: string) => FOLLOWUP_STATES.find((s) => s.key === key)?.
 <div class="prose-cn">
   <ul class={cls.list}>
     <li>
-      「{stateLabel('watching')}」「{stateLabel('pending')}」還沒有結果，不算進分母；所以會期剛結束時，追問率的 n 通常很小，之後才慢慢補齊。
+      「{stateLabel('watching')}」「{stateLabel('pending')}」「{stateLabel('rejudging')}」還沒有結果，不算進分母；所以會期剛結束時，追問率的 n 通常很小，之後才慢慢補齊。
     </li>
     <li>
       n 是分母（已追問 ＋ 未追問的項數）。n 不到 5 時不跟別人比，只顯示原始的值（見「最小樣本」）；同儕是母體中這一項 n 至少 5 的人（見「百分位」）。
     </li>
     <li>
-      追問率底下的「看這 n 項（已追問、未追問）」連到側寫裡的追問清單。清單依序分成已追問、未追問、觀察中、待追蹤四組，前兩組加起來就是分母的那 n 項；每一項都有出處報導的連結。
+      追問率底下的「看這 n 項（已追問、未追問）」連到側寫裡的追問清單。清單依序分成已追問、未追問、觀察中、待追蹤幾組（換了判斷器之後的一段時間還會有「{stateLabel('rejudging')}」），前兩組加起來就是分母的那 n 項；每一項都有出處報導的連結。
     </li>
     <li>追問率高不代表比較好：官員已經照辦的事，本來就不必再問。側寫只描述，不評價。</li>
   </ul>
@@ -257,6 +263,9 @@ const stateLabel = (key: string) => FOLLOWUP_STATES.find((s) => s.key === key)?.
     </li>
     <li>
       每個判斷器只看<strong class={cls.term}>它自己最近一次</strong>的評估：以前通過過、但在更多標註上重新評估沒通過，就下架。舊判斷器判過的要求，要用正在用的判斷器重新判斷之後才算數，所以頁面上寫的準確率，永遠是判出這些結果的那個判斷器的準確率。
+    </li>
+    <li>
+      <strong class={cls.term}>換了判斷器之後</strong>：舊判斷器判過的要求列在「{stateLabel('rejudging')}」，每晚在判斷的數量上限內、從最早提出的開始，用現在的判斷器重新判斷。一個人還有「{stateLabel('rejudging')}」的要求時，<strong class={cls.term}>先不顯示他的追問率</strong>：舊判斷器找到的再提不算、新的又還沒判到，只用判完的那幾項算，比率會偏低，而且看不出來。
     </li>
     <li>
       <strong class={cls.term}>還沒通過時</strong>：側寫上不顯示追問率，追問清單只列「{stateLabel('pending')}」——還沒到期的要求不需要模型判斷，讀者可以自己盯——並寫明比率要等人工驗證。期限換算不出來的項數照常列出。

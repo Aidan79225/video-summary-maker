@@ -210,6 +210,7 @@ export const BALLOT_LABEL: Record<Ballot, string> = { yes: '贊成', no: '反對
 const REASON_TEXT = new Map<string, string>([
   ['no_committee_data', '沒有他這個會期的委員會資料'],
   ['no_caucus', '沒有參加黨團'],
+  ['rejudging', '換了判斷器，他的要求正在重新判斷，判完才算'],
 ]);
 
 export function reasonText(reason: string | null | undefined): string {

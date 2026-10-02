@@ -40,6 +40,7 @@ class Migration(migrations.Migration):
                 ('quote', models.TextField(blank=True)),
                 ('classifier', models.CharField(blank=True, db_index=True, max_length=200)),
                 ('checked', models.JSONField(blank=True, default=list)),
+                ('failures', models.JSONField(blank=True, default=dict)),
                 ('checked_at', models.DateTimeField(blank=True, null=True)),
                 ('article', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='followups', to='articles.article')),
                 ('followed_by', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='follow_up_of', to='articles.article')),

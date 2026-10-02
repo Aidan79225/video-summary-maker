@@ -438,6 +438,9 @@ class FollowUp(models.Model):
     classifier = models.CharField(max_length=200, blank=True, db_index=True)
     # 判斷過的候選文章 id：每一對只判斷一次
     checked = models.JSONField(default=list, blank=True)
+    # 每一對判斷失敗的次數：{"候選文章 id": 次數}。失敗過的排在新的後面，失敗 2 次就跳過，
+    # 一對一直失敗的不會每晚卡住整個佇列；有跳過的對，這一項就不能算未追問（沒看完不能說沒有）
+    failures = models.JSONField(default=dict, blank=True)
     # 上一次確認「所有候選都判斷過了」的時間；還有候選沒判斷就是 null。未追問要靠觀察期結束
     # **之後**的確認：還沒看完不能說沒有
     checked_at = models.DateTimeField(null=True, blank=True)

@@ -401,6 +401,9 @@ function normalizeIndicator(raw: unknown): ProfileIndicator | null {
   // 樣本不足、同儕不足、沒有值，都不給百分位。後端本來就回 null，這裡再擋一次：
   // 「最小樣本」與「同儕至少幾人」是側寫的底線，不該只靠一邊守。
   const comparable = sampleOk && value !== null && peers >= MIN_PEERS && percentile !== null;
+  // 沒有值的原因要帶過來，頁面才寫得出是哪一種「沒有」（沒有委員會資料、換判斷器待重判），
+  // 而不是一律寫成樣本不足
+  const reason = str(o.reason).trim();
   return {
     key,
     label,
@@ -412,8 +415,8 @@ function normalizeIndicator(raw: unknown): ProfileIndicator | null {
     peers,
     sample_ok: sampleOk,
     evidence_url: str(o.evidence_url),
-    // 「沒有值」的原因（沒有委員會資料、沒有參加黨團）：丟掉的話頁面只能寫成樣本不足
-    ...(str(o.reason) ? { reason: str(o.reason) } : {}),
+    // 「沒有值」的原因（沒有委員會資料、沒有參加黨團、換了判斷器正在重判）：丟掉的話頁面只能寫成樣本不足
+    ...(reason ? { reason } : {}),
   };
 }
 

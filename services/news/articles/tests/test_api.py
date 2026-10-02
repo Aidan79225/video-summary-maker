@@ -13,8 +13,8 @@ from django.test import TestCase, override_settings
 from django.utils import timezone
 
 from articles.ingest import save_result
-from articles.models import (Article, ArticleStatus, Membership, Person, ProfileStat, Session, Topic,
-                             TopicEvaluation)
+from articles.models import (Article, ArticleStatus, FollowUp, Membership, Person, ProfileStat, Session,
+                             Topic, TopicEvaluation)
 from articles.profiles import assign_sessions, compute_profiles
 
 MEDIA = tempfile.mkdtemp(prefix="news_api_media_")
@@ -890,14 +890,14 @@ class FollowupProfileApiTests(TestCase):
         _judge("other#followup-v0#x")       # 通過的是別的判斷器：這些要求的判斷都不算數
         compute_profiles()
         block = self._block()
-        # 到期的等上線的判斷器看（觀察中），不從清單上消失；舊版本判的已追問、未追問都不給
+        # 都等上線的判斷器重判（待重判），不從清單上消失；舊版本判的已追問、未追問都不給
         self.assertEqual([(a["request"], a["state"]) for a in block["asks"]],
-                         [("未追問的要求", "watching"), ("觀察中的要求", "watching"),
-                          ("今天到期的要求", "pending"), ("待追蹤的要求", "pending"),
-                          ("已追問的要求", "pending")])
-        # 有通過的判斷器就有比率；只是他的要求沒有一項是它判的，分母是 0
+                         [("未追問的要求", "rejudging"), ("觀察中的要求", "rejudging"),
+                          ("今天到期的要求", "rejudging"), ("待追蹤的要求", "rejudging"),
+                          ("已追問的要求", "rejudging")])
+        self.assertEqual({(a["followed_by"], a["quote"]) for a in block["asks"]}, {(None, "")})
         rate, = block["indicators"]
-        self.assertEqual((rate["value"], rate["n"]), (None, 0))
+        self.assertEqual((rate["value"], rate["n"], rate["reason"]), (None, 0, "rejudging"))
         self.assertEqual(block["judge"]["name"], "other#followup-v0#x")
         self.assertNotIn("清冊還沒給", str(block))
 
@@ -929,15 +929,40 @@ class FollowupProfileApiTests(TestCase):
                          f"/speaker/%E7%8E%8B%E7%AB%8B?source=ly&session={self.s5.id}#followups")
 
     def test_the_rate_waits_for_a_recompute_with_the_live_judge(self):
-        """評估剛換版本、側寫還沒重算：清單用新的判斷器，比率不給（舊版本的數字不掛新版本的名字）。"""
+        """評估剛換版本、側寫還沒重算：舊版本的數字不掛新版本的名字。"""
         _judge()
         compute_profiles()
+        FollowUp.objects.update(classifier="")      # 都是程式篩出來的（不必重判），只差側寫還沒重算
         _judge("new#followup-v2#y")
         block = self._block()
         self.assertEqual(block["indicators"], [])
         self.assertEqual(block["judge"]["name"], "new#followup-v2#y")
-        self.assertEqual({a["state"] for a in block["asks"]}, {"pending", "watching"})
+
+    def test_after_a_judge_switch_the_rate_is_withheld_until_his_requests_are_rejudged(self):
+        """攔的 bug：新的判斷器通過、側寫重算之後，比率只用新判斷器判完的那幾項算——舊版本找到的
+        追問都變成「觀察中」、不在分子裡，追問率掉到 0%，看起來像真的。"""
+        _judge()
+        FollowUp.objects.filter(pk=self.not_followed.pk).update(classifier="")   # 沒有候選：不必重判
+        _judge("new#followup-v2#y")
+        compute_profiles()
+        block = self._block()
+        rate, = block["indicators"]
+        self.assertEqual((rate["key"], rate["value"], rate["n"], rate["percentile"], rate["reason"]),
+                         ("followup_rate", None, 0, None, "rejudging"))
+        self.assertEqual(rate["evidence_url"],
+                         f"/speaker/%E7%8E%8B%E7%AB%8B?source=ly&session={self.s5.id}#followups")
+        states = {a["request"]: a["state"] for a in block["asks"]}
+        self.assertEqual(states["已追問的要求"], "rejudging")
+        self.assertEqual(states["未追問的要求"], "not_followed")
         self.assertNotIn("清冊還沒給", str(block))
+        stat = ProfileStat.objects.get(person_id=self.m["王立"].person_id, session=self.s5,
+                                       indicator="followup_rate")
+        self.assertEqual((stat.value, stat.n, stat.percentile), (None, 0, None))
+        # 重判完（都出自新的判斷器）就照常給
+        FollowUp.objects.exclude(classifier="").update(classifier="new#followup-v2#y")
+        compute_profiles()
+        rate, = self._block()["indicators"]
+        self.assertEqual((rate["value"], rate["n"], rate.get("reason", "")), (50.0, 2, ""))
 
     def test_only_requests_whose_articles_have_a_page(self):
         _judge()

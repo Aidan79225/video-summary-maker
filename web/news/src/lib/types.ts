@@ -133,8 +133,9 @@ export type ProfileIndicator = {
   /** 網站的相對路徑，點進去就是算這個數字用的那幾篇 */
   evidence_url: string;
   /**
-   * 沒有值的原因；'no_committee_data'＝有分類過的報導，但沒有他這個會期的委員會資料；
-   * 'no_caucus'＝他那個會期沒有參加黨團（院內紀錄的黨團一致率與跨黨投票）
+   * 沒有值的原因：'no_committee_data'＝有分類過的報導，但沒有他這個會期的委員會資料；
+   * 'no_caucus'＝他那個會期沒有參加黨團（院內紀錄的黨團一致率與跨黨投票）；
+   * 'rejudging'＝追問率：換了判斷器，他還有要求是舊的判斷器判的，重新判斷完之前不給
    */
   reason?: string;
 };
@@ -168,8 +169,9 @@ export type TopicClassifier = {
  * - not_followed：觀察期結束，沒有再提
  * - watching：已經到期，還在觀察期內，還沒找到再提
  * - pending：還沒到期，也還沒找到再提
+ * - rejudging：換了判斷器，這一項還是舊的判斷器判的，等現在的判斷器重新判斷
  */
-export type FollowupState = 'followed' | 'not_followed' | 'watching' | 'pending';
+export type FollowupState = 'followed' | 'not_followed' | 'watching' | 'rejudging' | 'pending';
 
 /** 追問清單裡指到的一篇報導（都有頁面：後端只給 READY 的） */
 export type FollowupArticle = {
@@ -218,7 +220,7 @@ export type ProfileBlock = {
   classifier?: TopicClassifier;
   /**
    * 只有追問（key「followup」）有：這個會期他提出、期限換算得出來的要求，依到期日排序。
-   * 判斷器沒通過評估時只剩 pending——其他三種狀態要靠模型判斷。
+   * 判斷器沒通過評估時只剩 pending——其他狀態要靠模型判斷。
    */
   asks?: FollowupAsk[];
   /** 只有追問有：期限寫法換算不出日期、因此不列入的要求項數 */

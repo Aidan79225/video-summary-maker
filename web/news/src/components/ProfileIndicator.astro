@@ -28,8 +28,8 @@ interface Props {
 const { indicator: ind, minSample, evidenceLabel: labelOverride, emptyNote } = Astro.props;
 
 const hasValue = ind.value !== null;
-// 委員會職掌沒有值的時候，常常不是樣本不足，而是沒有他這個會期的委員會資料：照實說。
-// 院內紀錄的黨團一致率、跨黨投票也一樣：他沒有參加黨團，不是票太少
+// 值是空的原因（後端給）：委員會職掌或委員會出席率沒有委員會資料、黨團一致率與跨黨投票沒有參加
+// 黨團、追問率換了判斷器正在重判——都不是樣本不足，照實說
 const reasonText = reasonTextOf(ind.reason);
 const pct = ind.percentile;
 // 頁面四捨五入到整數；長條的位置用原值，兩個同儕在 63.5 與 64.4 時記號不會疊在一起

@@ -145,9 +145,11 @@ class IndicatorOut(Schema):
     sample_ok: bool
     # 網站的相對路徑：點進去就是算出這個數字的那幾篇
     evidence_url: str
-    # 沒有值時的原因（委員會職掌：「no_committee_data」＝有分類過的報導、但沒有他這個會期的委員會
-    # 資料；委員會出席率：同一個「no_committee_data」＝名冊上沒有他這個會期的委員會；黨團一致率與
-    # 跨黨投票：「no_caucus」＝沒有參加黨團）。頁面用它說清楚是哪一種「沒有」，而不是一律寫樣本不足
+    # 沒有值時的原因。頁面用它說清楚是哪一種「沒有」，而不是一律寫樣本不足：
+    # 「no_committee_data」＝委員會職掌：有分類過的報導、但沒有他這個會期的委員會資料；委員會出席率：
+    #   名冊上沒有他這個會期的委員會；
+    # 「no_caucus」＝黨團一致率與跨黨投票：沒有參加黨團；
+    # 「rejudging」＝追問率：換了判斷器，他還有要求是舊的判斷器判的，重判完之前不給
     reason: str = ""
 
 
@@ -198,7 +200,8 @@ class FollowupAskOut(Schema):
     deadline: str
     # 程式換算出來的到期日（換不出來的不在清單裡，只算進 unparsed）
     due_date: date_type
-    state: Literal["pending", "watching", "followed", "not_followed"]
+    # rejudging（待重判）：換了判斷器，這一項還是舊的判斷器判的，等每晚的判斷重判
+    state: Literal["pending", "watching", "followed", "not_followed", "rejudging"]
     # 已追問時是追問的那篇，其餘是 null
     followed_by: ArticleRefOut | None
     # 已追問時是模型的引用（已通過落地檢查：在 followed_by 的逐字稿裡），其餘是空字串
@@ -206,7 +209,10 @@ class FollowupAskOut(Schema):
 
 
 class FollowupBlockOut(BlockOut):
-    """追問：永遠出現（清單不靠模型）。判斷器沒通過時 indicators 是空的、asks 只有 pending。"""
+    """追問：永遠出現（清單不靠模型）。判斷器沒通過時 indicators 是空的、asks 只有 pending。
+
+    他有待重判的要求時，追問率照樣給一項，但 value 是 null、reason 是「rejudging」。
+    """
 
     asks: list[FollowupAskOut]
     # 期限寫法無法換算的要求數
@@ -637,14 +643,22 @@ def _followup_block(mine: dict[str, ProfileStat], name: str, session: Session) -
 
     追問率還要是現在上線的判斷器算的（ProfileStat.classifier）：評估剛換版本、側寫還沒重算的
     空窗裡，不把舊版本的數字掛上新版本的名字。
+
+    他有待重判的要求（舊的判斷器判的）時不給值，reason 寫「rejudging」：只用新的判斷器判完的
+    那幾項算，舊版本找到的追問都不在分子裡，比率會掉到 0%。這裡看的是當下的清單，不靠側寫
+    重算過沒有——換判斷器之後到重算之前的空窗也擋得住。
     """
     evaluation = followups.passing_evaluation()
     judge = evaluation.classifier if evaluation else None
     stat = mine.get(profiles.FOLLOWUP_RATE.key)
-    indicators = []
-    if judge is not None and stat is not None and stat.classifier == judge:
-        indicators.append(_indicator_out(stat, profiles.FOLLOWUP_RATE, name, session))
     asks, unparsed = followups.profile_asks(name, session, judge, timezone.localdate())
+    indicators = []
+    if judge is not None and any(a["state"] == followups.FollowUpState.REJUDGING for a in asks):
+        withheld = _indicator_out(None, profiles.FOLLOWUP_RATE, name, session)
+        withheld["reason"] = "rejudging"
+        indicators.append(withheld)
+    elif judge is not None and stat is not None and stat.classifier == judge:
+        indicators.append(_indicator_out(stat, profiles.FOLLOWUP_RATE, name, session))
     return {
         "key": profiles.FOLLOWUP_BLOCK,
         "title": profiles.BLOCK_TITLES[profiles.FOLLOWUP_BLOCK],
