@@ -2,15 +2,18 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 
 import pytest
 
 from slidebox.domain.entities import TopicLabel
 from slidebox.domain.errors import SummarizerOutputInvalid
+from slidebox.usecases import topics
 from slidebox.usecases.topics import (
     PROMPT_VERSION,
     classifier_name,
     parse_topic_response,
+    prompt_fingerprint,
     topic_schema,
     topic_system_prompt,
     topic_user_prompt,
@@ -101,6 +104,16 @@ def test_surrounding_whitespace_in_a_name_is_tolerated():
     assert parse_topic_response(_reply(" 衛生福利 ", None), LABELS) == ("welfare", None)
 
 
+@pytest.mark.parametrize("missing", [None, "", "  "])
+def test_a_null_or_blank_answer_never_matches_a_blank_label(missing):
+    """攔的 bug：名稱與回應都先去掉空白再比，清單裡要是有只有空白的名稱，模型回
+    null（或漏寫）就會被對成那個領域。API 擋掉了這種清單，這裡再擋一次。"""
+    blank = (*LABELS, TopicLabel("blank", "  "))
+    assert parse_topic_response(_reply("國防外交", missing), blank) == ("defense", None)
+    with pytest.raises(SummarizerOutputInvalid):
+        parse_topic_response(_reply(missing), blank)
+
+
 # --- 提示詞 ---
 
 
@@ -138,7 +151,41 @@ def test_the_text_to_classify_reaches_the_user_message():
 # --- 分類器名稱 ---
 
 
-def test_the_classifier_name_carries_the_model_and_the_prompt_version():
+def test_the_classifier_name_carries_the_model_the_prompt_version_and_a_fingerprint():
     """新聞服務靠這串分辨不同版本分出來的結果：換模型或改提示詞都要變。"""
     assert PROMPT_VERSION == "topic-v1"
-    assert classifier_name("qwen3.5:9b") == "qwen3.5:9b#topic-v1"
+    name = classifier_name("qwen3.5:9b", LABELS)
+    assert name == f"qwen3.5:9b#topic-v1#{prompt_fingerprint(LABELS)}"
+    assert len(prompt_fingerprint(LABELS)) == 8
+
+
+def test_the_same_labels_always_give_the_same_name():
+    """每晚分類與評估各自送一次清單；同一份清單必須得到同一個名稱，評估通過的
+    版本才對得上每晚分出來的 Topic。"""
+    copy = tuple(TopicLabel(label.key, label.label, label.description) for label in LABELS)
+    assert classifier_name("qwen3.5:9b", copy) == classifier_name("qwen3.5:9b", LABELS)
+
+
+def test_a_different_model_is_a_different_classifier():
+    assert classifier_name("llama3", LABELS) != classifier_name("qwen3.5:9b", LABELS)
+
+
+@pytest.mark.parametrize("change", [
+    lambda labels: (replace(labels[0], description="國防、軍事"), *labels[1:]),
+    lambda labels: (replace(labels[0], label="國防與外交"), *labels[1:]),
+    lambda labels: (replace(labels[0], key="military"), *labels[1:]),
+    lambda labels: tuple(reversed(labels)),
+    lambda labels: labels[:-1],
+])
+def test_editing_the_label_list_on_the_news_side_is_a_different_classifier(change):
+    """攔的 bug：領域的名稱與說明就是提示詞的一部分，但清單在新聞服務那邊改、
+    PROMPT_VERSION 在這邊，沒有人會記得來升版。名稱不變的話，舊的評估會被當成
+    新提示詞的評估，沒評估過的分類就上了網站。"""
+    assert classifier_name("qwen3.5:9b", change(LABELS)) != classifier_name("qwen3.5:9b", LABELS)
+
+
+def test_editing_the_prompt_template_is_a_different_classifier(monkeypatch):
+    """改了提示詞範本卻忘了升 PROMPT_VERSION，名稱也要變。"""
+    before = classifier_name("qwen3.5:9b", LABELS)
+    monkeypatch.setattr(topics, "_SYSTEM", topics._SYSTEM + "\n- 寧可選地方建設／其他。\n")
+    assert classifier_name("qwen3.5:9b", LABELS) != before

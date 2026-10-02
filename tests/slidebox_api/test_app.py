@@ -299,6 +299,16 @@ def test_a_label_without_a_key_or_a_name_is_refused(kit):
     assert client.post("/jobs", json=_topic(labels=no_name)).status_code == 422
 
 
+def test_a_label_whose_key_or_name_is_only_whitespace_is_refused(kit):
+    """攔的 bug：min_length 只看長度，"  " 會過。只有空白的名稱去掉空白就是空的，
+    對回代碼時會跟「模型回 null」混在一起；只有空白的 key 存進資料庫也認不出來。"""
+    client, *_ = kit
+    blank_key = [{"key": "  ", "label": "甲"}, {"key": "b", "label": "乙"}]
+    blank_name = [{"key": "a", "label": " \n"}, {"key": "b", "label": "乙"}]
+    assert client.post("/jobs", json=_topic(labels=blank_key)).status_code == 422
+    assert client.post("/jobs", json=_topic(labels=blank_name)).status_code == 422
+
+
 @pytest.mark.parametrize("body", [{}, {"kind": "deck"}, {"kind": "deck", "text": TEXT,
                                                         "labels": LABELS}])
 def test_a_deck_job_still_requires_a_url(kit, body):

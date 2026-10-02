@@ -198,6 +198,11 @@ def _validate_topic(request: JobRequest) -> None:
         raise HTTPException(
             status_code=422,
             detail=f"labels 必須有 {MIN_TOPIC_LABELS}～{MAX_TOPIC_LABELS} 個")
+    # min_length 只看長度，"  " 會過。只有空白的名稱去掉空白就是空的，對回
+    # 代碼時會跟「模型回 null」混在一起；只有空白的 key 存進資料庫也認不出是
+    # 哪個領域。
+    if any(not item.key.strip() or not item.label.strip() for item in labels):
+        raise HTTPException(status_code=422, detail="labels 的 key 與名稱不可空白")
     if _has_duplicates(item.key for item in labels):
         raise HTTPException(status_code=422, detail="labels 的 key 不可重複")
     # 模型選的是名稱，再由名稱對回 key：名稱重複就對不回唯一的 key。

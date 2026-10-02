@@ -42,7 +42,7 @@
 - 跟摘要工作排同一個佇列、同一個工作執行緒（一次只跑一個，避免搶 Ollama）。
 - 呼叫 Ollama `/api/chat`，`format` 用 JSON schema：`primary` 的 enum 是各領域的**名稱**，`secondary` 是名稱或 null。溫度 0。名稱再對回 key。
 - 提示詞重點：依「這段質詢主要在問什麼」選一個主領域；只有第二個領域占了相當篇幅才填次領域，否則 null；次領域不能跟主領域相同（相同就當成 null）。
-- 成品：`{"primary": key, "secondary": key|null, "classifier": "<模型名稱>#topic-v1"}`。`topic-v1` 是提示詞版本，改提示詞就要升版。
+- 成品：`{"primary": key, "secondary": key|null, "classifier": "<模型名稱>#topic-v1#<提示指紋>"}`。`topic-v1` 是提示詞版本，改提示詞就要升版。提示指紋是模型實際看到的提示（範本、領域名稱與說明、schema）加上代碼的雜湊前 8 碼：領域清單在新聞服務改，沒人會記得來 GPU 端升版，所以改清單也要自動變成不同的分類器。
 - 解析失敗、主領域不在清單裡：工作失敗（不猜）。
 
 ## 新聞服務

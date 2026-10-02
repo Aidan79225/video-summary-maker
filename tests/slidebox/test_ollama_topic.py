@@ -8,7 +8,7 @@ import pytest
 from slidebox.domain.entities import TopicLabel, TopicResult
 from slidebox.domain.errors import OperationCancelled, SummarizerOutputInvalid
 from slidebox.infrastructure import ollama_summarizer as mod
-from slidebox.usecases.topics import topic_schema
+from slidebox.usecases.topics import classifier_name, topic_schema
 
 LABELS = (
     TopicLabel("defense", "國防外交", "國防、軍事、外交、兩岸、僑務"),
@@ -66,7 +66,13 @@ def _classify(model="qwen3.5:9b", is_cancelled=None, num_ctx=32768):
 
 
 def test_the_result_maps_names_back_to_keys_and_names_the_classifier(sent):
-    assert _classify() == TopicResult("welfare", "defense", "qwen3.5:9b#topic-v1")
+    assert _classify() == TopicResult("welfare", "defense",
+                                      classifier_name("qwen3.5:9b", LABELS))
+
+
+def test_the_classifier_name_is_the_model_that_actually_ran(sent):
+    """名稱跟著這次真的用的模型走：評估通過的是哪個模型，就只有它分的算數。"""
+    assert _classify(model="llama3").classifier.startswith("llama3#topic-v1#")
 
 
 def test_the_request_goes_to_the_chat_endpoint_of_the_configured_model(sent):

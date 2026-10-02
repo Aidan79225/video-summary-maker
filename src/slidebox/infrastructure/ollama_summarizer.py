@@ -452,6 +452,9 @@ class OllamaTopicClassifier:
 
     解析失敗或主領域不在清單裡就讓工作失敗，不重試：schema 已經用 enum
     把答案鎖在清單裡，溫度又是 0，同一段文字重送只會得到同一個答案。
+
+    分類器名稱的指紋只涵蓋提示與 schema；下面 think、temperature 這類設定改了，
+    要手動升 usecases/topics.py 的 PROMPT_VERSION，否則舊的評估會被當成新設定的。
     """
 
     def __init__(self, host: str, model: str, num_ctx: int, timeout: float = 180.0):
@@ -489,7 +492,7 @@ class OllamaTopicClassifier:
                              "分類議題中")
         primary, secondary = parse_topic_response(reply, labels)
         return TopicResult(primary=primary, secondary=secondary,
-                           classifier=classifier_name(self._model))
+                           classifier=classifier_name(self._model, labels))
 
 
 class OllamaModelCatalog:
