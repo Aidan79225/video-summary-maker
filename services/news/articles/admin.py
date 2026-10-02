@@ -1,8 +1,14 @@
 from __future__ import annotations
 
+from django import forms
 from django.contrib import admin, messages
+from django.urls import reverse
+from django.utils import timezone
+from django.utils.html import format_html
 
-from .models import Article, ArticleStatus, Membership, Person, ProfileStat, Session, Slide
+from . import topics
+from .models import (Article, ArticleStatus, Membership, Person, ProfileStat, Session, Slide, Topic,
+                     TopicEvaluation, TopicLabel)
 
 
 class SlideInline(admin.TabularInline):
@@ -132,3 +138,131 @@ class ProfileStatAdmin(admin.ModelAdmin):
 
     def has_change_permission(self, request, obj=None) -> bool:
         return False
+
+
+# --- 議題分布 ---
+
+
+class TopicLabelForm(forms.ModelForm):
+    """主領域用下拉選單選，選項來自 topics.TOPICS（唯一的來源）；空的就是還沒標。"""
+
+    primary = forms.ChoiceField(label="主領域", required=False,
+                                choices=[("", "（還沒標）"), *topics.TOPIC_CHOICES])
+
+    class Meta:
+        model = TopicLabel
+        fields = ("primary", "note")
+
+
+class LabelledFilter(admin.SimpleListFilter):
+    title = "標註狀態"
+    parameter_name = "labelled"
+
+    def lookups(self, request, model_admin):
+        return (("no", "還沒標"), ("yes", "已標"))
+
+    def queryset(self, request, queryset):
+        if self.value() == "no":
+            return queryset.filter(primary="")
+        if self.value() == "yes":
+            return queryset.exclude(primary="")
+        return queryset
+
+
+@admin.register(TopicLabel)
+class TopicLabelAdmin(admin.ModelAdmin):
+    """議題標註：盲標。清單上直接顯示分類器讀到的那段文字，主領域在清單上直接選。
+
+    **不要在這裡（或 ArticleAdmin）加任何 Topic 的欄位、篩選或搜尋**：看得到模型的答案，人就會
+    跟著它標，評估量到的就變成「模型跟自己有多像」。
+
+    不能在這裡新增：標註集要用 sample_topic_labels 隨機抽，人手挑的文章會偏向好分的。
+    """
+
+    form = TopicLabelForm
+    list_display = ("article_link", "source", "classifier_text", "primary", "note", "labeled_at")
+    # 文章欄是連到文章本身的連結，不是這一筆的編輯頁：標註就在清單上做
+    list_display_links = None
+    list_editable = ("primary", "note")
+    list_filter = (LabelledFilter, "article__source")
+    search_fields = ("article__speaker", "article__ivod_id")
+    list_per_page = 20
+    fields = ("article_link", "classifier_text", "primary", "note", "labeled_at")
+    readonly_fields = ("article_link", "classifier_text", "labeled_at")
+
+    def get_queryset(self, request):
+        return (super().get_queryset(request).select_related("article")
+                .prefetch_related("article__slides"))
+
+    def get_changelist_form(self, request, **kwargs):
+        # 清單上的表單預設不用 self.form；不指定的話主領域會變成沒有選項的文字框
+        kwargs.setdefault("form", TopicLabelForm)
+        return super().get_changelist_form(request, **kwargs)
+
+    def has_add_permission(self, request) -> bool:
+        return False
+
+    def save_model(self, request, obj, form, change):
+        if "primary" in form.changed_data:
+            obj.labeled_at = timezone.now() if obj.primary else None
+        super().save_model(request, obj, form, change)
+
+    @admin.display(description="文章")
+    def article_link(self, label: TopicLabel):
+        article = label.article
+        return format_html('<a href="{}">{} {}</a><br><a href="{}" target="_blank" rel="noopener">原始影片</a>',
+                           reverse("admin:articles_article_change", args=[article.pk]),
+                           article.date, article.speaker, article.ivod_url)
+
+    @admin.display(description="來源", ordering="article__source")
+    def source(self, label: TopicLabel) -> str:
+        return label.article.get_source_display()
+
+    @admin.display(description="分類器讀到的文字")
+    def classifier_text(self, label: TopicLabel):
+        # 跟送給 GPU 的是同一個函式：標的人跟模型讀的是同一段文字
+        return format_html('<div style="white-space: pre-line; max-width: 40em">{}</div>',
+                           topics.classifier_input(label.article))
+
+
+class _ReadOnlyAdmin(admin.ModelAdmin):
+    """算出來的資料：手改會跟產生它的流程對不上，只給看（要改就重跑指令）。刪除照常可用。"""
+
+    def has_add_permission(self, request) -> bool:
+        return False
+
+    def has_change_permission(self, request, obj=None) -> bool:
+        return False
+
+
+@admin.register(Topic)
+class TopicAdmin(_ReadOnlyAdmin):
+    """模型分的領域。刪掉一筆，下一輪 classify_topics 會重分那篇。"""
+
+    list_display = ("article", "primary_label", "secondary_label", "classifier", "labeled_at")
+    list_filter = ("classifier", "primary", "article__source")
+    search_fields = ("article__speaker", "article__ivod_id")
+    list_select_related = ("article",)
+
+    @admin.display(description="主領域", ordering="primary")
+    def primary_label(self, topic: Topic) -> str:
+        area = topics.TOPIC_BY_KEY.get(topic.primary)
+        return area.label if area else topic.primary
+
+    @admin.display(description="次領域")
+    def secondary_label(self, topic: Topic) -> str:
+        area = topics.TOPIC_BY_KEY.get(topic.secondary)
+        return area.label if area else (topic.secondary or "—")
+
+
+@admin.register(TopicEvaluation)
+class TopicEvaluationAdmin(_ReadOnlyAdmin):
+    """評估紀錄。刪掉一筆通過的評估，等於讓那個來源的議題分布下架（下一次重算生效）。"""
+
+    list_display = ("source", "classifier", "labeled", "correct", "accuracy_percent", "passed",
+                    "ran_at")
+    list_filter = ("source", "passed", "classifier")
+
+    @admin.display(description="準確率", ordering="accuracy")
+    def accuracy_percent(self, evaluation: TopicEvaluation) -> str:
+        return f"{evaluation.accuracy * 100:.1f}%"

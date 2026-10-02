@@ -1,10 +1,12 @@
 """admin：失敗的文章勾一勾就能重送。"""
 from __future__ import annotations
 
+import re
 from datetime import date
 
 from django.contrib.auth import get_user_model
 from django.test import TestCase
+from django.utils import timezone
 
 from articles.models import Article, ArticleStatus
 
@@ -125,3 +127,122 @@ class ProfileAdminTests(TestCase):
         res = self.client.get(f"/admin/articles/article/{self.article.pk}/change/")
         self.assertEqual(res.status_code, 200)
         self.assertContains(res, 'name="session"')
+
+
+class TopicLabelAdminTests(TestCase):
+    """議題標註頁：分類器讀到的文字、文章連結、在清單上直接選主領域；**看不到模型的分類**。"""
+
+    # 刻意取一個不會出現在頁面其他地方的分類器名稱，出現了就是洩漏
+    SECRET = "secret-model-xyz#topic-v9"
+
+    def setUp(self):
+        from articles.models import Slide, Topic, TopicLabel
+
+        user = get_user_model().objects.create_superuser("admin4", "d@example.com", "pw")
+        self.client.force_login(user)
+        self.article = _article("t1", ArticleStatus.READY, speaker="王立")
+        Article.objects.filter(pk=self.article.pk).update(
+            brief={"one_liner": "國防部無人機交機不到一半", "key_numbers": [], "asks": []},
+            meeting="第11屆第5會期外交及國防委員會第3次全體委員會議")
+        Slide.objects.create(article=self.article, index=1, title="無人機採購進度")
+        # 模型說是「勞動」——人還沒標
+        Topic.objects.create(article=self.article, primary="labor", secondary="welfare",
+                             classifier=self.SECRET, labeled_at=timezone.now())
+        self.label = TopicLabel.objects.create(article=self.article)
+        done = _article("t2", ArticleStatus.READY, speaker="甲")
+        TopicLabel.objects.create(article=done, primary="finance")
+
+    def _changelist(self, query=""):
+        return self.client.get(f"/admin/articles/topiclabel/{query}")
+
+    def test_the_list_shows_what_the_classifier_reads_and_links_to_the_article(self):
+        res = self._changelist()
+        self.assertEqual(res.status_code, 200)
+        self.assertContains(res, "一句話：國防部無人機交機不到一半")
+        self.assertContains(res, "- 無人機採購進度")
+        self.assertContains(res, f"/admin/articles/article/{self.article.pk}/change/")
+        # 主領域是清單上的下拉選單，選項是 12 個領域加「還沒標」
+        self.assertContains(res, 'name="form-0-primary"')
+        self.assertContains(res, "（還沒標）")
+        self.assertContains(res, "地方建設／其他")
+
+    def test_the_model_prediction_is_never_shown(self):
+        """盲標：模型說「勞動」，人還沒標——頁面上不能有任何地方透露模型的答案。"""
+        pages = [self._changelist(), self._changelist("?labelled=no"),
+                 self.client.get(f"/admin/articles/topiclabel/{self.label.pk}/change/"),
+                 self.client.get(f"/admin/articles/article/{self.article.pk}/change/")]
+        for res in pages:
+            self.assertEqual(res.status_code, 200)
+            # 下拉選單本來就列出全部 12 個領域，拿掉之後頁面上不能出現模型選的那兩個
+            body = re.sub(r"<select.*?</select>", "", res.content.decode(), flags=re.S)
+            for leak in (self.SECRET, "labor", "勞動", "welfare", "衛生福利"):
+                self.assertNotIn(leak, body, res.request["PATH_INFO"])
+        # 還沒標的那一列，下拉選單停在「還沒標」，不是模型的「勞動」
+        unlabelled = self._changelist("?labelled=no")
+        self.assertContains(unlabelled, '<option value="" selected>（還沒標）</option>', html=True)
+        self.assertNotContains(unlabelled, '<option value="labor" selected>勞動</option>', html=True)
+
+    def test_the_unlabelled_filter(self):
+        res = self._changelist("?labelled=no")
+        self.assertEqual([label.article.speaker for label in res.context["cl"].result_list], ["王立"])
+        res = self._changelist("?labelled=yes")
+        self.assertEqual([label.article.speaker for label in res.context["cl"].result_list], ["甲"])
+
+    def test_labelling_in_the_list_saves_the_primary_and_the_time(self):
+        res = self.client.post("/admin/articles/topiclabel/?labelled=no", {
+            "form-TOTAL_FORMS": "1", "form-INITIAL_FORMS": "1",
+            "form-MIN_NUM_FORMS": "0", "form-MAX_NUM_FORMS": "1000",
+            "form-0-id": str(self.label.pk), "form-0-primary": "defense",
+            "form-0-note": "講的是國防預算", "_save": "儲存",
+        })
+        self.assertEqual(res.status_code, 302)
+        self.label.refresh_from_db()
+        self.assertEqual((self.label.primary, self.label.note), ("defense", "講的是國防預算"))
+        self.assertIsNotNone(self.label.labeled_at)
+
+    def test_a_primary_outside_the_list_is_refused(self):
+        res = self.client.post("/admin/articles/topiclabel/", {
+            "form-TOTAL_FORMS": "1", "form-INITIAL_FORMS": "1",
+            "form-MIN_NUM_FORMS": "0", "form-MAX_NUM_FORMS": "1000",
+            "form-0-id": str(self.label.pk), "form-0-primary": "space", "form-0-note": "",
+            "_save": "儲存",
+        })
+        self.assertEqual(res.status_code, 200)
+        self.label.refresh_from_db()
+        self.assertEqual(self.label.primary, "")
+
+    def test_labels_come_only_from_sampling(self):
+        self.assertEqual(self.client.get("/admin/articles/topiclabel/add/").status_code, 403)
+
+
+class TopicReadOnlyAdminTests(TestCase):
+    """模型的分類與評估紀錄是算出來的：看得到，但不能在 admin 裡新增或改值。"""
+
+    def setUp(self):
+        from articles.models import Topic, TopicEvaluation
+
+        user = get_user_model().objects.create_superuser("admin5", "e@example.com", "pw")
+        self.client.force_login(user)
+        article = _article("t1", ArticleStatus.READY, speaker="王立")
+        self.topic = Topic.objects.create(article=article, primary="finance", classifier="m#topic-v1",
+                                          labeled_at=timezone.now())
+        self.evaluation = TopicEvaluation.objects.create(
+            source="ly", classifier="m#topic-v1", labeled=20, correct=17, accuracy=0.85, passed=True,
+            mistakes=[], ran_at=timezone.now())
+
+    def test_topics_and_evaluations_are_listed_and_viewable(self):
+        res = self.client.get("/admin/articles/topic/")
+        self.assertEqual(res.status_code, 200)
+        self.assertContains(res, "財政經濟")
+        res = self.client.get("/admin/articles/topicevaluation/")
+        self.assertEqual(res.status_code, 200)
+        self.assertContains(res, "85.0%")
+        for url in (f"/admin/articles/topic/{self.topic.pk}/change/",
+                    f"/admin/articles/topicevaluation/{self.evaluation.pk}/change/"):
+            res = self.client.get(url)
+            self.assertEqual(res.status_code, 200)
+            self.assertNotContains(res, 'name="_save"')
+
+    def test_nothing_can_be_added_by_hand(self):
+        self.assertEqual(self.client.get("/admin/articles/topic/add/").status_code, 403)
+        self.assertEqual(self.client.get("/admin/articles/topicevaluation/add/").status_code, 403)
