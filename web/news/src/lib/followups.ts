@@ -48,6 +48,11 @@ export type FollowupStateInfo = {
   description: string;
   /** 這個狀態要靠模型判斷才分得出來；判斷器沒通過時不顯示 */
   judged: boolean;
+  /**
+   * 判斷器沒通過時這一組的說明。「待追蹤」平常的定義有「還沒找到他再提」，那半句要靠判斷：
+   * 沒驗證過的判斷器不替讀者說「沒找到」，這時只講日期決定的那一半
+   */
+  unjudgedDescription?: string;
 };
 
 /**
@@ -78,8 +83,14 @@ export const FOLLOWUP_STATES: readonly FollowupStateInfo[] = [
     label: '待追蹤',
     description: '還沒到期，也還沒找到他再提。',
     judged: false,
+    unjudgedDescription: '還沒到期的要求。到期之後有沒有再提，要等判斷器通過人工驗證才判斷。',
   },
 ];
+
+/** 清單上一組的說明：判斷器沒通過時，改用不靠判斷的那一句（見 unjudgedDescription） */
+export function stateDescription(state: FollowupStateInfo, judged: boolean): string {
+  return judged ? state.description : (state.unjudgedDescription ?? state.description);
+}
 
 const STATE_KEYS = new Set<string>(FOLLOWUP_STATES.map((s) => s.key));
 

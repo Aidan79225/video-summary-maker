@@ -20,6 +20,9 @@ const { ask } = Astro.props;
 const linkText = (ref: FollowupArticle) => (ref.date ? `${formatDate(ref.date)}的質詢` : displayTitle(ref.title) || '那篇報導');
 const link = 'text-accent underline decoration-accent/40 underline-offset-4 transition-colors hover:decoration-accent';
 const followed = ask.followed_by;
+// 已追問、但再提的那篇現在沒有頁面（後端只給已完成的連結）：引用照樣附上並照實說，
+// 不讓「已追問」的一項沒有任何根據
+const orphaned = ask.state === 'followed' && !followed;
 ---
 
 <li class="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 py-3">
@@ -42,12 +45,16 @@ const followed = ask.followed_by;
       </span>
     </p>
     {
-      followed && (
+      (followed || orphaned) && (
         <div class="mt-2 rounded-lg border-l-2 border-line bg-bg-soft/70 px-3 py-2">
           <p class="text-[0.72rem] text-muted">
-            <a href={articleHref(followed)} class={link} title={displayTitle(followed.title) || undefined}>
-              {linkText(followed)}
-            </a>
+            {followed ? (
+              <a href={articleHref(followed)} class={link} title={displayTitle(followed.title) || undefined}>
+                {linkText(followed)}
+              </a>
+            ) : (
+              '後來一次質詢（那篇報導目前沒有頁面）'
+            )}
             {ask.quote ? '再提到這件事：' : '再提到這件事。'}
           </p>
           {ask.quote && (
