@@ -53,6 +53,7 @@ python -c "import secrets; print(secrets.token_urlsafe(64))"
 | `INGEST_HOUR` | `4` | 常駐排程每天幾點跑 |
 | `TOPIC_DAILY_LIMIT` | `200` | 每晚最多替幾篇文章分政策領域（議題分布；一篇幾秒） |
 | `FOLLOWUP_DAILY_LIMIT` | `200` | 每晚最多送幾個追問判斷（追問率；一對要求與後來那篇是一個，幾秒） |
+| `BILL_TOPIC_DAILY_LIMIT` | `200` | 每晚最多替幾件委員提案分政策領域（提案與質詢一致率；一件幾秒，新的會期先） |
 | `NTPC_ENABLED` | `True` | 每天也查新北市議會的質詢片段（`ingest_ivod --source ntpc` 不看這個設定） |
 | `NTPC_INCLUDE_MIXED` | `True` | 新北的多黨混合時段（市長施政報告、總預算報告、專案報告）也收 |
 | `NTPC_VOD_BASE` | `https://vod.ntp.gov.tw` | 新北市議會議事影音系統 |
@@ -105,11 +106,11 @@ uv run python manage.py ingest_ivod --retry-imageless --limit 5
 
 ```bash
 # 一、常駐排程（不想碰 systemd 的話）
-uv run python manage.py run_scheduler                   # 每天 04:10；每次都回補三天的清單，接著分政策領域、判斷追問、重算人物側寫
+uv run python manage.py run_scheduler                   # 每天 04:10；每次都回補三天的清單，接著分政策領域、判斷追問、替委員提案分領域、重算人物側寫
 uv run python manage.py run_scheduler --backfill-days 0 # 不要回補
 
-# 二、系統排程（crontab -e）：匯入 → 分政策領域 → 判斷追問 → 重算側寫；用 ; 而不是 &&，前一步失敗後一步照跑
-10 4 * * * cd /home/pi/yt-downloader/services/news && /home/pi/.local/bin/uv run python manage.py ingest_ivod >> /var/log/ly-news-ingest.log 2>&1; /home/pi/.local/bin/uv run python manage.py classify_topics >> /var/log/ly-news-ingest.log 2>&1; /home/pi/.local/bin/uv run python manage.py check_followups >> /var/log/ly-news-ingest.log 2>&1; /home/pi/.local/bin/uv run python manage.py compute_profiles >> /var/log/ly-news-ingest.log 2>&1
+# 二、系統排程（crontab -e）：匯入 → 分政策領域 → 判斷追問 → 議案分類 → 重算側寫；用 ; 而不是 &&，前一步失敗後一步照跑
+10 4 * * * cd /home/pi/yt-downloader/services/news && /home/pi/.local/bin/uv run python manage.py ingest_ivod >> /var/log/ly-news-ingest.log 2>&1; /home/pi/.local/bin/uv run python manage.py classify_topics >> /var/log/ly-news-ingest.log 2>&1; /home/pi/.local/bin/uv run python manage.py check_followups >> /var/log/ly-news-ingest.log 2>&1; /home/pi/.local/bin/uv run python manage.py classify_bill_topics >> /var/log/ly-news-ingest.log 2>&1; /home/pi/.local/bin/uv run python manage.py compute_profiles >> /var/log/ly-news-ingest.log 2>&1
 # 每週日：名單 → 立法院院內紀錄 → 重算側寫（常駐排程的 weekly 跑的就是這三步）
 30 3 * * 0 cd /home/pi/yt-downloader/services/news && /home/pi/.local/bin/uv run python manage.py sync_members >> /var/log/ly-news-ingest.log 2>&1; /home/pi/.local/bin/uv run python manage.py sync_ly_records >> /var/log/ly-news-ingest.log 2>&1; /home/pi/.local/bin/uv run python manage.py compute_profiles >> /var/log/ly-news-ingest.log 2>&1
 ```
@@ -408,6 +409,7 @@ uv run python manage.py compute_profiles              # 同步完要重算，網
 - 提案算在一讀的會期：休會期間提的案在下一個會期一讀。休會期間就離職的人不在下一個會期的母體裡，那幾件不會出現在任何人的側寫上（他在那個會期不是立委）。
 - 只有院內紀錄、還沒有任何文章的會期（例如剛開議的），側寫只給 `chamber` 區塊：投入量不是 0，是沒有資料。
 - 不加總、不排名照舊。出席、投票多不代表比較好，跟黨團不一致也不代表好或壞。
+- 提案組還有第九張卡「提案與質詢一致率」：要用到模型，另有門檻，見下面「人物側寫：提案與質詢一致率」。
 - **限制**：院長、副院長主持院會、依慣例不投票，名冊上卻掛在一個委員會——他們的投票出席率與委員會出席率會接近 0（第 11 屆第 5 會期：韓國瑜 0% 與 2.9%）。LYAPI 名冊沒有職位，目前沒有排除，要在方法頁說明。名冊只給現在的黨團：同一段任期內換黨團（但沒有換黨）的人，以前的表決也用現在的黨團算；這一版之前就因為換黨切段、已經結束的舊任期沒有黨團資料，那段期間的表決不算進一致率與跨黨投票。院內紀錄的清單是即時算的、指標是重算時存的：同步之後到下一次重算之間（每週日同步完會立刻重算），清單筆數可能跟指標差幾筆。LYAPI 的紀錄有延遲（委員會的議事錄常晚好幾週）。
 
 ### 紀錄清單（證據）
@@ -418,7 +420,7 @@ uv run python manage.py compute_profiles              # 同步完要重算，網
 |---|---|---|---|
 | `plenary` | 院會出席率 | n | 會議代碼、日期、名稱、議事網的會議頁、`attended` |
 | `committee` | 委員會出席率 | n | 同上 |
-| `proposed` | 主提案數 | 值 | 議案編號、提案日期、名稱、議事網的議案頁、`status`、`proposers` |
+| `proposed` | 主提案數 | 值 | 議案編號、提案日期、名稱、議事網的議案頁、`status`、`proposers`；議案分類通過評估時另有 `topic`（`{key, label}`，沒分過類是 `null`） |
 | `cosigned` | 連署數 | 值 | 同上 |
 | `passed` | 三讀數 | 值 | 同上 |
 | `votes` | 投票出席率 | n | 表決代碼、日期、表決議題、會議代碼、那場院會的會議頁、`vote`（他的票，沒投是 null）、`caucus_majority`（他黨團的多數，並列或沒有黨團是 null） |
@@ -436,6 +438,76 @@ uv run python manage.py sync_ly_records
 uv run python manage.py compute_profiles
 ```
 
+## 人物側寫：提案與質詢一致率（只有立法院）
+
+設計見 `docs/superpowers/specs/2026-10-03-profile-proposal-alignment-design.md`。問的是「提的案跟問的事是不是同一個方向」：同一個會期裡，他**主提案**的領域分布跟他**質詢**的領域分布重疊多少。要替議案名稱分領域，而議題分類器只在質詢摘要上評估過，所以議案另有自己的標註集與門檻，**兩道門檻都過才計算**。
+
+### 定義
+
+- 提案的分布：他主提案、議案分類過（通過版本）的委員提案，各領域件數 ÷ 件數。提案算給誰、算在哪個會期，跟院內紀錄的主提案數同一套（`chamber.SessionRecords`）。
+- 質詢的分布：議題分布的那一份（單獨發言、有摘要卡、通過版本分類的基礎文章，主領域）。
+- 一致率 ＝ Σ 各領域 min(提案占比, 質詢占比) × 100（%）：兩個分布重疊的部分。完全一樣是 100%、完全沒有交集是 0%。例：提案財經 50%、衛福 50%，質詢財經 75%、勞動 25%：只有財經重疊，min(50%, 75%) ＝ 50%。用分數算再轉成小數，分布一樣的兩個人值就一樣。
+- n ＝ 分過類的主提案件數，套最小樣本（n < 5 不給百分位）；質詢的基礎文章也要至少 5 篇，不夠就不給值（API 的 `reason` 是 `few_speeches`）。同儕是該會期兩邊樣本都夠的立委，不足 5 人誰都不比。
+- 不是好壞：提案跟質詢方向不同可能是分工，不代表言行不一。
+
+### 議案分類（`articles/bill_topics.py`）
+
+- 沿用 GPU 的 `topic` 工作與 `topics.TOPICS` 的 12 個領域，送的文字是「議案名稱：<議案名稱>」（超過 4000 字截掉，公投案的主文整段都在名稱裡）。不送案由：議案清單裡沒有，要逐件查。
+- 只分**有立委是主提案人**的委員提案（提案人對得到立法院的任期，名字比對同院內紀錄；黨團提案不分）。新的會期先分。
+- 結果存在 `BillTopic`，連同 GPU 回來的 `classifier`。每週同步時議案名稱變了，那一件的 `BillTopic` 刪掉、下一輪重分（同步報告會列出件數）；人工標註不刪。
+- 失敗處理同議題分類：失敗只記 log；GPU 連不上整輪停；開頭連續三件被拒（GPU 端還沒更新）也停；等 GPU 的時候名稱被改掉了，結果不存、下一輪重分。
+
+```bash
+uv run python manage.py classify_bill_topics                # 只分還沒有 BillTopic 的，上限 BILL_TOPIC_DAILY_LIMIT（預設 200）
+uv run python manage.py classify_bill_topics --limit 50
+uv run python manage.py classify_bill_topics --reclassify   # 連已經有的也重分：沒有的先、再來是分得最久的
+```
+
+排程：`run_scheduler` 每晚在判斷追問之後、重算之前跑一次（包在自己的 try 裡，失敗不影響重算）。
+
+### 標註與評估
+
+1. **抽樣**：從已同步、有立委主提案的委員提案（也就是會被分類的那一批）隨機抽，建立空白的 `BillTopicLabel`。已經抽過的不重抽，只補到 N 件；同樣的資料、同樣的種子抽到同樣的議案。
+
+   ```bash
+   uv run python manage.py sample_bill_topic_labels                  # 補到 20 件，種子 0
+   uv run python manage.py sample_bill_topic_labels --count 30 --seed 7
+   ```
+
+2. **標註**：到 admin 的「議案議題標註」頁（`/admin/articles/billtopiclabel/`）。清單上直接顯示議案名稱（分類器讀到的就是這段文字）、會期與議事網的議案頁，主領域用下拉選單在清單上直接選，選完按最下面的「儲存」。這一頁**刻意不顯示模型的分類**（盲標），也不能手動新增。
+
+3. **評估**：
+
+   ```bash
+   uv run python manage.py eval_bill_topics
+   ```
+
+   - 準確率 = 主領域相同的件數 ÷ 已標註件數（分類失敗的算錯）；通過 = 已標註至少 20 件、而且準確率 ≥ 80%。
+   - 存一筆 `BillTopicEvaluation`，印出每一筆判錯的。一次評估裡分類器必須都一樣，不一樣就中止、什麼都不存；GPU 連不上也一樣。評估不會改動任何議案的 `BillTopic`。
+   - 上線條件同議題分布：每個分類器只看**它自己最新的一次**評估，最新那次通過的分類器裡取評估得最晚的。上線的議案分類器因此換了，會立刻重算一次人物側寫；在 admin 刪掉通過的評估也一樣。
+
+換模型或提示詞的順序同議題分布：先 `eval_bill_topics`，通過了再 `classify_bill_topics --reclassify --limit 100000`，最後 `compute_profiles`。
+
+### 上線條件、指標與證據
+
+- **兩道門檻都過**才算：立法院的議題分類（`eval_topics`，質詢摘要）與議案分類（`eval_bill_topics`）。兩個分類器的名字可以不同。任何一道沒過，就沒有一致率。
+- 指標在 `chamber` 區塊、提案組（主提案、連署、三讀）的最後一張：`proposal_alignment`「提案與質詢一致率」（%），n 的單位是件，另有 `speech_n`（質詢的基礎文章數，卡片說明寫「提案 n 件、質詢 speech_n 篇」；其他指標是 `null`）。兩道門檻沒過時這張卡整個不出現。
+- 存進 `ProfileStat` 時 `classifier` 記「議案分類器｜質詢分類器」，API 只在兩個都等於現在上線的版本時給這張卡：評估剛換版本、還沒重算的空窗裡，不把舊版本的數字掛上新版本的名字。
+- 證據網址是 `/records/{person_id}?session={id}&kind=proposed`：主提案清單上每件分過類的議案標出領域（`topic`），標了領域的筆數就是 n；回應另有 `bill_classifier`（`{name, accuracy, labeled, evaluated_at}`）。標領域只要議案分類通過就給，不看議題分類。
+- **限制**：議案名稱很短，「○○法部分條文修正草案」只看得出是哪一部法；委員常一次提一系列同領域的案，提案的分布會被同一件事撐大；質詢只算有通過版本分類的單獨發言。
+
+### 部署這一版之後
+
+**先更新 GPU 主機**（認得 `topic` 工作；議題分布那一版已經更新過的就不必），再部署新聞服務。
+
+```bash
+uv run python manage.py migrate
+uv run python manage.py classify_bill_topics --limit 100000   # 一屆七千多件，一件幾秒；不跑的話每晚的排程分批補完
+uv run python manage.py sample_bill_topic_labels
+# 到 admin 標完之後
+uv run python manage.py eval_bill_topics
+```
+
 ## API
 
 | 端點 | 說明 |
@@ -444,8 +516,8 @@ uv run python manage.py compute_profiles
 | `GET /api/articles?date=&speaker=&q=&source=&party=&session=&solo=&has_brief=&topic=&page=&page_size=` | 已完成的文章清單。`session`（會期 id）、`solo=1`（只要單獨發言）、`has_brief=1`（只要有摘要卡）、`topic`（領域代碼，或 `any`＝哪個領域都可以）是側寫的證據篩選：證據網址查出來的篇數等於指標的 n。`topic` 只認各來源通過評估的那個分類器分出來的領域；打錯的代碼回 422 |
 | `GET /api/articles/{slug}` | 單篇，含摘要卡（`brief`：一句話、關鍵數字、要求與回應；GPU 端產不出來時為 `null`）、每段的條列與完整敘述、完整逐字稿 |
 | `GET /api/speakers` | 委員與篇數；`person_id` 是同來源、同名任期所屬的人（查無任期為 `null`） |
-| `GET /api/people/{person_id}/profile?source=&session=` | 人物側寫：一個會期的投入量與具體度，每項附 n、百分位、同儕人數與證據網址（網站的相對路徑）。那個來源有通過的議題評估時多一個 `topics` 區塊：`distribution`（12 個領域都列，依篇數由多到少、同數依領域表的順序；`share` 是 0～100）、`classifier`（`name`、`accuracy` 是 0～1、`labeled`、`evaluated_at`）。最後永遠有一個 `followup` 區塊（見「人物側寫：追問率」）。省略 `source` 用他最近一個有統計的會期的來源；省略 `session` 用他有發言的最近一個會期。沒有統計回 404。立法院同步過院內紀錄的會期多一個 `chamber` 區塊（見上面「院內紀錄」）；只算過院內紀錄的會期不給投入量與具體度 |
-| `GET /api/people/{person_id}/records?session=&kind=` | 院內紀錄的證據清單（院會、委員會會議、主提案、連署、三讀、記名表決、黨團有多數的表決、跨黨投票），每筆附議事網連結；筆數等於對應指標的 n 或值 |
+| `GET /api/people/{person_id}/profile?source=&session=` | 人物側寫：一個會期的投入量與具體度，每項附 n、百分位、同儕人數與證據網址（網站的相對路徑）。那個來源有通過的議題評估時多一個 `topics` 區塊：`distribution`（12 個領域都列，依篇數由多到少、同數依領域表的順序；`share` 是 0～100）、`classifier`（`name`、`accuracy` 是 0～1、`labeled`、`evaluated_at`）。最後永遠有一個 `followup` 區塊（見「人物側寫：追問率」）。省略 `source` 用他最近一個有統計的會期的來源；省略 `session` 用他有發言的最近一個會期。沒有統計回 404。立法院同步過院內紀錄的會期多一個 `chamber` 區塊（見上面「院內紀錄」；議案分類與議題分類都通過時多一張 `proposal_alignment`，見「提案與質詢一致率」）；只算過院內紀錄的會期不給投入量與具體度 |
+| `GET /api/people/{person_id}/records?session=&kind=` | 院內紀錄的證據清單（院會、委員會會議、主提案、連署、三讀、記名表決、黨團有多數的表決、跨黨投票），每筆附議事網連結；筆數等於對應指標的 n 或值。主提案清單在議案分類通過時每件標出領域（`topic`）並附 `bill_classifier` |
 
 清單裡每張卡片的 `teaser` 優先用摘要卡的一句話，沒有卡片才退回第一段的完整敘述。
 
@@ -501,14 +573,15 @@ WantedBy=multi-user.target
 
 ```
 articles/
-├─ models.py        實體：Article / Slide / Person / Membership / Session / ProfileStat / Topic / TopicLabel / TopicEvaluation / LyMeeting / LyBill / LyVote / FollowUp / FollowUpLabel / FollowUpEvaluation
+├─ models.py        實體：Article / Slide / Person / Membership / Session / ProfileStat / Topic / TopicLabel / TopicEvaluation / LyMeeting / LyBill / LyVote / BillTopic / BillTopicLabel / BillTopicEvaluation / FollowUp / FollowUpLabel / FollowUpEvaluation
 ├─ ivod_source.py   adapter：立法院開放資料
 ├─ gpu_client.py    adapter：GPU 主機上的摘要 API
 ├─ ingest.py        use case：發現 → 處理 → 落地（相依都用注入的）
 ├─ profiles.py      use case：會期解析、人物側寫指標的計算與快取
 ├─ topics.py        use case：政策領域、分類、標註集與評估、上線條件、委員會職掌
 ├─ ly_records.py    adapter：LYAPI 的會議出席、委員提案、記名表決（同步與寫入）
-├─ chamber.py       use case：院內紀錄的指標與證據清單
+├─ chamber.py       use case：院內紀錄的指標與證據清單（含提案與質詢一致率）
+├─ bill_topics.py   use case：議案分類、標註集與評估、上線條件（提案與質詢一致率用）
 ├─ followups.py     use case：期限換算、追問的候選與判斷、落地檢查、狀態、標註集與評估、上線條件
 ├─ api.py           presentation：django-ninja 端點
 └─ management/commands/
@@ -521,6 +594,9 @@ articles/
    ├─ check_followups.py
    ├─ sample_followup_labels.py
    ├─ eval_followups.py
+   ├─ classify_bill_topics.py
+   ├─ sample_bill_topic_labels.py
+   ├─ eval_bill_topics.py
    ├─ backfill_meetings.py
    └─ run_scheduler.py
 ```
