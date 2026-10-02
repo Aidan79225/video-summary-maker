@@ -195,7 +195,7 @@ def _session_end(match: re.Match, text: str, spoken: _Spoken) -> date | None:
     議會的會期起訖沒有結構化來源，不換算。「下會期」不是這一種。算出來比發言還早（延會或
     臨時會裡講的「本會期」）就是換不出來：到期日早於發言，等於還沒開始就過期了。
 
-    雙數會期九月開議，上半年講的只會是它延到隔年一月的延會或臨時會：會期是前一年開的，
+    雙數會期九月開議，上半年講的只會是它拖過年的延會或臨時會：會期是前一年開的，
     照「發言那年」算會變成隔年年底，憑空多出將近一年的期限。
     """
     if spoken.source != ArticleSource.LY or spoken.session_number is None:
