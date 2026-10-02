@@ -72,7 +72,7 @@ Membership.committees  JSON 字串清單，立法院同步時存 LYAPI 的「委
 ```
 
 - 文章重產（`save_result`）時刪掉它的 `Topic`，下一輪重新分類。
-- `classifier` 就是 GPU 回來的那串（模型＋提示詞版本）。
+- `classifier` 就是 GPU 回來的那串（模型＋提示詞版本＋提示指紋）。
 
 ### 每晚分類
 
@@ -120,7 +120,9 @@ Membership.committees  JSON 字串清單，立法院同步時存 LYAPI 的「委
 
 - 側寫的 `blocks` 多一個 `{"key": "topics", "title": "議題分布", "indicators": [...], "distribution": [...], "classifier": {...}}`，只有那個來源有通過的評估時才出現：
   - `distribution`：12 個領域都列（篇數 0 的也列），依篇數由多到少、同數依上表順序：`{key, label, count, share, evidence_url}`；`share` 是 0～100 的浮點數。
-  - `classifier`：`{name, accuracy, labeled, evaluated_at}`，頁面用來寫「分類器在 N 篇人工標註上準確率 X%」。
+  - `classifier`：`{name, accuracy, labeled, evaluated_at}`，頁面用來寫「分類器在 N 篇人工標註上準確率 X%」。`accuracy` 是 0～1（資料庫存的值），`share` 是 0～100。
+  - 聚焦度、廣度、委員會職掌的證據網址用 `topic=any`：「被通過版本分過類、哪個領域都可以」，清單篇數才等於 n（沒分到類的不算）。
+  - 「有委員會資料」＝那個會期至少有一個委員會在職掌表裡；程序、修憲、經費稽核這類沒有對應領域的委員會不算。一個會期有好幾個委員會時，領域取聯集。
 - `/api/articles` 新增 `topic`（領域代碼）：只要主領域是它、而且是該文章來源「通過版本」分出來的。證據網址：`session`＋`solo=1&brief=1`＋`topic=<代碼>`，篇數必須等於分布的篇數（測試要驗）。
 
 ## 網站
