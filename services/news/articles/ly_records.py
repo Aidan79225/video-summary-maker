@@ -18,7 +18,8 @@
   「伍麗華Saidhai‧Tahovecahe」。比對一律用 name_key（去空白、去間隔號），顯示仍用原樣。
 
 一秒一個請求、429 退避（同 members_sync）。全部抓完才寫、在同一個 transaction 裡寫：任何一頁失敗
-就整次失敗、資料庫不動（同 members_sync 的原則），下次排程再來。以唯一鍵 upsert，重跑是安全的。
+就整次失敗、資料庫不動（同 members_sync 的原則），下次排程再來。以唯一鍵 upsert，重跑是安全的；
+同步範圍裡 LYAPI 已經沒有的紀錄一起刪掉（改了代碼的才不會被算兩次）。
 """
 from __future__ import annotations
 
@@ -55,6 +56,8 @@ USER_AGENT = "ly-news/0.1 (video-summary-maker; weekly records sync)"
 _PAGE_SIZE = {"meets": 100, "bills": 1000, "votes": 500}
 # 防上游給了怪的 total_page 而無限翻頁（最大的委員會清單目前是 10 頁）
 _MAX_PAGES = 100
+# LYAPI（Elasticsearch）一次查詢最多翻到第 10,000 筆，再翻回 413（2026-10 實測）。超過的查詢要分批
+_MAX_WINDOW = 10_000
 # 一屆最多八個會期（四年、每年兩個），臨時會併在所屬會期裡。超出的是 LYAPI 的資料錯誤（2026-10
 # 有一件審查報告標成第 11 會期），不能因此建出一個不存在的會期
 MAX_SESSION_NUMBER = 8
@@ -381,13 +384,50 @@ class LyRecordsSource:
             rows = self._rows("meets", "會議代碼", {"會議種類": label, **by_session}, _MEET_FIELDS)
             self._keep(fetched, fetched.meetings, rows, lambda row, k=kind: parse_meeting(row, k),
                        f"會議（{label}）")
-        # 議案也抓整屆、在 _keep 裡篩：LYAPI 的「會期」篩選看的是最新進度的會期，不是一讀的（見
-        # bill_session）。/votes 則根本不支援用會期篩選
-        rows = self._rows("bills", "議案編號", {"提案來源": "委員提案"}, _BILL_FIELDS)
-        self._keep(fetched, fetched.bills, rows, parse_bill, "議案")
+        self._keep(fetched, fetched.bills, self._bills(session), parse_bill, "議案")
+        # /votes 不支援用會期篩選：抓整屆、在 _keep 裡篩
         rows = self._rows("votes", "表決代碼", {}, _VOTE_FIELDS)
         self._keep(fetched, fetched.votes, rows, parse_vote, "表決")
         return fetched
+
+    def _bills(self, session: int | None) -> list[dict]:
+        """委員提案，按 LYAPI 的「會期」（最新進度的會期）分批抓。
+
+        要分批：一次查詢最多翻到第 10,000 筆，第 11 屆的委員提案到屆末會超過。哪些會期有案子、各幾件，
+        先用 agg 問一次。一讀在第 N 會期的案子，最新進度不會早於 N，所以只同步一個會期時只抓 N 以後的批；
+        真正的篩選（一讀的會期）在 _keep 裡做。分組加起來不等於總數（有案子沒有「會期」、或 LYAPI
+        不給分組）時，總數還在上限內就整批抓，超過就只能整次失敗。
+        """
+        filters = {"提案來源": "委員提案"}
+        groups, total = self._groups("bills", "議案編號", filters, "會期")
+        if sum(groups.values()) != total:
+            if total > _MAX_WINDOW:
+                raise RecordsUnavailable(f"LYAPI 的委員提案有 {total} 件，按會期分組只有 "
+                                         f"{sum(groups.values())} 件，又超過一次能翻的上限，抓不完整")
+            return self._rows("bills", "議案編號", filters, _BILL_FIELDS)
+        rows: list[dict] = []
+        for number in sorted(groups):
+            if session is None or number >= session:
+                rows.extend(self._rows("bills", "議案編號", {**filters, "會期": number}, _BILL_FIELDS))
+        return rows
+
+    def _groups(self, path: str, id_field: str, filters: dict,
+                field_name: str) -> tuple[dict[int, int], int]:
+        """({欄位值: 筆數}, 總筆數)：LYAPI 的 agg（只要一筆資料、只要代碼欄位，回應很小）。"""
+        payload = self._get(path, {"屆": self.term, **filters, "limit": 1, "agg": field_name,
+                                   "output_fields": [id_field]})
+        total = _int(payload.get("total")) or 0
+        aggs = payload.get("aggs")
+        buckets = next((a.get("buckets") for a in aggs if isinstance(a, dict)
+                        and a.get("agg") == field_name), None) if isinstance(aggs, list) else None
+        groups: dict[int, int] = {}
+        # 沒有分組（哪天 LYAPI 不支援 agg 了）就是空的：呼叫端看到加起來不等於總數，會改成整批抓
+        for bucket in buckets if isinstance(buckets, list) else ():
+            value = _int(bucket.get(field_name)) if isinstance(bucket, dict) else None
+            count = _int(bucket.get("count")) if isinstance(bucket, dict) else None
+            if value is not None and count:
+                groups[value] = groups.get(value, 0) + count
+        return groups, total
 
     def _keep(self, fetched: FetchedRecords, out: list, rows: list[dict],
               parse: Callable[[object], object], label: str) -> None:
@@ -428,6 +468,10 @@ class LyRecordsSource:
             rows.extend(batch)
             if expected is None:
                 expected = _int(payload.get("total"))
+                if expected is not None and expected > _MAX_WINDOW:
+                    # 翻到第 10,000 筆之後 LYAPI 回 413：與其翻到一半才失敗，先說清楚
+                    raise RecordsUnavailable(f"LYAPI 的 /{path}（{filters}）有 {expected} 筆，超過一次"
+                                             f"查詢能翻的 {_MAX_WINDOW} 筆，要分批抓")
             pages = _int(payload.get("total_page")) or 1
             if page >= pages or not batch:
                 break
@@ -483,6 +527,10 @@ class RecordsReport:
     skipped: list[str] = field(default_factory=list)
     # 紀錄裡對不到任何一段立法院任期的姓名 → 次數（不計入任何人的指標）
     unknown_names: Counter = field(default_factory=Counter)
+    # LYAPI 已經沒有、這次刪掉的紀錄：「會議」「議案」「表決」→ 筆數
+    removed: Counter = field(default_factory=Counter)
+    # 這次一筆都沒抓到、所以沒有刪舊資料的種類（多半是 LYAPI 出狀況）
+    kept_because_empty: list[str] = field(default_factory=list)
 
     def __str__(self) -> str:
         scope = f"第{self.term}屆" + (f"第{self.session}會期" if self.session else "（全部會期）")
@@ -491,6 +539,12 @@ class RecordsReport:
                  f"{self.without_attendance} 場（不計入出席率）"]
         if self.sessions_created:
             lines.append(f"新建會期：{'、'.join(self.sessions_created)}")
+        if self.removed:
+            lines.append("LYAPI 已經沒有、這次刪掉的紀錄：" + "、".join(
+                f"{label} {count} 筆" for label, count in self.removed.items()))
+        if self.kept_because_empty:
+            lines.append(f"這次一筆{'、'.join(self.kept_because_empty)}都沒抓到，資料庫裡的舊紀錄先留著"
+                         "（LYAPI 可能出了狀況）")
         if self.skipped:
             # 經費稽核委員會的會議每週都會在這裡（LYAPI 標成會期 0）：列幾筆當例子就好
             lines.append(f"沒收的紀錄 {len(self.skipped)} 筆（LYAPI 的資料不完整或會期不合理），例如：")
@@ -505,7 +559,8 @@ class RecordsReport:
 
 
 def save(fetched: FetchedRecords, now: datetime | None = None) -> RecordsReport:
-    """全部在同一個 transaction 裡寫：會期、會議、議案、表決。以唯一鍵 upsert。"""
+    """全部在同一個 transaction 裡寫：會期、會議、議案、表決。以唯一鍵 upsert，再刪掉範圍裡 LYAPI
+    已經沒有的。"""
     now = now or timezone.now()
     report = RecordsReport(term=fetched.term, session=fetched.session, skipped=list(fetched.skipped))
     with transaction.atomic():
@@ -513,6 +568,11 @@ def save(fetched: FetchedRecords, now: datetime | None = None) -> RecordsReport:
         _save_meetings(fetched.meetings, now)
         _save_bills(fetched.bills, now)
         _save_votes(fetched.votes, _meeting_days(fetched), now)
+        for label, model, key, records in (
+                ("會議", LyMeeting, "code", fetched.meetings),
+                ("議案", LyBill, "bill_no", fetched.bills),
+                ("表決", LyVote, "code", fetched.votes)):
+            _remove_stale(fetched, label, model, key, {_record_id(r) for r in records}, report)
     report.plenary = sum(1 for m in fetched.meetings if m.kind == LyMeetingKind.PLENARY)
     report.committee = len(fetched.meetings) - report.plenary
     report.without_attendance = sum(1 for m in fetched.meetings if m.attendees is None)
@@ -537,6 +597,28 @@ def _ensure_sessions(fetched: FetchedRecords) -> list[str]:
 
 
 _BATCH = 500
+
+
+def _remove_stale(fetched: FetchedRecords, label: str, model, key: str, kept: set[str],
+                  report: RecordsReport) -> None:
+    """這次同步的範圍（整屆、或一個會期）裡，LYAPI 已經沒有的紀錄刪掉。
+
+    只 upsert 的話，LYAPI 改了代碼（或刪掉重複）的那一筆會留下來、被算兩次，會期變得不合理而不收的
+    也會留在舊的會期。範圍內是完整的才能這樣做——抓的時候已經檢查過筆數。一筆都沒抓到時不刪：
+    多半是 LYAPI 出了狀況，不是那一屆真的什麼都沒有。
+    """
+    scope = model.objects.filter(term=fetched.term)
+    if fetched.session is not None:
+        scope = scope.filter(session_number=fetched.session)
+    stale = [value for value in scope.values_list(key, flat=True) if value not in kept]
+    if not stale:
+        return
+    if not kept:
+        report.kept_because_empty.append(label)
+        return
+    for start in range(0, len(stale), _BATCH):
+        model.objects.filter(**{f"{key}__in": stale[start:start + _BATCH]}).delete()
+    report.removed[label] = len(stale)
 
 
 def _save_meetings(meetings: list[MeetingRecord], now: datetime) -> None:

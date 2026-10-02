@@ -5,6 +5,7 @@ from __future__ import annotations
 import io
 import itertools
 from datetime import date, datetime
+from unittest import mock
 from urllib.parse import parse_qsl, urlsplit
 
 from django.core.management import call_command
@@ -208,6 +209,51 @@ class PopulationTests(TestCase):
         _vote("2026-05-01", yes=["甲"])
         compute_profiles()
         self.assertEqual(set(_stats("plenary_attendance")), {"甲"})
+
+    def test_an_old_proposal_does_not_pull_a_departed_member_into_the_session(self):
+        """休會期間提、第 5 會期才一讀的案子：提案日期不算進會期的期間，早就離職的人不是這個會期的同儕。"""
+        _session()
+        _legislator("甲")
+        _legislator("早走", end=date(2026, 1, 31))
+        _meeting("2026-03-01", ["甲"])
+        _bill(["早走"], ["甲"], day="2025-12-20")
+        compute_profiles()
+        self.assertEqual(_values("bills_cosigned"), {"甲": (1.0, 1)})
+
+    def test_a_session_with_only_proposals_uses_their_dates(self):
+        _session("第11屆第6會期")
+        _legislator("甲")
+        _legislator("早走", end=date(2026, 1, 31))
+        _bill(["甲"], day="2026-09-20", session=6)
+        compute_profiles()
+        self.assertEqual(_values("bills_proposed", "第11屆第6會期"), {"甲": (1.0, 1)})
+
+    def test_damaged_records_are_skipped_not_fatal(self):
+        _session()
+        _legislator("甲")
+        _meeting("2026-03-01", ["甲"])
+        broken = _meeting("2026-03-02", ["甲"])
+        LyMeeting.objects.filter(pk=broken.pk).update(attendees="甲")     # 不是清單
+        LyVote.objects.filter(pk=_vote("2026-03-03", yes=["甲"]).pk).update(no="甲", abstain=[1, "甲"])
+        compute_profiles()
+        self.assertEqual(_values("plenary_attendance"), {"甲": (100.0, 1)})
+        self.assertEqual(_values("vote_participation"), {"甲": (100.0, 1)})
+
+    def test_a_failure_in_the_records_does_not_stop_the_recompute(self):
+        """院內紀錄算不出來時，那個會期先不給院內紀錄，其他會期（包括市議會的）照算。"""
+        _session()
+        _legislator("甲")
+        _meeting("2026-03-01", ["甲"])
+        Membership.objects.create(person=Person.objects.create(name="乙"), source="tccc", name="乙")
+        Article.objects.create(ivod_id="tccc-1", slug="t-1", source="tccc", title="t", speaker="乙",
+                               meeting="第4屆第8次定期會", date=date(2026, 9, 1),
+                               ivod_url="https://example.invalid/1", status=ArticleStatus.READY)
+        with mock.patch.object(chamber.SessionRecords, "tally", side_effect=RuntimeError("壞了")), \
+                self.assertLogs("articles.chamber", "ERROR"):
+            report = compute_profiles()
+        self.assertFalse(ProfileStat.objects.filter(indicator__in=chamber.INDICATOR_KEYS).exists())
+        self.assertTrue(ProfileStat.objects.filter(person__name="乙", indicator="speeches").exists())
+        self.assertIn("計算失敗", str(report))
 
     def test_a_session_without_records_has_no_chamber_rows(self):
         _legislator("甲")

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import io
 import json
+from collections import Counter
 import os
 import urllib.error
 from datetime import date, datetime
@@ -41,10 +42,28 @@ def _payload(key, rows, total=None, total_page=1, page=1):
             "limit": 100, key: rows}
 
 
+def _groups_payload(rows, total=None):
+    """/bills?agg=會期 的回應形狀（真實的一份在 lyapi_bills_11_by_session.json）。"""
+    counts = Counter(row["會期"] for row in rows)
+    return {"total": len(rows) if total is None else total, "total_page": len(rows), "page": 1,
+            "limit": 1, "bills": rows[:1],
+            "aggs": [{"agg": "會期", "agg_fields": ["會期"],
+                      "buckets": [{"會期": k, "count": v} for k, v in counts.items()]}]}
+
+
+def _bill_routes(rows):
+    """委員提案：先問分組（agg），再按「會期」一批一批抓。"""
+    routes = {("bills", "agg", 1): _groups_payload(rows)}
+    for number in {row["會期"] for row in rows}:
+        routes[("bills", str(number), 1)] = _payload("bills", [r for r in rows if r["會期"] == number])
+    return routes
+
+
 class FakeLyApi:
     """照網址的路徑與查詢參數回應，記下每一個網址。
 
-    routes：{(路徑, 會議種類或 None, 頁碼): 回應}。回應是 dict、或要丟出去的例外。
+    routes：{(路徑, 選擇, 頁碼): 回應}。選擇是會議種類（/meets）、"agg"（分組查詢）、會期（/bills 的
+    分批），其他是 None。回應是 dict、或要丟出去的例外。
     """
 
     def __init__(self, routes):
@@ -56,6 +75,10 @@ class FakeLyApi:
         query = parse_qs(parts.query)
         path = parts.path.rsplit("/", 1)[-1]
         kind = query.get("會議種類", [None])[0]
+        if "agg" in query:
+            kind = "agg"
+        elif path == "bills" and "會期" in query:
+            kind = query["會期"][0]
         page = int(query.get("page", ["1"])[0])
         answer = self.routes.get((path, kind, page))
         if answer is None:
@@ -74,7 +97,7 @@ def _real_routes():
         ("meets", "院會", 1): _payload("meets", _rows("lyapi_meets_plenary_11.json", "meets")),
         ("meets", "委員會", 1): _payload("meets", _rows("lyapi_meets_committee_11.json", "meets")),
         ("meets", "聯席會議", 1): _payload("meets", _rows("lyapi_meets_joint_11.json", "meets")),
-        ("bills", None, 1): _payload("bills", _rows("lyapi_bills_11.json", "bills")),
+        **_bill_routes(_rows("lyapi_bills_11.json", "bills")),
         ("votes", None, 1): _payload("votes", _rows("lyapi_votes_11.json", "votes")),
     }
 
@@ -238,15 +261,16 @@ class SourceTests(SimpleTestCase):
         self.assertEqual([q["會議種類"] for q in meets], [["院會"], ["委員會"], ["聯席會議"]])
         self.assertTrue(all(q["屆"] == ["11"] for q in meets))
         self.assertIn("議事錄", meets[0]["output_fields"])
-        bills = fetch.queries("bills")[0]
-        self.assertEqual(bills["提案來源"], ["委員提案"])
-        self.assertIn("連署人", bills["output_fields"])
+        groups, batch = fetch.queries("bills")
+        self.assertEqual((groups["agg"], groups["提案來源"]), (["會期"], ["委員提案"]))
+        self.assertEqual((batch["會期"], batch["提案來源"]), (["5"], ["委員提案"]))
+        self.assertIn("連署人", batch["output_fields"])
 
     def test_one_request_per_second(self):
         source, fetch, sleeps = _source()
         source.fetch()
-        self.assertEqual(len(fetch.urls), 5)
-        self.assertEqual(sleeps, [1.0] * 4)
+        self.assertEqual(len(fetch.urls), 6)
+        self.assertEqual(sleeps, [1.0] * 5)
 
     def test_every_page_is_fetched(self):
         plenary = _rows("lyapi_meets_plenary_11.json", "meets")
@@ -256,6 +280,50 @@ class SourceTests(SimpleTestCase):
         fetched = source.fetch()
         self.assertEqual([m.code for m in fetched.meetings], ["院會-11-5-23", "院會-11-5-22"])
         self.assertEqual([q["page"] for q in fetch.queries("meets")[:2]], [["1"], ["2"]])
+
+    def test_bills_are_fetched_in_batches_by_their_latest_session(self):
+        """一次查詢最多翻到第 10,000 筆：委員提案按「會期」分批。只同步第 5 會期時第 1 批不必抓。"""
+        bills = _rows("lyapi_bills_11.json", "bills")
+        rows = [dict(bills[4], 會期=1), *bills[:4]]
+        routes = _real_routes()
+        routes.update(_bill_routes(rows))
+        source, fetch, _ = _source(routes)
+        self.assertEqual(len(source.fetch().bills), 5)
+        self.assertEqual([q.get("會期") for q in fetch.queries("bills")], [None, ["1"], ["5"]])
+        source, fetch, _ = _source(routes)
+        self.assertEqual(len(source.fetch(session=5).bills), 4)
+        self.assertEqual([q.get("會期") for q in fetch.queries("bills")], [None, ["5"]])
+
+    def test_when_the_groups_do_not_add_up_the_bills_come_in_one_go(self):
+        """有案子沒有「會期」：分組加起來比總數少，總數還在上限內就整批抓。"""
+        bills = _rows("lyapi_bills_11.json", "bills")
+        routes = _real_routes()
+        routes[("bills", "agg", 1)] = _groups_payload(bills, total=6)
+        routes[("bills", None, 1)] = _payload("bills", bills)
+        source, fetch, _ = _source(routes)
+        self.assertEqual(len(source.fetch().bills), 5)
+        self.assertEqual([q.get("會期") for q in fetch.queries("bills")], [None, None])
+        # LYAPI 哪天不給分組了也一樣
+        routes[("bills", "agg", 1)] = _payload("bills", bills[:1], total=5)
+        source, fetch, _ = _source(routes)
+        self.assertEqual(len(source.fetch().bills), 5)
+
+    def test_more_than_lyapi_can_page_through_fails_up_front(self):
+        """翻到第 10,000 筆之後 LYAPI 回 413：與其翻到一半才失敗，第一頁就說清楚。"""
+        routes = _real_routes()
+        routes[("votes", None, 1)] = _payload("votes", _rows("lyapi_votes_11.json", "votes"),
+                                              total=10_001, total_page=21)
+        source, _, _ = _source(routes)
+        with self.assertRaisesMessage(RecordsUnavailable, "要分批抓"):
+            source.fetch()
+
+    def test_the_real_grouping_response_is_understood(self):
+        routes = _real_routes()
+        routes[("bills", "agg", 1)] = _load("lyapi_bills_11_by_session.json")
+        source, _, _ = _source(routes)
+        groups, total = source._groups("bills", "議案編號", {"提案來源": "委員提案"}, "會期")
+        self.assertEqual((sum(groups.values()), total), (7402, 7402))
+        self.assertEqual(groups[5], 1831)
 
     def test_a_page_that_went_missing_fails_the_whole_fetch(self):
         """翻頁途中資料有變動：說有 3 筆、翻完只拿到 2 筆，寧可整次失敗。"""
@@ -267,15 +335,13 @@ class SourceTests(SimpleTestCase):
 
     def test_429_backs_off_using_retry_after(self):
         routes = _real_routes()
-        answers = [_http_error(429, retry_after="5"), routes[("bills", None, 1)]]
+        answers = [_http_error(429, retry_after="5")]
 
         class Flaky(FakeLyApi):
             def __call__(self, url):
                 if "/bills" in url and answers:
-                    answer = answers.pop(0)
-                    if isinstance(answer, Exception):
-                        self.urls.append(url)
-                        raise answer
+                    self.urls.append(url)
+                    raise answers.pop(0)
                 return super().__call__(url)
 
         sleeps = []
@@ -311,8 +377,8 @@ class SourceTests(SimpleTestCase):
         source, fetch, _ = _source()
         fetched = source.fetch(session=5)
         self.assertEqual(fetch.queries("meets")[0]["會期"], ["5"])
-        # 議案的「會期」篩選看的是最新進度的會期：整屆抓回來、照一讀的會期篩
-        self.assertNotIn("會期", fetch.queries("bills")[0])
+        # 議案的「會期」是最新進度的會期：抓第 5 批以後的，再照一讀的會期篩
+        self.assertEqual([q.get("會期") for q in fetch.queries("bills")], [None, ["5"]])
         self.assertNotIn("會期", fetch.queries("votes")[0])
         self.assertEqual(len(fetched.bills), 4)
         self.assertEqual([v.code for v in fetched.votes], ["1151901_00002_717"])
@@ -379,12 +445,44 @@ class SaveTests(TestCase):
         save(self._fetched(), now=NOW)
         routes = _real_routes()
         bills = _rows("lyapi_bills_11.json", "bills")
-        routes[("bills", None, 1)] = _payload("bills", [dict(bills[0], 議案狀態="審查完畢"), *bills[1:]])
+        routes.update(_bill_routes([dict(bills[0], 議案狀態="審查完畢"), *bills[1:]]))
         source, _, _ = _source(routes)
         save(source.fetch(), now=NOW)
         self.assertEqual((LyMeeting.objects.count(), LyBill.objects.count(), LyVote.objects.count()),
                          (9, 5, 2))
         self.assertEqual(LyBill.objects.get(bill_no="202110224730000").status, "審查完畢")
+
+    def test_records_lyapi_no_longer_has_are_removed(self):
+        """LYAPI 改了代碼（或刪掉重複）的那一筆不能留著：會被算兩次。"""
+        save(self._fetched(), now=NOW)
+        routes = _real_routes()
+        votes = _rows("lyapi_votes_11.json", "votes")
+        routes[("votes", None, 1)] = _payload("votes", [dict(votes[0], 表決代碼="新代碼"), votes[1]])
+        source, _, _ = _source(routes)
+        report = save(source.fetch(), now=NOW)
+        self.assertEqual(sorted(LyVote.objects.values_list("code", flat=True)),
+                         ["1141921_00002_591", "新代碼"])
+        self.assertEqual(report.removed, Counter({"表決": 1}))
+        self.assertIn("表決 1 筆", str(report))
+
+    def test_only_the_synced_session_is_reconciled(self):
+        save(self._fetched(), now=NOW)
+        source, _, _ = _source()
+        report = save(source.fetch(session=5), now=NOW)
+        # 第 2～4 會期的會議、表決，第 1 會期的議案都還在
+        self.assertEqual((LyMeeting.objects.count(), LyBill.objects.count(), LyVote.objects.count()),
+                         (9, 5, 2))
+        self.assertFalse(report.removed)
+
+    def test_an_empty_answer_does_not_wipe_the_table(self):
+        save(self._fetched(), now=NOW)
+        routes = _real_routes()
+        routes[("votes", None, 1)] = _payload("votes", [])
+        source, _, _ = _source(routes)
+        report = save(source.fetch(), now=NOW)
+        self.assertEqual(LyVote.objects.count(), 2)
+        self.assertEqual(report.kept_because_empty, ["表決"])
+        self.assertIn("舊紀錄先留著", str(report))
 
     def test_vote_dates_come_from_the_meeting(self):
         """院會-11-2-18 那一筆的原文沒有年：靠會議的日期補上。"""

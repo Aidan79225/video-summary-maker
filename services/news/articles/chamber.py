@@ -6,7 +6,7 @@
 離職的人才不會被算成缺席。
 
 百分位、最小樣本、同儕的規則跟第 1 步一樣（profiles._rank）；同儕是該會期的立委母體：任期跟這個會期
-的紀錄期間（會議、表決、提案的最早到最晚）有重疊的人。
+的紀錄期間（會議與表決的最早到最晚；還沒有的話用提案日期）有重疊的人。
 
 每個數字都能點回紀錄清單（/api/people/{id}/records）：清單跟指標用同一個 SessionRecords 算，筆數
 必然等於指標的 n（或值）。
@@ -15,6 +15,7 @@
 """
 from __future__ import annotations
 
+import logging
 from collections import Counter, defaultdict
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
@@ -27,6 +28,8 @@ from .ly_records import name_key, parse_session_name
 from .members_sync import term_number
 from .models import (ArticleSource, LyBill, LyMeeting, LyMeetingKind, LyVote, Membership, ProfileStat,
                      Session)
+
+logger = logging.getLogger(__name__)
 
 CHAMBER = "chamber"
 TITLE = "院內紀錄"
@@ -288,10 +291,11 @@ class SessionRecords:
             self.votes = list(LyVote.objects.filter(term=term, session_number=number))
         # 屆別從會期名稱拿（跟紀錄的篩選同一個來源），不靠 Session.term 這個另外存的欄位
         self.roster = legislators.for_term(str(numbers[0]) if numbers else session.term)
-        days = ([m.date for m in self.meetings] + [v.date for v in self.votes]
-                + [b.proposed_on for b in self.bills])
-        days = [d for d in days if d]
-        # 這個會期的紀錄期間：母體是任期跟它有重疊的人
+        # 這個會期的紀錄期間：母體是任期跟它有重疊的人。只看會議與表決：提案日期可能比一讀早好幾個月
+        # （休會期間提、或卡在程序委員會），拿來算的話，早就離職的人也會跑進這個會期的母體。還沒有
+        # 會議與表決的會期（剛開議的）才用提案日期
+        days = [d for d in [m.date for m in self.meetings] + [v.date for v in self.votes] if d]
+        days = days or [b.proposed_on for b in self.bills if b.proposed_on]
         self.first, self.last = (min(days), max(days)) if days else (None, None)
         self._index()
 
@@ -302,8 +306,9 @@ class SessionRecords:
     def _index(self) -> None:
         """名字一次對成人：每場會議的出席者、每件議案的提案人與連署人、每次表決每個人的票。"""
         self._meeting_index = {m.code: m for m in self.meetings}
+        # 出席名單不是清單（null，或資料壞了）就是「不知道」：不算進任何人的分母
         self._attended = {m.code: set(self._people(m.attendees, m.date))
-                          for m in self.meetings if m.attendees is not None}
+                          for m in self.meetings if isinstance(m.attendees, list)}
         self._proposed: dict[int, list[LyBill]] = defaultdict(list)
         self._cosigned: dict[int, list[LyBill]] = defaultdict(list)
         for bill in self.bills:
@@ -326,8 +331,11 @@ class SessionRecords:
             self._choices[vote.code] = choices
             self._majorities[vote.code] = {c: _majority(n) for c, n in by_caucus.items()}
 
-    def _people(self, names: Iterable[str] | None, day: date | None) -> list[int]:
-        found = (self.roster.person_for(name, day) for name in (names or ()))
+    def _people(self, names: object, day: date | None) -> list[int]:
+        """名字清單 → 人（去重、保留順序）。JSON 欄位不是字串清單的部分略過，不讓一筆壞資料拖垮重算。"""
+        if not isinstance(names, list):
+            return []
+        found = (self.roster.person_for(name, day) for name in names if isinstance(name, str))
         return list(dict.fromkeys(pid for pid in found if pid is not None))
 
     @property
@@ -451,14 +459,19 @@ def session_rows(session: Session, legislators: Legislators,
     API 靠「有沒有這幾列」決定要不要給院內紀錄區塊。"""
     if session.source != ArticleSource.LY:
         return [], ""
-    records = SessionRecords(session, legislators)
-    if records.empty:
-        return [], ""
-    tallies = {pid: records.tally(pid) for pid in records.population}
-    rows: list[ProfileStat] = []
-    for indicator in INDICATORS:
-        rows.extend(profiles._rank(indicator, session, tallies, now))
-    return rows, records.summary()
+    try:
+        records = SessionRecords(session, legislators)
+        if records.empty:
+            return [], ""
+        tallies = {pid: records.tally(pid) for pid in records.population}
+        rows: list[ProfileStat] = []
+        for indicator in INDICATORS:
+            rows.extend(profiles._rank(indicator, session, tallies, now))
+        return rows, records.summary()
+    except Exception:  # noqa: BLE001
+        # 重算是整批的：這裡出錯不能讓後面的會期（包括市議會的）也停在昨天。這個會期先不給院內紀錄
+        logger.exception("%s 的院內紀錄算不出來，這個會期先不給院內紀錄區塊", session.name)
+        return [], f"{session.name} 院內紀錄：計算失敗（見 log），這次不給院內紀錄區塊"
 
 
 def record_spans(sessions: Iterable[Session]) -> dict[int, tuple[date, date]]:
