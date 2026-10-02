@@ -12,6 +12,7 @@ from unittest import mock
 
 from django.core.management import call_command
 from django.core.management.base import CommandError
+from django.db import OperationalError
 from django.test import SimpleTestCase, TestCase
 from django.utils import timezone
 
@@ -241,6 +242,24 @@ class ClassifyTests(TestCase):
         with self.assertLogs(self.LOGGER, "WARNING"):
             report = classify_topics(gpu, limit=10)
         self.assertEqual((report.classified, report.failed, report.stopped), (1, 1, False))
+
+    def test_an_article_that_cannot_be_saved_does_not_stop_the_others(self):
+        """SD 卡上的 SQLite 鎖住一下：那一篇算失敗，剩下的照分。"""
+        first = _article(one_liner="finance")
+        second = _article(one_liner="labor")
+        save = Topic.objects.update_or_create
+
+        def flaky(article, defaults):
+            if article == first:
+                raise OperationalError("database is locked")
+            return save(article=article, defaults=defaults)
+
+        with mock.patch.object(Topic.objects, "update_or_create", side_effect=flaky), \
+                self.assertLogs(self.LOGGER, "WARNING"):
+            report = classify_topics(FakeTopicGpu(), limit=10)
+        self.assertEqual((report.classified, report.failed, report.stopped), (1, 1, False))
+        self.assertIn("database is locked", report.errors[0])
+        self.assertEqual(list(Topic.objects.values_list("article_id", flat=True)), [second.id])
 
     def test_an_unavailable_gpu_stops_the_whole_round(self):
         for _ in range(3):

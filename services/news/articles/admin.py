@@ -9,6 +9,7 @@ from django.utils.html import format_html
 from . import topics
 from .models import (Article, ArticleStatus, Membership, Person, ProfileStat, Session, Slide, Topic,
                      TopicEvaluation, TopicLabel)
+from .profiles import compute_profiles
 
 
 class SlideInline(admin.TabularInline):
@@ -257,7 +258,12 @@ class TopicAdmin(_ReadOnlyAdmin):
 
 @admin.register(TopicEvaluation)
 class TopicEvaluationAdmin(_ReadOnlyAdmin):
-    """評估紀錄。刪掉一筆通過的評估，等於讓那個來源的議題分布下架（下一次重算生效）。"""
+    """評估紀錄。刪掉通過的評估會改變上線條件：那個來源退回較舊的通過版本，或整個下架。
+
+    刪完之後上線的分類器變了，就當場重算人物側寫（同 eval_topics）。API 每次都看最新的評估，
+    側寫的數字卻是上一次重算時的分類器算的：不重算的話，區塊上寫的是舊版本的名稱與準確率、
+    數字卻是剛刪掉的那個版本分的，證據清單的篇數也兜不攏，直到明早排程跑完。
+    """
 
     list_display = ("source", "classifier", "labeled", "correct", "accuracy_percent", "passed",
                     "ran_at")
@@ -266,3 +272,19 @@ class TopicEvaluationAdmin(_ReadOnlyAdmin):
     @admin.display(description="準確率", ordering="accuracy")
     def accuracy_percent(self, evaluation: TopicEvaluation) -> str:
         return f"{evaluation.accuracy * 100:.1f}%"
+
+    def delete_model(self, request, obj) -> None:
+        before = topics.passing_classifiers()
+        super().delete_model(request, obj)
+        self._recompute_if_the_gate_moved(request, before)
+
+    def delete_queryset(self, request, queryset) -> None:
+        before = topics.passing_classifiers()
+        super().delete_queryset(request, queryset)
+        self._recompute_if_the_gate_moved(request, before)
+
+    def _recompute_if_the_gate_moved(self, request, before: dict[str, str]) -> None:
+        if topics.passing_classifiers() == before:
+            return
+        compute_profiles()
+        self.message_user(request, "上線的分類器變了，已經重算人物側寫", messages.INFO)

@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import re
-from datetime import date
+from datetime import date, datetime
 
 from django.contrib.auth import get_user_model
 from django.test import TestCase
@@ -246,3 +246,70 @@ class TopicReadOnlyAdminTests(TestCase):
     def test_nothing_can_be_added_by_hand(self):
         self.assertEqual(self.client.get("/admin/articles/topic/add/").status_code, 403)
         self.assertEqual(self.client.get("/admin/articles/topicevaluation/add/").status_code, 403)
+
+
+class TopicEvaluationDeleteTests(TestCase):
+    """刪掉通過的評估會改變上線條件：上線的分類器變了就當場重算側寫，數字才跟區塊上寫的版本一致。"""
+
+    def setUp(self):
+        from articles.models import Membership, Person, Topic, TopicEvaluation
+        from articles.profiles import compute_profiles
+
+        user = get_user_model().objects.create_superuser("admin6", "f@example.com", "pw")
+        self.client.force_login(user)
+        person = Person.objects.create(name="王立")
+        Membership.objects.create(person=person, source="ly", name="王立")
+        # 舊版本分成財經、新版本分成勞動：看側寫裡是哪一個，就知道數字是哪個版本算的
+        for n, (primary, classifier) in enumerate((("finance", "old#topic-v1"),
+                                                    ("labor", "new#topic-v1")), start=1):
+            article = Article.objects.create(
+                ivod_id=f"e{n}", slug=f"2026-03-1{n}-e{n}", title="t", speaker="王立", source="ly",
+                meeting="第11屆第5會期財政委員會第3次全體委員會議", date=date(2026, 3, 10 + n),
+                ivod_url="https://ivod/x", status=ArticleStatus.READY,
+                brief={"one_liner": "一句話", "key_numbers": [], "asks": []})
+            Topic.objects.create(article=article, primary=primary, classifier=classifier,
+                                 labeled_at=timezone.now())
+
+        def evaluation(classifier, passed, day):
+            return TopicEvaluation.objects.create(
+                source="ly", classifier=classifier, labeled=20, correct=18 if passed else 10,
+                accuracy=0.9 if passed else 0.5, passed=passed,
+                ran_at=timezone.make_aware(datetime(2026, 10, day)))
+
+        self.old = evaluation("old#topic-v1", True, 1)
+        self.new = evaluation("new#topic-v1", True, 2)
+        self.failed = evaluation("newest#topic-v1", False, 3)
+        compute_profiles()
+
+    def _counted(self):
+        from articles.models import ProfileStat
+
+        return {s.indicator.removeprefix("topic:"): s.value
+                for s in ProfileStat.objects.filter(indicator__startswith="topic:") if s.value}
+
+    def test_deleting_the_live_evaluation_falls_back_and_recomputes_at_once(self):
+        self.assertEqual(self._counted(), {"labor": 1.0})
+        res = self.client.post(f"/admin/articles/topicevaluation/{self.new.pk}/delete/",
+                               {"post": "yes"}, follow=True)
+        self.assertEqual(res.status_code, 200)
+        self.assertContains(res, "已經重算人物側寫")
+        self.assertEqual(self._counted(), {"finance": 1.0})
+
+    def test_deleting_every_passing_evaluation_takes_the_topics_down(self):
+        from articles.models import ProfileStat
+
+        res = self.client.post("/admin/articles/topicevaluation/", {
+            "action": "delete_selected", "_selected_action": [self.old.pk, self.new.pk],
+            "post": "yes"}, follow=True)
+        self.assertEqual(res.status_code, 200)
+        self.assertContains(res, "已經重算人物側寫")
+        self.assertFalse(ProfileStat.objects.filter(indicator__startswith="topic").exists())
+
+    def test_deleting_an_evaluation_that_is_not_live_changes_nothing(self):
+        from articles.models import ProfileStat
+
+        before = list(ProfileStat.objects.order_by("id").values_list("id", flat=True))
+        res = self.client.post(f"/admin/articles/topicevaluation/{self.failed.pk}/delete/",
+                               {"post": "yes"}, follow=True)
+        self.assertNotContains(res, "已經重算人物側寫")
+        self.assertEqual(list(ProfileStat.objects.order_by("id").values_list("id", flat=True)), before)

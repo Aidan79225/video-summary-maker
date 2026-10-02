@@ -203,6 +203,11 @@ def classify_topics(client: GpuApiClient, limit: int, reclassify: bool = False,
     for article in list(queryset):
         try:
             result = classify_text(client, classifier_input(article), timeout)
+            # 存檔也放在 try 裡：SD 卡上的 SQLite 偶爾會鎖住，一篇存不進去不該讓這一輪剩下的
+            # 文章整晚都不分類（下面的 except Exception 接的主要就是這種）
+            Topic.objects.update_or_create(article=article, defaults={
+                "primary": result.primary, "secondary": result.secondary,
+                "classifier": result.classifier, "labeled_at": timezone.now()})
         except GpuApiError as e:
             _record_failure(article, e, report)
             report.stopped = True
@@ -212,13 +217,9 @@ def classify_topics(client: GpuApiClient, limit: int, reclassify: bool = False,
             _record_failure(article, e, report)
             continue
         except Exception as e:  # noqa: BLE001
-            # 資料庫鎖住之類的意外不能讓剩下的文章整晚都不分類
             logger.exception("文章 %s 分類時發生預期外的錯誤", article.ivod_id)
             _record_failure(article, e, report)
             continue
-        Topic.objects.update_or_create(article=article, defaults={
-            "primary": result.primary, "secondary": result.secondary,
-            "classifier": result.classifier, "labeled_at": timezone.now()})
         report.classified += 1
     report.remaining = base_articles().filter(topic__isnull=True).count()
     return report

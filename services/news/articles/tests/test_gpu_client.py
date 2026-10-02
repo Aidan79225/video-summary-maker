@@ -162,6 +162,13 @@ class TopicJobTests(SimpleTestCase):
                          ("POST", "http://gpu:8800/jobs", "secret"))
         self.assertEqual(call["body"], {"kind": "topic", "text": "一句話：預算", "labels": self.LABELS})
 
+    def test_a_deck_job_still_goes_out_without_a_kind(self):
+        """摘要工作的請求一個欄位都沒多：GPU 端省略 kind 就是 deck，Pi 先升級、GPU 還沒升的
+        那段時間，摘要照樣送得出去（舊版 GPU 不認得 kind，帶了反而可能被拒）。"""
+        client, transport, _ = _client([{"id": "d1", "status": "queued"}])
+        client.submit("https://ivod/1")
+        self.assertEqual(transport.calls[0]["body"], {"url": "https://ivod/1", "detailed": True})
+
     def test_the_result_is_waited_for_like_any_other_job(self):
         client, _, _ = _client([
             {"id": "t1", "status": "queued"},
