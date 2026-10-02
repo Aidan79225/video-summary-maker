@@ -338,6 +338,21 @@ class ChamberApiTests(TestCase):
         self.assertEqual([b["key"] for b in self._profile("甲")["blocks"]],
                          ["volume", "specificity", "chamber"])
 
+    def test_a_session_known_only_from_records_sorts_by_its_records(self):
+        """只有院內紀錄的會期沒有起訖（起訖只看文章）：用紀錄的期間排新舊，剛開議的才不會排在最後。"""
+        Article.objects.create(ivod_id="1", slug="a-1", source="ly", title="t", speaker="甲",
+                               meeting="第11屆第4會期第8次會議", date=date(2025, 10, 1),
+                               ivod_url="https://example.invalid/1", status=ArticleStatus.READY)
+        _session("第11屆第6會期")
+        _bill(["甲"], day="2026-09-20", session=6)
+        compute_profiles()
+        res = self._profile("甲")
+        self.assertEqual([s["name"] for s in res["sessions"]],
+                         ["第11屆第6會期", S5, "第11屆第4會期"])
+        # 預設仍是他有發言的最近一個會期；從沒發言的人是最新的會期
+        self.assertEqual(res["session"]["name"], "第11屆第4會期")
+        self.assertEqual(self._profile("乙")["session"]["name"], "第11屆第6會期")
+
     def test_without_a_caucus_the_reason_says_so(self):
         got = {i["key"]: i for i in self._chamber("庚")["indicators"]}
         for key in ("caucus_agreement", "caucus_defections"):

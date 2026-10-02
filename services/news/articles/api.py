@@ -436,9 +436,15 @@ def speakers(request, source: SourceParam | None = None) -> dict:
 # --- 人物側寫 ---
 
 
-def _recency(session: Session) -> tuple:
-    """會期的新舊：看資料涵蓋到哪一天。"""
-    return (session.end_date or date_type.min, session.start_date or date_type.min, session.id)
+def _recency(session: Session, span: tuple[date_type, date_type] | None = None) -> tuple:
+    """會期的新舊：看資料涵蓋到哪一天。
+
+    span 是還沒有文章的會期（只有院內紀錄）的紀錄期間：Session 的起訖只看文章，這種會期是空的，
+    不補的話剛開議的會期會排在所有舊會期後面。
+    """
+    first, last = span or (None, None)
+    return (session.end_date or last or date_type.min, session.start_date or first or date_type.min,
+            session.id)
 
 
 def _session_out(session: Session) -> dict:
@@ -507,7 +513,8 @@ def person_profile(request, person_id: int, source: SourceParam | None = None,
     person = get_object_or_404(Person, pk=person_id)
     stats = list(ProfileStat.objects.filter(person=person).select_related("session"))
     by_session = {stat.session_id: stat.session for stat in stats}
-    ordered = sorted(by_session.values(), key=_recency, reverse=True)
+    spans = chamber.record_spans(by_session.values())
+    ordered = sorted(by_session.values(), key=lambda s: _recency(s, spans.get(s.id)), reverse=True)
 
     chosen = None
     if session is not None:

@@ -20,6 +20,8 @@ from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from datetime import date, datetime
 
+from django.db.models import Max, Min
+
 from . import profiles, topics
 from .ly_records import name_key, parse_session_name
 from .members_sync import term_number
@@ -457,3 +459,30 @@ def session_rows(session: Session, legislators: Legislators,
     for indicator in INDICATORS:
         rows.extend(profiles._rank(indicator, session, tallies, now))
     return rows, records.summary()
+
+
+def record_spans(sessions: Iterable[Session]) -> dict[int, tuple[date, date]]:
+    """還沒有文章的立法院會期 → 院內紀錄的期間（最早、最晚），給 API 排會期的新舊用。
+
+    Session 的起訖是文章的涵蓋範圍（設計：沒有文章就留空），只有紀錄的會期排序時會被當成最舊的，
+    剛開議的會期就會排在所有舊會期後面。每種紀錄一個彙總查詢；會期都有文章時一個查詢都不打。
+    """
+    wanted: dict[tuple[int, int], int] = {}
+    for session in sessions:
+        numbers = parse_session_name(session.name)
+        if session.source == ArticleSource.LY and session.end_date is None and numbers:
+            wanted[numbers] = session.id
+    if not wanted:
+        return {}
+    spans: dict[tuple[int, int], tuple[date, date]] = {}
+    for model, field in ((LyMeeting, "date"), (LyVote, "date"), (LyBill, "proposed_on")):
+        rows = (model.objects.filter(term__in={t for t, _ in wanted},
+                                     session_number__in={n for _, n in wanted})
+                .exclude(**{f"{field}__isnull": True}).order_by()
+                .values("term", "session_number").annotate(first=Min(field), last=Max(field)))
+        for row in rows:
+            key = (row["term"], row["session_number"])
+            if key in wanted:
+                first, last = spans.get(key, (row["first"], row["last"]))
+                spans[key] = (min(first, row["first"]), max(last, row["last"]))
+    return {wanted[key]: span for key, span in spans.items()}
