@@ -133,10 +133,40 @@ export type ProfileIndicator = {
   evidence_url: string;
 };
 
+/** 議題分布的一列：一個領域在這個會期的篇數與占比（只算主領域） */
+export type TopicShare = {
+  /** 領域代碼，也是 /api/articles 的 topic */
+  key: string;
+  label: string;
+  count: number;
+  /** 0～100 的浮點：篇數 ÷ 基礎報導篇數 */
+  share: number;
+  /** 網站的相對路徑：主領域是這個領域的那幾篇 */
+  evidence_url: string;
+};
+
+/** 算出這份分布的分類器，以及它在人工標註集上的評估結果 */
+export type TopicClassifier = {
+  /** 模型＋提示詞版本，例如「qwen3.5:9b#topic-v1」 */
+  name: string;
+  /** 0～1：主領域跟人工標註相同的比例 */
+  accuracy: number;
+  /** 人工標註的篇數（評估的分母） */
+  labeled: number;
+  evaluated_at: string;
+};
+
 export type ProfileBlock = {
   key: string;
   title: string;
   indicators: ProfileIndicator[];
+  /**
+   * 只有議題分布（key「topics」）有：12 個領域都列，依篇數由多到少。
+   * 頁面把 0 篇的收成一行，不畫空長條。
+   */
+  distribution?: TopicShare[];
+  /** 只有議題分布有；沒有通過評估的來源整個區塊都不會出現 */
+  classifier?: TopicClassifier;
 };
 
 export type Profile = {
@@ -200,6 +230,12 @@ export type ArticleQuery = {
   solo?: boolean;
   /** 只要有摘要卡的文章 */
   has_brief?: boolean;
+  /**
+   * 領域代碼：只要主領域是這個領域的文章（只算該來源評估通過的分類器分出來的）。
+   * 側寫議題分布每一列的連結帶的就是它。「any」是哪個領域都可以、但要分過類——
+   * 聚焦度、廣度、委員會職掌內的比例的「看這 N 篇」帶的是它
+   */
+  topic?: string;
   page?: number;
   page_size?: number;
 };

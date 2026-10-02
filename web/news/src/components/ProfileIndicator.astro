@@ -8,7 +8,7 @@
  * 底下有一行字完整寫出來，讀螢幕報讀器或不看顏色的人都拿得到。
  */
 import type { ProfileIndicator } from '../lib/types';
-import { safeInternalPath } from '../lib/api';
+import { evidenceHref } from '../lib/api';
 import { formatMetric } from '../lib/format';
 
 interface Props {
@@ -23,9 +23,7 @@ const hasValue = ind.value !== null;
 const pct = ind.percentile;
 // 頁面四捨五入到整數；長條的位置用原值，兩個同儕在 63.5 與 64.4 時記號不會疊在一起
 const pctLabel = pct !== null ? `第 ${Math.round(pct)} 百分位，在 ${ind.peers} 位同儕中` : '';
-const safeEvidence = ind.n > 0 ? safeInternalPath(ind.evidence_url) : null;
-// 跳到清單：側寫區塊在清單上面，不跳的話點了只會回到頁首
-const evidence = safeEvidence && !safeEvidence.includes('#') ? `${safeEvidence}#articles` : safeEvidence;
+const evidence = ind.n > 0 ? evidenceHref(ind.evidence_url) : null;
 // 證據連結列出的是文章；「有來源的數字占比」的 n 是數字個數，不能寫成「看這 23 篇」
 const evidenceLabel = ind.n_unit === '篇' ? `看這 ${ind.n} 篇` : '看這些數字出自哪幾篇';
 // 百分號緊貼數字，其他單位留一點空隙

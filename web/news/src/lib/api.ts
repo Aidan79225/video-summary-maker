@@ -16,8 +16,11 @@ import type {
   ProfileIndicator,
   ProfileQuery,
   ProfileSession,
+  TopicClassifier,
+  TopicShare,
 } from './types';
 import { toSource } from './sources';
+import { ANY_TOPIC, TOPIC_AREAS, TOPIC_MIN_ACCURACY, TOPIC_MIN_LABELS, topicOrder } from './topics';
 import fixture from '../fixtures/sample.json';
 
 /* ------------------------------------------------------------------
@@ -96,6 +99,17 @@ export function safeInternalPath(path: string | null | undefined): string | null
   if (!path) return null;
   const p = path.trim();
   return p.startsWith('/') && !p.startsWith('//') && !p.includes('\\') ? p : null;
+}
+
+/**
+ * 側寫的證據連結：先過 safeInternalPath，再接上 #articles。
+ *
+ * 側寫區塊在發言者頁的清單上面，不跳到清單的話，點了只會回到頁首、看起來像
+ * 沒反應。後端已經帶了錨點就不再接。指標卡與議題分布的每一列共用這一個。
+ */
+export function evidenceHref(path: string | null | undefined): string | null {
+  const safe = safeInternalPath(path);
+  return safe && !safe.includes('#') ? `${safe}#articles` : safe;
 }
 
 /* ------------------------------------------------------------------
@@ -196,10 +210,11 @@ async function getJson<T>(path: string): Promise<Result<T>> {
    ------------------------------------------------------------------ */
 
 /**
- * 假資料的文章多一個 session_id：真的 API 不把會期放在文章卡片上（篩選在
- * 後端做），假資料沒有後端，只好把「這篇掛在哪個會期」直接寫在文章上。
+ * 假資料的文章多兩個欄位：session_id（掛在哪個會期）與 topic（評估通過的分類器
+ * 給的主領域）。真的 API 不把這兩樣放在文章卡片上（篩選在後端做），假資料沒有
+ * 後端，只好直接寫在文章上。沒有 topic 的就是沒被分類的（聯合質詢、沒有摘要卡）。
  */
-type FixtureArticle = ArticleDetail & { session_id?: number | null };
+type FixtureArticle = ArticleDetail & { session_id?: number | null; topic?: string | null };
 
 /** 名冊：同來源、同名對到哪個人。對不到的名字就沒有 person_id，跟真的後端一樣 */
 type FixturePerson = { id: number; name: string; source: string };
@@ -217,6 +232,12 @@ type FixtureProfile = {
     key: string;
     title: string;
     indicators: Omit<ProfileIndicator, 'evidence_url'>[];
+    /**
+     * 議題分布只寫有篇數的領域；其餘領域、名稱、占比與連結由 fixtureDistribution
+     * 照後端的規則補齊——手算占比跟手寫網址一樣，一錯就跟篇數對不上
+     */
+    distribution?: { key: string; count: number }[];
+    classifier?: TopicClassifier;
   }[];
 };
 
@@ -232,12 +253,13 @@ function fixtureArticles(): FixtureArticle[] {
 }
 
 function toCard(a: FixtureArticle) {
-  const { source_note, transcript_text, slides, brief, session_id, ...card } = a;
+  const { source_note, transcript_text, slides, brief, session_id, topic, ...card } = a;
   void source_note;
   void transcript_text;
   void slides;
   void brief;
   void session_id;
+  void topic;
   return card;
 }
 
@@ -314,6 +336,8 @@ function fixtureList(query: ArticleQuery): ArticleList {
     // 「甲、」這種殘缺的欄位後端算聯合質詢，這裡也要算，假資料的 count 才會等於 n
     if (query.solo && a.speaker.includes('、')) return false;
     if (query.has_brief && a.brief == null) return false;
+    // any：分過類就好（哪個領域都可以）——議題指標的 n 就是這些，不含還沒分類的
+    if (query.topic === ANY_TOPIC ? a.topic == null : query.topic && a.topic !== query.topic) return false;
     if (query.party && !(a.party ?? '').split('、').includes(query.party)) return false;
     if (q) {
       const hay = `${a.title} ${a.teaser} ${a.meeting} ${a.speaker} ${a.transcript_text}`;
@@ -382,6 +406,89 @@ function normalizeIndicator(raw: unknown): ProfileIndicator | null {
   };
 }
 
+/** share 沒給時是 null，由 normalizeDistribution 用篇數補——不能當成 0，否則有篇數的領域畫成 0% */
+type RawTopicShare = Omit<TopicShare, 'share'> & { share: number | null };
+
+function normalizeTopicShare(raw: unknown): RawTopicShare | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const o = raw as Record<string, unknown>;
+  const key = str(o.key);
+  const label = str(o.label).trim();
+  if (!key || !label) return null;
+  const share = num(o.share);
+  return {
+    key,
+    label,
+    count: Math.max(0, Math.round(num(o.count) ?? 0)),
+    share: share === null ? null : Math.min(100, Math.max(0, share)),
+    evidence_url: str(o.evidence_url),
+  };
+}
+
+/**
+ * 依篇數由多到少、同篇數照領域列舉的順序（spec：「同數依上表順序」）。後端已經排好，
+ * 這裡明確再排一次，不靠後端給的順序剛好對。
+ *
+ * 占比缺了就用篇數 ÷ 各領域篇數的總和補：每篇基礎報導剛好一個主領域，總和就是分母。
+ */
+function normalizeDistribution(raw: unknown): TopicShare[] {
+  const rows = (Array.isArray(raw) ? raw : [])
+    .map(normalizeTopicShare)
+    .filter((t): t is RawTopicShare => t !== null);
+  const total = rows.reduce((sum, t) => sum + t.count, 0);
+  return rows
+    .map((t) => ({ ...t, share: t.share ?? (total > 0 ? (t.count / total) * 100 : 0) }))
+    .sort((a, b) => b.count - a.count || topicOrder(a.key) - topicOrder(b.key));
+}
+
+function normalizeClassifier(raw: unknown): TopicClassifier | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const o = raw as Record<string, unknown>;
+  const accuracy = num(o.accuracy);
+  // 契約是 0～1（TopicEvaluation 存的、門檻寫成 0.8）。超出範圍的不猜它是不是百分比：
+  // 「85」讀成 85% 就讓一個格式錯的回應通過了門檻。讀不懂就當作沒有通過，整塊不上線
+  if (accuracy === null || accuracy < 0 || accuracy > 1) return null;
+  return {
+    name: str(o.name),
+    accuracy,
+    labeled: Math.max(0, Math.round(num(o.labeled) ?? 0)),
+    evaluated_at: str(o.evaluated_at),
+  };
+}
+
+/**
+ * 分類器有沒有過門檻（至少 20 篇人工標註、準確率至少 80%）。
+ * 浮點留一點餘裕：16 ÷ 20 在後端算是剛好 0.8，傳過來不該因為捨入差一點就被擋掉。
+ */
+function classifierPassed(c: TopicClassifier | null): c is TopicClassifier {
+  return c !== null && c.labeled >= TOPIC_MIN_LABELS && c.accuracy >= TOPIC_MIN_ACCURACY - 1e-9;
+}
+
+/**
+ * 一個區塊。議題分布另外帶 distribution 與 classifier；分類器沒過門檻（或沒給）
+ * 時整塊丟掉，不只藏數字——模型參與的指標「沒通過就不上線」，後端擋過，這裡再擋一次。
+ */
+function normalizeBlock(raw: unknown): ProfileBlock | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const b = raw as Record<string, unknown>;
+  const block: ProfileBlock = {
+    key: str(b.key),
+    title: str(b.title).trim(),
+    indicators: (Array.isArray(b.indicators) ? (b.indicators as unknown[]) : [])
+      .map(normalizeIndicator)
+      .filter((i): i is ProfileIndicator => i !== null),
+  };
+  if (!block.key || !block.title || block.indicators.length === 0) return null;
+  // 門檻是議題分類器自己的（追問率之後會有另一套），所以只認 topics 這一塊
+  if (block.key === 'topics') {
+    const classifier = normalizeClassifier(b.classifier);
+    if (!classifierPassed(classifier)) return null;
+    block.classifier = classifier;
+    block.distribution = normalizeDistribution(b.distribution);
+  }
+  return block;
+}
+
 /**
  * 側寫缺欄位時不讓整頁爆掉：壞掉的指標丟掉、沒有任何指標就當作沒有側寫
  * （回 null，頁面整段不顯示），而不是畫出一個空殼。
@@ -394,16 +501,9 @@ export function normalizeProfile(raw: unknown): Profile | null {
   const session = normalizeSession(o.session);
   if (personId === null || !session) return null;
 
-  const blocks: ProfileBlock[] = (Array.isArray(o.blocks) ? o.blocks : [])
-    .filter((b) => b && typeof b === 'object')
-    .map((b) => ({
-      key: str(b.key),
-      title: str(b.title).trim(),
-      indicators: (Array.isArray(b.indicators) ? (b.indicators as unknown[]) : [])
-        .map(normalizeIndicator)
-        .filter((i): i is ProfileIndicator => i !== null),
-    }))
-    .filter((b) => b.key && b.title && b.indicators.length > 0);
+  const blocks = (Array.isArray(o.blocks) ? o.blocks : [])
+    .map(normalizeBlock)
+    .filter((b): b is ProfileBlock => b !== null);
   if (blocks.length === 0) return null;
 
   const sessions = (Array.isArray(o.sessions) ? o.sessions : [])
@@ -473,16 +573,41 @@ function fixtureProfile(personId: number, query: ProfileQuery): Result<unknown> 
       sessions: inSource.map((x) => x.s),
       computed_at: picked.p.computed_at,
       min_sample: 5,
-      blocks: picked.p.blocks.map((b) => ({
-        ...b,
-        indicators: b.indicators.map((i) => ({
-          ...i,
-          // 具體度只算單獨發言、有摘要卡的文章，證據清單也要用同一組篩選
-          evidence_url: b.key === 'specificity' ? `${evidence}&solo=1&brief=1` : evidence,
-        })),
-      })),
+      blocks: picked.p.blocks.map((b) => {
+        // 具體度與議題分布只算單獨發言、有摘要卡的文章，證據清單也要用同一組篩選
+        const base = b.key === 'specificity' || b.key === 'topics' ? `${evidence}&solo=1&brief=1` : evidence;
+        // 議題的指標只算分過類的，再多帶 topic=any（跟後端一樣），篇數才等於 n
+        const indicatorUrl = b.key === 'topics' ? `${base}&topic=${ANY_TOPIC}` : base;
+        return {
+          ...b,
+          indicators: b.indicators.map((i) => ({ ...i, evidence_url: indicatorUrl })),
+          ...(b.distribution ? { distribution: fixtureDistribution(b.distribution, base) } : {}),
+        };
+      }),
     },
   };
+}
+
+/**
+ * 假資料的議題分布：照後端的規則補成完整的 12 列。
+ *
+ * 0 篇的領域也列、依篇數由多到少、同篇數照列舉順序（sort 是穩定的）；占比的分母是
+ * 基礎報導篇數，而每篇基礎報導剛好一個主領域，所以就是各領域篇數的總和。連結是
+ * 基礎報導的篩選再加 topic，點進去的篇數才會等於這一列的篇數。
+ */
+function fixtureDistribution(counts: { key: string; count: number }[], base: string): TopicShare[] {
+  const byKey = new Map(counts.map((c) => [c.key, c.count]));
+  const total = counts.reduce((sum, c) => sum + c.count, 0);
+  return TOPIC_AREAS.map((t) => {
+    const count = byKey.get(t.key) ?? 0;
+    return {
+      key: t.key,
+      label: t.label,
+      count,
+      share: total > 0 ? (count / total) * 100 : 0,
+      evidence_url: `${base}&topic=${t.key}`,
+    };
+  }).sort((a, b) => b.count - a.count);
 }
 
 /* ------------------------------------------------------------------
@@ -512,6 +637,7 @@ export async function getArticles(query: ArticleQuery = {}): Promise<Result<Arti
   if (query.session) params.set('session', String(query.session));
   if (query.solo) params.set('solo', 'true');
   if (query.has_brief) params.set('has_brief', 'true');
+  if (query.topic) params.set('topic', query.topic);
   params.set('page', String(Math.max(1, Number(query.page) || 1)));
   params.set('page_size', String(Math.max(1, Number(query.page_size) || 12)));
 
