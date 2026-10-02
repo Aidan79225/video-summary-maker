@@ -109,6 +109,8 @@ uv run python manage.py run_scheduler --backfill-days 0 # 不要回補
 
 # 二、系統排程（crontab -e）：匯入 → 分政策領域 → 重算側寫；用 ; 而不是 &&，前一步失敗後一步照跑
 10 4 * * * cd /home/pi/yt-downloader/services/news && /home/pi/.local/bin/uv run python manage.py ingest_ivod >> /var/log/ly-news-ingest.log 2>&1; /home/pi/.local/bin/uv run python manage.py classify_topics >> /var/log/ly-news-ingest.log 2>&1; /home/pi/.local/bin/uv run python manage.py compute_profiles >> /var/log/ly-news-ingest.log 2>&1
+# 每週日：名單 → 立法院院內紀錄 → 重算側寫（常駐排程的 weekly 跑的就是這三步）
+30 3 * * 0 cd /home/pi/yt-downloader/services/news && /home/pi/.local/bin/uv run python manage.py sync_members >> /var/log/ly-news-ingest.log 2>&1; /home/pi/.local/bin/uv run python manage.py sync_ly_records >> /var/log/ly-news-ingest.log 2>&1; /home/pi/.local/bin/uv run python manage.py compute_profiles >> /var/log/ly-news-ingest.log 2>&1
 ```
 
 ## 人物側寫（投入量、具體度）
@@ -239,6 +241,75 @@ uv run python manage.py sample_topic_labels
 uv run python manage.py eval_topics
 ```
 
+## 人物側寫：院內紀錄（出席、提案、表決；只有立法院）
+
+設計見 `docs/superpowers/specs/2026-10-03-profile-records-steps4-5-design.md`。**不打模型**：資料是 LYAPI 的結構化紀錄，指標是程式計數。市議會沒有結構化的出席與表決資料，不做。
+
+### 同步（`articles/ly_records.py`，指令 `sync_ly_records`）
+
+```bash
+uv run python manage.py sync_ly_records               # 這一屆（LY_TERM）的全部會期：約 25 個請求、不到一分鐘
+uv run python manage.py sync_ly_records --session 5   # 只同步第 5 會期
+uv run python manage.py sync_ly_records --term 11
+uv run python manage.py compute_profiles              # 同步完要重算，網站才看得到
+```
+
+- **會議**：`/meets` 的「院會」「委員會」「聯席會議」（聯席會議是另一個會議種類；存成委員會，單位是參加的全部委員會）。每個會議代碼一筆，一場會議可以開好幾天。出席名單：院會取「會議資料」每一天的出席委員；**委員會與聯席會議取「議事錄」的出席委員**——LYAPI 的委員會「會議資料」沒有出席名單（2026-10 實測，歷屆都是），議事錄的「列席委員」（不是那個委員會的人）不算。還沒有議事錄的會議，出席是「不知道」，不算進任何人的分母。全院委員會、公聽會、黨團協商、考察不算。經費稽核委員會的會議在 LYAPI 標成會期 0，對不到會期，不收（報告會舉例列出）。
+- **議案**：`/bills?提案來源=委員提案`：主提案人、連署人、議案狀態、提案日期、議事網連結。連署人在清單加 `output_fields=連署人` 就拿得到，翻完全部委員提案（第 11 屆八頁）就有每一件的連署人，不必逐人逐會期查 `連署人=<姓名>`（那要上百個請求；實測兩種做法的件數相同）。
+- **表決**：`/votes`（第 11 屆全部是記名表決）：每位委員的贊成、反對、棄權。`/votes` 不支援用會期篩選，`--session` 時整屆抓回來在這裡篩。表決時間有幾筆沒有年（「中華民國年1月21日」），用那場會議的日期補。
+- 一秒一個請求、429 退避（伺服器給 `Retry-After` 就照它）。**全部抓完才寫、在同一個 transaction 裡寫**：任何一頁失敗、或翻完的筆數比 LYAPI 說的少（翻頁途中資料有變動），整次失敗、資料庫不動、指令以非零結束，下次排程再來。以唯一鍵（會議代碼、議案編號、表決代碼）upsert，重跑是安全的。
+- **會期**：每筆紀錄的「第{屆}屆第{會期}會期」就是第 1 步的會期；還沒有就建立。涵蓋範圍（起訖）仍以文章為準，沒有文章的會期留空。會期超出 1～8 的是 LYAPI 的資料錯誤，不收。
+- **名字**：比對一律去空白、去間隔號（`ly_records.name_key`）：會議資料寫「伍麗華Saidhai Tahovecahe」，名冊與表決寫「伍麗華Saidhai‧Tahovecahe」。報告會列出對不到任何一段立法院任期的姓名（黨團提案的「…立法院黨團」不算）；先跑 `sync_members`，還對不到就是寫法不同，到 admin 核對任期的名字。
+- **黨團**：`sync_members` 把 LYAPI 名冊的「黨團」存進任期的 `caucus`（「0無」存成空字串）。黨團不一定等於政黨：第 11 屆有 2 位無黨籍參加國民黨團。
+- **排程**：`run_scheduler` 每週日 03:30 依序跑 `sync_members`、`sync_ly_records`、`compute_profiles`，每一步各包各的，前一步失敗後一步照跑。
+
+### 指標（區塊 `chamber`「院內紀錄」）
+
+都以「該會期、他在任期間」為準：任期是名冊的到職日、離職日。中途遞補、中途離職的人，不在任的那幾場會議、那幾次表決不算進分母。母體＝任期跟這個會期的紀錄期間（會議、表決、提案的最早到最晚）有重疊的立委。百分位、最小樣本（n < 5 不給百分位）、同儕不足 5 人誰都不比，都跟投入量一樣。
+
+| 指標 | 公式 | n | 最小樣本 |
+|---|---|---|---|
+| 院會出席率 `plenary_attendance` | 出席的院會 ÷ 在任期間、有出席紀錄的院會 × 100（%） | 分母（場） | 套 |
+| 委員會出席率 `committee_attendance` | 出席的「他那個會期所屬委員會」的會議 ÷ 那些會議 × 100（%）；聯席會議只要單位裡有他的委員會就算 | 分母（場） | 套 |
+| 主提案數 `bills_proposed` | 他是提案人的委員提案件數 | 同值 | 不套 |
+| 連署數 `bills_cosigned` | 他是連署人的件數 | 同值 | 不套 |
+| 三讀數 `bills_passed` | 他主提案、議案狀態含「三讀」的件數（「審查完畢(三讀)」也算） | 同值 | 不套 |
+| 投票出席率 `vote_participation` | 他有投票的記名表決 ÷ 在任期間的記名表決 × 100（%） | 分母（次） | 套 |
+| 與所屬黨團一致率 `caucus_agreement` | 他的票跟所屬黨團多數相同的表決 ÷ 他有投票、而且黨團有多數的表決 × 100（%） | 分母（次） | 套 |
+| 跨黨投票數 `caucus_defections` | 他的票跟所屬黨團多數不同的表決數 | 同值 | 不套 |
+
+- **黨團多數**：那次表決中，同黨團有投票的人裡票數最多的選項（贊成、反對、棄權）；並列就沒有多數，那次不算進一致率與跨黨投票。黨團看他「那一天」那段任期上的 `caucus`。**沒有參加黨團**的人，一致率與跨黨投票沒有值（n＝0），API 的 `reason` 是 `no_caucus`（compute 把他的跨黨投票數存成 null，有黨團、從不跨黨的人是 0）。
+- 提案的會期是 LYAPI 給的會期（交付一讀的那一次院會）：休會期間提的案算在下一個會期。所以休會期間離職的人也會出現在下一個會期的母體裡——有提案數，出席與投票沒有分母（沒有值）。
+- 只有院內紀錄、還沒有任何文章的會期（例如剛開議的），側寫只給 `chamber` 區塊：投入量不是 0，是沒有資料。
+- 不加總、不排名照舊。出席、投票多不代表比較好，跟黨團不一致也不代表好或壞。
+- **限制**：院長、副院長主持院會、依慣例不投票，名冊上卻掛在一個委員會——他們的投票出席率與委員會出席率會接近 0（第 11 屆第 5 會期：韓國瑜 0% 與 2.9%）。LYAPI 名冊沒有職位，目前沒有排除，要在方法頁說明。名冊只給現在的黨團：同一段任期內換黨團（但沒有換黨）的人，以前的表決也用現在的黨團算。LYAPI 的紀錄有延遲（委員會的議事錄常晚好幾週）。
+
+### 紀錄清單（證據）
+
+`GET /api/people/{id}/records?session=&kind=`：一個人、一個會期、一類紀錄，新的在前。每個院內紀錄指標的 `evidence_url` 是網站的 `/records/{person_id}?session={id}&kind=…`，網站照它呼叫這個端點。筆數 `count` 等於對應指標的 n 或值（兩邊用同一個 `chamber.SessionRecords` 算，測試逐人逐項驗）。
+
+| kind | 對應指標 | 筆數等於 | 每筆附 |
+|---|---|---|---|
+| `plenary` | 院會出席率 | n | 會議代碼、日期、名稱、議事網的會議頁、`attended` |
+| `committee` | 委員會出席率 | n | 同上 |
+| `proposed` | 主提案數 | 值 | 議案編號、提案日期、名稱、議事網的議案頁、`status`、`proposers` |
+| `cosigned` | 連署數 | 值 | 同上 |
+| `passed` | 三讀數 | 值 | 同上 |
+| `votes` | 投票出席率 | n | 表決代碼、日期、表決議題、會議代碼、那場院會的會議頁、`vote`（他的票，沒投是 null）、`caucus_majority`（他黨團的多數，並列或沒有黨團是 null） |
+| `caucus` | 與所屬黨團一致率 | n | 同上 |
+| `defections` | 跨黨投票數 | 值 | 同上 |
+
+`caucus`（他有投票、黨團有多數的表決）是設計列的七類之外加的：一致率的 n 跟投票出席率的 n 不一樣，沒有這一類就點不回「n 筆」。回應另有 `label`（這一類的名稱）、`indicator`（對應的指標 key）、`caucus`（他在這個會期的黨團，空字串是沒有）。人或會期不存在、不是立法院的會期、這個會期沒有他的院內紀錄：404；`kind` 打錯：422。
+
+### 部署這一版之後
+
+```bash
+uv run python manage.py migrate
+uv run python manage.py sync_members --source ly   # 補上黨團（不然要等週日）
+uv run python manage.py sync_ly_records
+uv run python manage.py compute_profiles
+```
+
 ## API
 
 | 端點 | 說明 |
@@ -247,7 +318,8 @@ uv run python manage.py eval_topics
 | `GET /api/articles?date=&speaker=&q=&source=&party=&session=&solo=&has_brief=&topic=&page=&page_size=` | 已完成的文章清單。`session`（會期 id）、`solo=1`（只要單獨發言）、`has_brief=1`（只要有摘要卡）、`topic`（領域代碼，或 `any`＝哪個領域都可以）是側寫的證據篩選：證據網址查出來的篇數等於指標的 n。`topic` 只認各來源通過評估的那個分類器分出來的領域；打錯的代碼回 422 |
 | `GET /api/articles/{slug}` | 單篇，含摘要卡（`brief`：一句話、關鍵數字、要求與回應；GPU 端產不出來時為 `null`）、每段的條列與完整敘述、完整逐字稿 |
 | `GET /api/speakers` | 委員與篇數；`person_id` 是同來源、同名任期所屬的人（查無任期為 `null`） |
-| `GET /api/people/{person_id}/profile?source=&session=` | 人物側寫：一個會期的投入量與具體度，每項附 n、百分位、同儕人數與證據網址（網站的相對路徑）。那個來源有通過的議題評估時多一個 `topics` 區塊：`distribution`（12 個領域都列，依篇數由多到少、同數依領域表的順序；`share` 是 0～100）、`classifier`（`name`、`accuracy` 是 0～1、`labeled`、`evaluated_at`）。省略 `source` 用他最近一個有統計的會期的來源；省略 `session` 用他有發言的最近一個會期。沒有統計回 404 |
+| `GET /api/people/{person_id}/profile?source=&session=` | 人物側寫：一個會期的投入量與具體度，每項附 n、百分位、同儕人數與證據網址（網站的相對路徑）。那個來源有通過的議題評估時多一個 `topics` 區塊：`distribution`（12 個領域都列，依篇數由多到少、同數依領域表的順序；`share` 是 0～100）、`classifier`（`name`、`accuracy` 是 0～1、`labeled`、`evaluated_at`）。省略 `source` 用他最近一個有統計的會期的來源；省略 `session` 用他有發言的最近一個會期。沒有統計回 404。立法院同步過院內紀錄的會期多一個 `chamber` 區塊（見上面「院內紀錄」）；只算過院內紀錄的會期不給投入量與具體度 |
+| `GET /api/people/{person_id}/records?session=&kind=` | 院內紀錄的證據清單（院會、委員會會議、主提案、連署、三讀、記名表決、黨團有多數的表決、跨黨投票），每筆附議事網連結；筆數等於對應指標的 n 或值 |
 
 清單裡每張卡片的 `teaser` 優先用摘要卡的一句話，沒有卡片才退回第一段的完整敘述。
 
@@ -303,16 +375,19 @@ WantedBy=multi-user.target
 
 ```
 articles/
-├─ models.py        實體：Article / Slide / Person / Membership / Session / ProfileStat / Topic / TopicLabel / TopicEvaluation
+├─ models.py        實體：Article / Slide / Person / Membership / Session / ProfileStat / Topic / TopicLabel / TopicEvaluation / LyMeeting / LyBill / LyVote
 ├─ ivod_source.py   adapter：立法院開放資料
 ├─ gpu_client.py    adapter：GPU 主機上的摘要 API
 ├─ ingest.py        use case：發現 → 處理 → 落地（相依都用注入的）
 ├─ profiles.py      use case：會期解析、人物側寫指標的計算與快取
 ├─ topics.py        use case：政策領域、分類、標註集與評估、上線條件、委員會職掌
+├─ ly_records.py    adapter：LYAPI 的會議出席、委員提案、記名表決（同步與寫入）
+├─ chamber.py       use case：院內紀錄的指標與證據清單
 ├─ api.py           presentation：django-ninja 端點
 └─ management/commands/
    ├─ ingest_ivod.py    composition root：從 settings 組出 adapter 再注入
    ├─ compute_profiles.py
+   ├─ sync_ly_records.py
    ├─ classify_topics.py
    ├─ sample_topic_labels.py
    ├─ eval_topics.py
