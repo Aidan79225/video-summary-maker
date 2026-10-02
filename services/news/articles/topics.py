@@ -174,13 +174,18 @@ class ClassifyReport:
     failed: int = 0
     # 基礎文章裡還沒有 Topic 的：積壓要講出來，否則一晚 200 篇的上限會無聲地一直排著
     remaining: int = 0
-    # GPU 連不上，這一輪提前結束
+    # 送出之後文章內容變了（同時有人重產），結果不存、下一輪重分
+    stale: int = 0
+    # GPU 連不上、或開頭連續幾篇都被拒絕，這一輪提前結束
     stopped: bool = False
+    stop_reason: str = ""
     errors: list[str] = field(default_factory=list)
 
     def __str__(self) -> str:
         text = f"分類完成 {self.classified}、失敗 {self.failed}、還沒分類 {self.remaining}"
-        return text + ("（GPU 不可用，這一輪提前結束）" if self.stopped else "")
+        if self.stale:
+            text += f"、內容剛被改過不存 {self.stale}"
+        return text + (f"（{self.stop_reason or 'GPU 不可用'}，這一輪提前結束）" if self.stopped else "")
 
 
 def classify_topics(client: GpuApiClient, limit: int, reclassify: bool = False,
@@ -202,7 +207,14 @@ def classify_topics(client: GpuApiClient, limit: int, reclassify: bool = False,
     report = ClassifyReport()
     for article in list(queryset):
         try:
-            result = classify_text(client, classifier_input(article), timeout)
+            text = classifier_input(article)
+            result = classify_text(client, text, timeout)
+            # 等 GPU 的這段時間裡文章可能被重產（save_result 會刪掉 Topic）：存之前重讀一次，
+            # 內容不一樣就不存，否則舊文字的分類會掛在新內容上、而且之後不會再被重分
+            fresh = Article.objects.prefetch_related("slides").filter(pk=article.pk).first()
+            if fresh is None or classifier_input(fresh) != text:
+                report.stale += 1
+                continue
             # 存檔也放在 try 裡：SD 卡上的 SQLite 偶爾會鎖住，一篇存不進去不該讓這一輪剩下的
             # 文章整晚都不分類（下面的 except Exception 接的主要就是這種）
             Topic.objects.update_or_create(article=article, defaults={
@@ -215,6 +227,13 @@ def classify_topics(client: GpuApiClient, limit: int, reclassify: bool = False,
             break
         except JobFailed as e:
             _record_failure(article, e, report)
+            if report.classified == 0 and report.failed >= _EARLY_FAILURES:
+                # 開頭連續幾篇都被拒絕，多半是 GPU 端還沒更新（舊版不認得 topic 工作，每篇都回 422）：
+                # 照樣送完整批只是同一個錯誤重複兩百次
+                report.stopped = True
+                report.stop_reason = f"開頭 {report.failed} 篇都被 GPU 拒絕，GPU 端可能還沒更新"
+                logger.warning("議題分類：%s", report.stop_reason)
+                break
             continue
         except Exception as e:  # noqa: BLE001
             logger.exception("文章 %s 分類時發生預期外的錯誤", article.ivod_id)
@@ -223,6 +242,10 @@ def classify_topics(client: GpuApiClient, limit: int, reclassify: bool = False,
         report.classified += 1
     report.remaining = base_articles().filter(topic__isnull=True).count()
     return report
+
+
+# 開頭連續失敗幾篇就停（見 classify_topics）
+_EARLY_FAILURES = 3
 
 
 def _record_failure(article: Article, error: Exception, report: ClassifyReport) -> None:
@@ -332,6 +355,8 @@ def evaluate(client: GpuApiClient, timeout: float | None = None,
         try:
             result = classify_text(client, classifier_input(label.article), timeout)
         except JobFailed as e:
+            # 記下來：全部失敗時中止訊息要能說出原因（例如 GPU 端還沒更新、回 422）
+            logger.warning("評估：文章 %s 分類失敗：%s", label.article.ivod_id, e)
             outcomes.append((label, None, str(e)[:200]))
             continue
         classifiers.add(result.classifier)
@@ -341,7 +366,9 @@ def evaluate(client: GpuApiClient, timeout: float | None = None,
                 "中途換了模型或提示詞；整次不算，請再跑一次")
         outcomes.append((label, result, ""))
     if not classifiers:
-        raise EvaluationAborted("沒有任何一篇分類成功，無法評估（GPU 端的錯誤見上面的 log）")
+        first = next((error for _, _, error in outcomes if error), "")
+        raise EvaluationAborted(f"沒有任何一篇分類成功，無法評估。第一個錯誤：{first}"
+                                "（GPU 端還沒更新的話，會是 422）")
     classifier = classifiers.pop()
 
     by_source: dict[str, list[tuple[TopicLabel, TopicResult | None, str]]] = defaultdict(list)
@@ -380,15 +407,23 @@ def _save_evaluation(source: str, classifier: str,
 
 
 def passing_evaluations() -> dict[str, TopicEvaluation]:
-    """來源 → 最新一筆**通過的**評估。沒有通過的來源不在裡面：那個來源完全沒有議題指標。
+    """來源 → 上線的那筆評估。沒有的來源不在裡面：那個來源完全沒有議題指標。
 
-    看的是「通過的裡面最新的」，不是「最新的那筆有沒有通過」：試一個新模型沒通過，不該讓
-    已經驗過的舊版本下架——舊版本分的 Topic 還在，數字仍然是驗過的。
+    每個分類器只看**它自己最新的一次**評估；最新那次有通過的分類器裡，取評估得最晚的。
+    - 試一個新模型沒通過，不會讓已經驗過的舊版本下架：舊版本自己最新的評估還是通過的。
+    - 同一個分類器在更多、或改正過的標註上重評沒通過，它就下架：更大的人工樣本已經推翻
+      先前的成績，頁面不能繼續掛著舊的準確率。
     """
-    latest: dict[str, TopicEvaluation] = {}
-    for evaluation in TopicEvaluation.objects.filter(passed=True).order_by("source", "-ran_at", "-id"):
-        latest.setdefault(evaluation.source, evaluation)
-    return latest
+    newest: dict[tuple[str, str], TopicEvaluation] = {}
+    for evaluation in TopicEvaluation.objects.order_by("source", "classifier", "-ran_at", "-id"):
+        newest.setdefault((evaluation.source, evaluation.classifier), evaluation)
+    live: dict[str, TopicEvaluation] = {}
+    for (source, _), evaluation in newest.items():
+        current = live.get(source)
+        if evaluation.passed and (current is None or (evaluation.ran_at, evaluation.id)
+                                  > (current.ran_at, current.id)):
+            live[source] = evaluation
+    return live
 
 
 def passing_classifiers() -> dict[str, str]:

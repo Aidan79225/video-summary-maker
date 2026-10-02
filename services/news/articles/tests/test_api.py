@@ -773,3 +773,40 @@ class TopicFilterTests(TestCase):
     def test_junk_is_refused(self):
         self.assertEqual(self.client.get("/api/articles?topic=space").status_code, 422)
         self.assertEqual(self.client.get("/api/articles?topic=財政經濟").status_code, 422)
+
+
+@override_settings(MEDIA_ROOT=MEDIA)
+class TopicStatsVersionTests(TestCase):
+    """攔的 bug：側寫的議題列沒記是哪個分類器算的。上線的分類器換了、重算又失敗時，頁面把
+    A 版算的數字掛上 B 版的名字，證據篩選（用 B 版）點進去是 0 篇。"""
+
+    setUp = TopicProfileApiTests.setUp
+    _profile = TopicProfileApiTests._profile
+    _topics = TopicProfileApiTests._topics
+
+    def test_topic_rows_record_their_classifier(self):
+        rows = ProfileStat.objects.exclude(classifier="")
+        self.assertTrue(rows.exists())
+        self.assertEqual(set(rows.values_list("classifier", flat=True)), {CLASSIFIER})
+        self.assertFalse(ProfileStat.objects.filter(indicator="speeches").exclude(classifier="").exists())
+
+    def test_no_block_when_the_rows_came_from_another_classifier(self):
+        from articles.profiles import topic_stats_stale
+
+        self.assertFalse(topic_stats_stale())
+        # B 版通過評估，但還沒重算（例如重算時資料庫被鎖住）
+        _pass("ly", classifier="new-model#topic-v2")
+        self.assertTrue(topic_stats_stale())
+        self.assertIsNone(self._topics(self._profile("王立")))
+        compute_profiles()
+        self.assertFalse(topic_stats_stale())
+        block = self._topics(self._profile("王立"))
+        self.assertEqual(block["classifier"]["name"], "new-model#topic-v2")
+
+    def test_committee_alignment_says_why_it_has_no_value(self):
+        Membership.objects.filter(name="王立").update(committees=[])
+        compute_profiles()
+        got = {i["key"]: i for i in self._topics(self._profile("王立"))["indicators"]}
+        self.assertEqual((got["committee_alignment"]["n"], got["committee_alignment"]["reason"]),
+                         (0, "no_committee_data"))
+        self.assertEqual(got["topic_focus"]["reason"], "")

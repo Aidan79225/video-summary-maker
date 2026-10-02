@@ -563,3 +563,78 @@ class CommandTests(TestCase):
         with self._gpu("eval_topics", gpu), self.assertRaises(CommandError):
             call_command("eval_topics", stdout=io.StringIO())
         self.assertFalse(TopicEvaluation.objects.exists())
+
+
+class SameClassifierFailsTests(TestCase):
+    """攔的 bug：同一個分類器在更多標註上重評沒通過，它還是上線、頁面還掛著舊的準確率。"""
+
+    def _ev(self, classifier, passed, day):
+        return TopicEvaluation.objects.create(
+            source="ly", classifier=classifier, labeled=20, correct=18 if passed else 10,
+            accuracy=0.9 if passed else 0.5, passed=passed,
+            ran_at=timezone.make_aware(datetime(2026, 10, day)))
+
+    def test_its_own_newer_failure_takes_it_offline(self):
+        self._ev("a#topic-v1", True, 1)
+        self._ev("a#topic-v1", False, 2)
+        self.assertEqual(passing_classifiers(), {})
+
+    def test_falls_back_to_an_older_classifier_whose_own_latest_evaluation_passed(self):
+        self._ev("old#topic-v1", True, 1)
+        self._ev("a#topic-v1", True, 2)
+        self._ev("a#topic-v1", False, 3)
+        self.assertEqual(passing_classifiers(), {"ly": "old#topic-v1"})
+
+    def test_passing_again_brings_it_back(self):
+        self._ev("a#topic-v1", True, 1)
+        self._ev("a#topic-v1", False, 2)
+        self._ev("a#topic-v1", True, 3)
+        self.assertEqual(passing_classifiers(), {"ly": "a#topic-v1"})
+
+
+class StaleTextTests(TestCase):
+    def test_a_result_for_text_that_changed_while_waiting_is_not_saved(self):
+        """攔的 bug：等 GPU 的時候文章被重產，舊文字的分類被存到新內容上，之後也不會再重分。"""
+        article = _article(one_liner="finance 舊的一句話")
+        gpu = FakeTopicGpu()
+        original_wait = gpu.wait
+
+        def wait(job_id, timeout, poll_seconds=3.0, on_progress=None):
+            Article.objects.filter(pk=article.pk).update(
+                brief={"one_liner": "welfare 新的一句話", "key_numbers": [], "asks": []})
+            return original_wait(job_id, timeout)
+
+        gpu.wait = wait
+        report = classify_topics(gpu, limit=10)
+        self.assertEqual((report.classified, report.stale), (0, 1))
+        self.assertFalse(Topic.objects.exists())
+        # 下一輪用新內容重分
+        report = classify_topics(FakeTopicGpu(), limit=10)
+        self.assertEqual(Topic.objects.get().primary, "welfare")
+
+
+class EarlyFailureTests(TestCase):
+    def test_a_run_whose_first_jobs_are_all_rejected_stops_early(self):
+        """GPU 端還沒更新時每篇都回 422：送三篇都被拒就停，不要同一個錯誤重複兩百次。"""
+        for _ in range(6):
+            _article()
+        gpu = FakeTopicGpu(answer=lambda text: JobFailed("摘要 API 拒絕這個請求（422）：url Field required"))
+        report = classify_topics(gpu, limit=10)
+        self.assertEqual((report.failed, report.stopped), (3, True))
+        self.assertIn("GPU 端可能還沒更新", str(report))
+
+    def test_failures_after_a_success_do_not_stop_the_run(self):
+        for one_liner in ("finance 一", "bad 二", "bad 三", "bad 四", "welfare 五"):
+            _article(one_liner=one_liner)
+        gpu = FakeTopicGpu(answer=lambda text: JobFailed("壞") if "bad" in text else _code_in(text))
+        report = classify_topics(gpu, limit=10)
+        self.assertFalse(report.stopped)
+        self.assertEqual(report.failed, 3)
+
+    def test_an_aborted_evaluation_names_the_first_error(self):
+        label = TopicLabel.objects.create(article=_article(), primary="finance")
+        self.assertTrue(label.pk)
+        gpu = FakeTopicGpu(answer=lambda text: JobFailed("摘要 API 拒絕這個請求（422）：url Field required"))
+        with self.assertRaises(EvaluationAborted) as caught:
+            evaluate(gpu)
+        self.assertIn("422", str(caught.exception))

@@ -145,6 +145,9 @@ class IndicatorOut(Schema):
     sample_ok: bool
     # 網站的相對路徑：點進去就是算出這個數字的那幾篇
     evidence_url: str
+    # 沒有值時的原因（目前只有委員會職掌：「no_committee_data」＝有分類過的報導、但沒有他這個
+    # 會期的委員會資料）。頁面用它說清楚是哪一種「沒有」，而不是一律寫樣本不足
+    reason: str = ""
 
 
 class BlockOut(Schema):
@@ -490,7 +493,7 @@ def person_profile(request, person_id: int, source: SourceParam | None = None,
                "indicators": [_indicator_out(mine.get(i.key), i, name, chosen) for i in indicators]}
               for key, title, indicators in profiles.blocks_for(source)]
     evaluation = topics.passing_evaluations().get(source)
-    if evaluation is not None and any(key.startswith(profiles.TOPIC_STAT_PREFIX) for key in mine):
+    if evaluation is not None and _topics_current(mine, evaluation.classifier):
         blocks.append(_topics_block(mine, evaluation, name, chosen))
     return {
         "person": {"id": person.id, "name": person.name},
@@ -501,6 +504,12 @@ def person_profile(request, person_id: int, source: SourceParam | None = None,
         "min_sample": profiles.MIN_SAMPLE,
         "blocks": blocks,
     }
+
+
+def _topics_current(mine: dict[str, ProfileStat], classifier: str) -> bool:
+    """這個會期有議題列，而且全都是現在上線的分類器算的。"""
+    topic_rows = [stat for stat in mine.values() if stat.classifier]
+    return bool(topic_rows) and all(stat.classifier == classifier for stat in topic_rows)
 
 
 def _topics_block(mine: dict[str, ProfileStat], evaluation: TopicEvaluation, name: str,
@@ -525,7 +534,7 @@ def _topics_block(mine: dict[str, ProfileStat], evaluation: TopicEvaluation, nam
     return {
         "key": profiles.TOPIC_BLOCK,
         "title": profiles.BLOCK_TITLES[profiles.TOPIC_BLOCK],
-        "indicators": [_indicator_out(mine.get(i.key), i, name, session)
+        "indicators": [_with_reason(_indicator_out(mine.get(i.key), i, name, session), mine)
                        for i in profiles.topic_indicators_for(session.source)],
         "distribution": distribution,
         "classifier": {"name": evaluation.classifier, "accuracy": evaluation.accuracy,
@@ -548,3 +557,11 @@ def parties(request, source: SourceParam | None = None) -> dict:
             if day > entry["latest_date"]:
                 entry["latest_date"] = day
     return {"items": sorted(stats.values(), key=lambda e: e["count"], reverse=True)}
+
+
+def _with_reason(out: dict, mine: dict[str, ProfileStat]) -> dict:
+    """委員會職掌沒有值、但他其實有分類過的報導：原因是沒有委員會資料，不是樣本不足。"""
+    focus = mine.get("topic_focus")
+    if out["key"] == "committee_alignment" and out["n"] == 0 and focus is not None and focus.n > 0:
+        out["reason"] = "no_committee_data"
+    return out

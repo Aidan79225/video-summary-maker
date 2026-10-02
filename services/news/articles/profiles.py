@@ -572,9 +572,12 @@ def _compute_session(session: Session, roster: _Roster, now: datetime, report: P
     for indicator in INDICATORS:
         rows.extend(_rank(indicator, session, tallies, now))
     if classifier is not None:
-        rows.extend(_distribution(session, tallies, now))
+        topic_rows = _distribution(session, tallies, now)
         for indicator in topic_indicators_for(session.source):
-            rows.extend(_rank(indicator, session, tallies, now))
+            topic_rows.extend(_rank(indicator, session, tallies, now))
+        for row in topic_rows:
+            row.classifier = classifier
+        rows.extend(topic_rows)
     return rows, summary
 
 
@@ -626,3 +629,23 @@ def _replace(session: Session, rows: list[ProfileStat]) -> None:
     with transaction.atomic():
         ProfileStat.objects.filter(session=session).delete()
         ProfileStat.objects.bulk_create(rows)
+
+
+def topic_stats_stale() -> bool:
+    """側寫裡的議題列跟現在上線的分類器對不上（重算失敗過、或上線的分類器剛換）。
+
+    有上線分類器的來源：它的議題列裡有別的分類器算的、或一列都沒有（但有會期）；沒有上線分類器
+    的來源：還留著議題列。任何一種都要重算，網站上的數字才跟證據篩選一致。
+    """
+    live = topics.passing_classifiers()
+    topic_rows = ProfileStat.objects.exclude(classifier="")
+    for source in ArticleSource.values:
+        rows = topic_rows.filter(session__source=source)
+        classifier = live.get(source)
+        if classifier is None:
+            if rows.exists():
+                return True
+        elif rows.exclude(classifier=classifier).exists() or (
+                not rows.exists() and Session.objects.filter(source=source).exists()):
+            return True
+    return False

@@ -131,6 +131,8 @@ export type ProfileIndicator = {
   sample_ok: boolean;
   /** 網站的相對路徑，點進去就是算這個數字用的那幾篇 */
   evidence_url: string;
+  /** 沒有值的原因；'no_committee_data'＝有分類過的報導，但沒有他這個會期的委員會資料 */
+  reason?: string;
 };
 
 /** 議題分布的一列：一個領域在這個會期的篇數與占比（只算主領域） */

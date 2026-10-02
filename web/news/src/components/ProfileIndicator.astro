@@ -20,6 +20,8 @@ interface Props {
 const { indicator: ind, minSample } = Astro.props;
 
 const hasValue = ind.value !== null;
+// 委員會職掌沒有值的時候，常常不是樣本不足，而是沒有他這個會期的委員會資料：照實說
+const noCommittee = ind.reason === 'no_committee_data';
 const pct = ind.percentile;
 // 頁面四捨五入到整數；長條的位置用原值，兩個同儕在 63.5 與 64.4 時記號不會疊在一起
 const pctLabel = pct !== null ? `第 ${Math.round(pct)} 百分位，在 ${ind.peers} 位同儕中` : '';
@@ -98,7 +100,11 @@ const tightUnit = ind.unit === '%';
             <path d="M12 11v5" stroke-linecap="round" />
             <circle cx="12" cy="7.8" r="0.9" fill="currentColor" stroke="none" />
           </svg>
-          {ind.sample_ok ? '同儕不足，不比較' : `樣本不足（需至少 ${minSample} ${ind.n_unit}）`}
+          {noCommittee
+            ? '沒有他這個會期的委員會資料'
+            : ind.sample_ok
+              ? '同儕不足，不比較'
+              : `樣本不足（需至少 ${minSample} ${ind.n_unit}）`}
         </p>
       )
     }
@@ -114,7 +120,9 @@ const tightUnit = ind.unit === '%';
           <span aria-hidden="true">→</span>
         </a>
       ) : (
-        <span class="text-muted">{ind.n > 0 ? '' : `這個會期沒有可計算的${ind.n_unit === '篇' ? '報導' : '數字'}`}</span>
+        <span class="text-muted">
+          {ind.n > 0 || noCommittee ? '' : `這個會期沒有可計算的${ind.n_unit === '篇' ? '報導' : '數字'}`}
+        </span>
       )
     }
   </p>

@@ -188,3 +188,21 @@ def test_topic_and_deck_jobs_share_one_queue_and_one_slot():
     assert store.take_next() is None
     store.finish(deck.id, {})
     assert store.take_next() is topic
+
+
+def test_many_topic_jobs_do_not_push_out_a_finished_deck_job():
+    """攔的 bug：分類跟摘要共用 50 筆的上限，一晚兩百篇分類會把摘要的成品擠掉，新聞服務
+    逾時之後就接不回那支影片、只能整支重跑。"""
+    store = JobStore(max_jobs=3, max_topic_jobs=5)
+    deck = store.submit("https://example.invalid/v")
+    store.take_next()
+    store.finish(deck.id, {"slides": []})
+    topic_ids = []
+    for i in range(20):
+        job = store.submit(kind=JobKind.TOPIC, text=f"t{i}", labels=LABELS)
+        store.take_next()
+        store.finish(job.id, {"primary": "defense"})
+        topic_ids.append(job.id)
+    assert store.get(deck.id) is not None
+    assert store.get(topic_ids[0]) is None
+    assert store.get(topic_ids[-1]) is not None

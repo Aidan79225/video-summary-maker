@@ -217,6 +217,9 @@ class ProfileStat(models.Model):
     percentile = models.FloatField(null=True, blank=True)
     # 同儕人數：頁面寫「在 N 位同儕中」
     peers = models.PositiveIntegerField(default=0)
+    # 議題分布的列是哪個分類器分出來的（其他指標留空）。API 只在它等於現在上線的分類器時才給
+    # 議題區塊：重算失敗、或跟評估同時跑時，不會把 A 版算的數字掛上 B 版的名字
+    classifier = models.CharField(max_length=200, blank=True, default="")
     computed_at = models.DateTimeField()
 
     class Meta:

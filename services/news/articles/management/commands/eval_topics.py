@@ -14,7 +14,7 @@ from django.conf import settings
 from django.core.management.base import BaseCommand, CommandError
 
 from articles.gpu_client import GpuApiClient, GpuApiError
-from articles.profiles import compute_profiles
+from articles.profiles import compute_profiles, topic_stats_stale
 from articles.topics import EvaluationAborted, evaluate, passing_classifiers
 
 
@@ -29,8 +29,9 @@ class Command(BaseCommand):
         except (EvaluationAborted, GpuApiError) as e:
             raise CommandError(f"評估中止，什麼都沒存：{e}") from e
         self.stdout.write(str(report))
-        if passing_classifiers() != before:
-            # 上線的分類器換了：側寫裡的分布是舊條件算的，而證據篩選（/api/articles?topic=）
-            # 立刻用新條件——不馬上重算的話，兩邊的篇數要到明早排程跑完才對得上
+        if passing_classifiers() != before or topic_stats_stale():
+            # 上線的分類器換了（或上次重算失敗、側寫裡還是別的版本算的）：證據篩選
+            # （/api/articles?topic=）立刻用新條件，不馬上重算的話兩邊要到明早才對得上。
+            # 在那之前網站不給議題區塊（API 會比對議題列的分類器），不會掛錯名字。
             compute_profiles()
             self.stdout.write("上線的分類器變了，已經重算人物側寫")

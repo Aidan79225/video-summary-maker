@@ -43,6 +43,9 @@ _FINISHED = frozenset({JobStatus.DONE, JobStatus.FAILED, JobStatus.CANCELLED})
 # 預設保留幾筆工作。每筆成品帶著 base64 圖片，這個服務又會連續跑好幾個月，
 # 不設上限記憶體只會一路長。
 _MAX_JOBS = 50
+# 分類工作的成品只有幾個字，可以留很多。跟摘要共用一個上限的話，一晚兩百篇分類會把摘要的
+# 成品擠掉——新聞服務等摘要逾時之後，要靠工作 id 接回還在跑或已經跑完的成品，擠掉了就只能整支重跑。
+_MAX_TOPIC_JOBS = 1000
 
 
 @dataclass(eq=False)
@@ -83,11 +86,11 @@ class JobStore:
     而 GPU 主機只有一張卡。
     """
 
-    def __init__(self, max_jobs: int = _MAX_JOBS):
+    def __init__(self, max_jobs: int = _MAX_JOBS, max_topic_jobs: int = _MAX_TOPIC_JOBS):
         self._lock = threading.Lock()
         self._jobs: dict[str, Job] = {}
         self._order: list[str] = []
-        self._max_jobs = max_jobs
+        self._limits = {JobKind.DECK: max_jobs, JobKind.TOPIC: max_topic_jobs}
 
     # --- 查詢 ---
 
@@ -205,15 +208,17 @@ class JobStore:
         return None
 
     def _forget_old_unlocked(self) -> None:
-        """超過上限時丟掉最舊的、已經結束的工作。
+        """每一種工作各自超過上限時，丟掉那一種裡最舊的、已經結束的工作。
 
         還在排隊或執行中的絕不丟——丟掉正在跑的那一筆，呼叫端就再也查不到
-        自己的工作，而它其實還在佔著 GPU。
+        自己的工作，而它其實還在佔著 GPU。分開計算：分類工作再多也擠不掉摘要的成品。
         """
-        while len(self._order) > self._max_jobs:
-            victim = next(
-                (i for i in self._order if self._jobs[i].status.is_finished), None)
-            if victim is None:
-                return
-            self._order.remove(victim)
-            self._jobs.pop(victim, None)
+        for kind, limit in self._limits.items():
+            ids = [i for i in self._order if self._jobs[i].kind == kind]
+            while len(ids) > limit:
+                victim = next((i for i in ids if self._jobs[i].status.is_finished), None)
+                if victim is None:
+                    break
+                ids.remove(victim)
+                self._order.remove(victim)
+                self._jobs.pop(victim, None)

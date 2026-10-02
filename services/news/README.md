@@ -228,6 +228,8 @@ uv run python manage.py compute_profiles
 
 ### 部署這一版之後
 
+**先更新 GPU 主機**（重建映像、重啟 `serve_api.py`），再部署新聞服務。舊的 GPU 不認得 `topic` 工作，每篇都回 422；分類那一輪開頭連續三篇被拒就會停下來並在 log 說明，不會整晚重複同一個錯誤。
+
 ```bash
 uv run python manage.py migrate
 uv run python manage.py sync_members --source ly   # 補上立委的委員會（不然要等週日）
