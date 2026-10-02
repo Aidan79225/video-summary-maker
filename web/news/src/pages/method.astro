@@ -12,6 +12,8 @@
 import Base from '../layouts/Base.astro';
 import MethodFollowups from '../components/MethodFollowups.astro';
 import {
+  BILL_TOPIC_MIN_ACCURACY,
+  BILL_TOPIC_MIN_LABELS,
   COMMITTEE_AREAS,
   TOPIC_AREAS,
   TOPIC_BREADTH_SHARE,
@@ -19,7 +21,8 @@ import {
   TOPIC_MIN_LABELS,
   topicLabel,
 } from '../lib/topics';
-import { CHAMBER_GROUPS, CHAMBER_INDICATORS } from '../lib/records';
+import { ALIGNMENT_KEY, CHAMBER_GROUPS, CHAMBER_INDICATORS, distributionOverlap } from '../lib/records';
+import { formatPercent } from '../lib/format';
 
 const toc = [
   { id: 'profile-principles', label: '原則' },
@@ -48,7 +51,7 @@ const formula =
 const term = 'font-semibold text-ink';
 const list = 'mt-3 grid list-disc gap-2 pl-5 marker:text-muted';
 
-// 院內紀錄八個指標的公式；名稱與單位照 CHAMBER_INDICATORS，跟側寫上的卡片一致
+// 院內紀錄每個指標的公式；名稱與單位照 CHAMBER_INDICATORS，跟側寫上的卡片一致（一致率的公式較長，另有一小節）
 const CHAMBER_FORMULAS: Record<string, string> = {
   plenary_attendance: '出席名單上有他的院會場數 ÷ 他在任期間、有出席名單的院會場數 × 100',
   committee_attendance: '出席名單上有他的委員會會議場數 ÷ 他那個會期所屬委員會、在他任期內、有出席名單的會議場數 × 100',
@@ -58,7 +61,33 @@ const CHAMBER_FORMULAS: Record<string, string> = {
   vote_participation: '他有投票的記名表決次數 ÷ 他在任期間的記名表決次數 × 100',
   caucus_agreement: '他的票跟所屬黨團多數相同的次數 ÷ 他有投票、而且黨團有多數的記名表決次數 × 100',
   caucus_defections: '他有投票、黨團有多數，而他的票跟黨團多數不同的記名表決次數',
+  [ALIGNMENT_KEY]: 'Σ 各領域 min（提案的領域占比, 質詢的領域占比），兩個占比都以 % 計',
 };
+
+const billMinAccuracy = `${Math.round(BILL_TOPIC_MIN_ACCURACY * 100)}%`;
+
+/**
+ * 一致率的例子：占比與重疊都用網站同一條公式（records.ts 的 distributionOverlap）算，
+ * 改了例子的件數，表格與結果會跟著變，不會出現算錯的例子。
+ * 提案 5 件剛好到最小樣本，質詢 10 篇；衛生福利只有質詢、沒有提案，示範「另一邊沒有就是 0」
+ */
+const exampleBills = new Map([
+  ['finance', 3],
+  ['transport', 2],
+]);
+const exampleSpeeches = new Map([
+  ['finance', 5],
+  ['welfare', 3],
+  ['transport', 2],
+]);
+const sumOf = (m: ReadonlyMap<string, number>) => [...m.values()].reduce((s, c) => s + c, 0);
+const shareOf = (m: ReadonlyMap<string, number>, key: string) => ((m.get(key) ?? 0) / sumOf(m)) * 100;
+const exampleRows = TOPIC_AREAS.filter((t) => exampleBills.has(t.key) || exampleSpeeches.has(t.key)).map((t) => {
+  const bill = shareOf(exampleBills, t.key);
+  const speech = shareOf(exampleSpeeches, t.key);
+  return { label: t.label, bills: exampleBills.get(t.key) ?? 0, speeches: exampleSpeeches.get(t.key) ?? 0, bill, speech, overlap: Math.min(bill, speech) };
+});
+const exampleOverlap = distributionOverlap(exampleBills, exampleSpeeches) ?? 0;
 ---
 
 <Base
@@ -114,10 +143,10 @@ const CHAMBER_FORMULAS: Record<string, string> = {
           <strong class={term}>只跟同儕比。</strong>立委只跟立委比，臺中市議員只跟臺中市議員比，新北市議員只跟新北市議員比，而且只比同一個會期。各議會的質詢制度不同，放在一起比沒有意義。
         </li>
         <li>
-          <strong class={term}>數字由程式按公式算。</strong>每個指標都是從既有資料直接計數或相除，公式就寫在下面。模型不給數字：具體度用到的摘要卡是語言模型從逐字稿抽取、再由程式逐一檢查過的（見「具體度」）；議題分布用到模型分類，但模型只負責把每篇報導分到一個固定的領域，篇數、占比都是程式數的（見「議題分布」）；追問率用到模型判斷，但模型只判斷後來那次質詢有沒有再提同一件事，到期日與比率都是程式算的（見「追問率」）。
+          <strong class={term}>數字由程式按公式算。</strong>每個指標都是從既有資料直接計數或相除，公式就寫在下面。模型不給數字：具體度用到的摘要卡是語言模型從逐字稿抽取、再由程式逐一檢查過的（見「具體度」）；議題分布用到模型分類，但模型只負責把每篇報導分到一個固定的領域，篇數、占比都是程式數的（見「議題分布」）；追問率用到模型判斷，但模型只判斷後來那次質詢有沒有再提同一件事，到期日與比率都是程式算的（見「追問率」）；提案與質詢一致率用到模型替議案名稱分領域，重疊的比例是程式算的（見「院內紀錄」）。
         </li>
         <li>
-          <strong class={term}>模型參與的指標要先過人工標註。</strong>議題分類要先在一份人工標註的報導上達到準確率門檻，那個議會的議題分布才會出現；追問的判斷也一樣，沒通過就不顯示追問率。換模型或改提示詞就要重新評估。
+          <strong class={term}>模型參與的指標要先過人工標註。</strong>議題分類要先在一份人工標註的報導上達到準確率門檻，那個議會的議題分布才會出現；追問的判斷也一樣，沒通過就不顯示追問率；替議案名稱分領域另有一份議案的人工標註集，沒通過就沒有提案與質詢一致率。換模型或改提示詞就要重新評估。
         </li>
         <li>
           <strong class={term}>樣本太少就不比較。</strong>具體度、議題分布與追問率的分母不到 5 時只顯示原始的值，不跟別人比（見「最小樣本」）。
@@ -452,7 +481,7 @@ const CHAMBER_FORMULAS: Record<string, string> = {
       <div class="prose-cn mt-3">
         <p>
           院內紀錄回答「他在立法院裡做了什麼」：出席了多少會議、提了多少案、記名表決怎麼投。資料全部是立法院公開的結構化紀錄，由程式直接計數，<strong
-            class={term}>沒有模型參與</strong>。只有立委有：市議會沒有逐人、結構化的出席與表決資料。
+            class={term}>沒有模型參與</strong>；唯一的例外是提案與質詢一致率，要用模型替議案名稱分領域（見下面「提案與質詢一致率」）。只有立委有：市議會沒有逐人、結構化的出席與表決資料。
         </p>
       </div>
 
@@ -472,7 +501,7 @@ const CHAMBER_FORMULAS: Record<string, string> = {
             <strong class={term}>每週日同步一次</strong>，排在更新委員名冊之後；同步完重算側寫。只要有一頁資料抓不到，那一次就整個不更新，不會只更新一半。
           </li>
           <li>
-            每個數字底下的連結，列出算它用的每一筆紀錄，筆數就是那個數字的 n：出席率列出每一場會議與他有沒有出席，提案列出每一件議案，表決列出每一次他投了什麼、他的黨團多數投了什麼。與所屬黨團一致率另有一份清單，只列他有投票、黨團也有多數的那幾次（就是它的分母）。議案附官方的議案頁；會議與表決列出日期、名稱與會議代碼，有官方頁面的也附連結。
+            每個數字底下的連結，列出算它用的每一筆紀錄，筆數就是那個數字的 n：出席率列出每一場會議與他有沒有出席，提案列出每一件議案，表決列出每一次他投了什麼、他的黨團多數投了什麼。與所屬黨團一致率另有一份清單，只列他有投票、黨團也有多數的那幾次（就是它的分母）。議案附官方的議案頁；會議與表決列出日期、名稱與會議代碼，有官方頁面的也附連結。提案與質詢一致率連到主提案清單，筆數可能比它的 n 多（還沒分領域的也列著），見下面「提案與質詢一致率」。
           </li>
           <li>
             紀錄上的名字跟委員名冊比對前，會先去掉空白、統一間隔號的寫法（原住民族委員的名字常有這種差異）。
@@ -490,7 +519,7 @@ const CHAMBER_FORMULAS: Record<string, string> = {
             會議與表決上標的屆別與會期（例如第11屆第5會期），就是側寫上的會期。<strong class={term}>委員提案算在一讀的會期</strong>：一讀（交付審查）那一次院會是第幾會期，就算在第幾會期。不看 LYAPI 議案資料上的「會期」，因為那是議案最新進度的會期——第 1 會期提案、第 5 會期才撤案的案子，那裡會寫第 5 會期。休會期間提的案，算在下一個會期。
           </li>
           <li>
-            同儕是同一個會期裡在任過的全體立委。院會出席率、委員會出席率、投票出席率與黨團一致率這四個比例，只跟分母也夠大（至少 5）的人比；主提案、連署與三讀是計數，跟全體比；跨黨投票也是計數，但只跟有參加黨團的人比（沒有黨團的人沒有這個數字，不是 0）。百分位的算法跟其他指標一樣（見「百分位」）。
+            同儕是同一個會期裡在任過的全體立委。院會出席率、委員會出席率、投票出席率與黨團一致率這四個比例，只跟分母也夠大（至少 5）的人比；主提案、連署與三讀是計數，跟全體比；跨黨投票也是計數，但只跟有參加黨團的人比（沒有黨團的人沒有這個數字，不是 0）；提案與質詢一致率只跟提案、質詢兩邊樣本都夠的人比。百分位的算法跟其他指標一樣（見「百分位」）。
           </li>
         </ul>
       </div>
@@ -518,7 +547,7 @@ const CHAMBER_FORMULAS: Record<string, string> = {
             <strong class={term}>不知道結果的不算進分母。</strong>還沒有出席名單的會議（委員會的議事錄常晚好幾週才公布）不算進任何人的出席率分母，不會被當成全體缺席；一張記名的票都沒有的表決（資料缺漏，不知道誰投了什麼）也不算進任何人的投票出席率分母。
           </li>
           <li>
-            四個比例的 n 是分母（場數或表決次數），套最小樣本：不到 5 時只顯示原始的值，不給百分位。四個計數的 n 就是值本身，不套最小樣本。
+            四個比例的 n 是分母（場數或表決次數），套最小樣本：不到 5 時只顯示原始的值，不給百分位。四個計數的 n 就是值本身，不套最小樣本。提案與質詢一致率的 n 是分過領域的主提案件數，見下面「提案與質詢一致率」。
           </li>
         </ul>
       </div>
@@ -586,8 +615,143 @@ const CHAMBER_FORMULAS: Record<string, string> = {
           <li>
             <strong class={term}>名字要對得到。</strong>紀錄上的寫法跟名冊差太多時（例如異體字），那幾筆會對不到人，暫時不計入。
           </li>
+        </ul>
+      </div>
+
+      <h4 id="profile-chamber-alignment" class={h4}>提案與質詢一致率</h4>
+      <div class="prose-cn mt-2">
+        <p>
+          回答「他提的案跟他問的事，是不是同一個方向」：比較同一個會期裡，他<strong class={term}>主提案</strong>的領域分布，跟他<strong
+            class={term}>質詢</strong>的領域分布重疊多少。質詢那一邊就是「議題分布」那一份：單獨發言、有摘要卡、由通過評估的分類器分過類的報導。提案那一邊用同樣的 12 個領域，由議題分類器從議案名稱分。
+        </p>
+      </div>
+      <div class={formula}>
+        <p>
+          <span class={term}>提案的領域占比</span>（%）＝ 他主提案、已經分過領域的委員提案中，這個領域的件數 ÷ 分過領域的件數 × 100
+        </p>
+        <p class="mt-2">
+          <span class={term}>提案與質詢一致率</span>（%）＝ Σ 各領域 min（提案的領域占比, 質詢的領域占比）
+        </p>
+        <p class="mt-2 text-[0.85rem] text-muted">
+          也就是兩個分布重疊的部分：兩邊完全一樣是 100%，完全沒有交集是 0%。質詢的領域占比就是議題分布上的占比。
+        </p>
+      </div>
+      <div class="prose-cn">
+        <p>
+          例：他這個會期分過領域的主提案 {sumOf(exampleBills)} 件、分過議題的質詢 {sumOf(exampleSpeeches)} 篇。每個領域取兩邊占比比較小的那個，再加起來：
+        </p>
+      </div>
+      <div class="mt-3 overflow-x-auto">
+        <table class="w-full border-collapse text-left text-[0.85rem]">
+          <thead>
+            <tr class="border-b border-line text-[0.75rem] text-muted">
+              <th scope="col" class={th}>領域</th>
+              <th scope="col" class={th}>提案</th>
+              <th scope="col" class={th}>質詢</th>
+              <th scope="col" class="py-2 font-medium">重疊（取小的）</th>
+            </tr>
+          </thead>
+          <tbody class="tabular text-ink-2">
+            {
+              exampleRows.map((r) => (
+                <tr class="border-b border-line-soft align-top">
+                  <th scope="row" class="py-2 pr-3 font-normal text-ink">
+                    {r.label}
+                  </th>
+                  <td class="py-2 pr-3">
+                    {r.bills} 件（{formatPercent(r.bill)}%）
+                  </td>
+                  <td class="py-2 pr-3">
+                    {r.speeches} 篇（{formatPercent(r.speech)}%）
+                  </td>
+                  <td class="py-2">{formatPercent(r.overlap)}%</td>
+                </tr>
+              ))
+            }
+            <tr class="align-top">
+              <th scope="row" class="py-2 pr-3 font-semibold text-ink">一致率</th>
+              <td class="py-2 pr-3" />
+              <td class="py-2 pr-3" />
+              <td class="py-2 font-semibold text-ink">{formatPercent(exampleOverlap)}%</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="prose-cn">
+        <p class="mt-3 text-[0.85rem] text-muted">
+          {exampleRows.map((r) => formatPercent(r.overlap)).join(' ＋ ')} ＝ {formatPercent(exampleOverlap)}%。{
+            exampleRows.find((r) => r.bill === 0)?.label
+          }只有質詢、沒有提案，取小的就是 0。
+        </p>
+        <ul class={list}>
           <li>
-            <strong class={term}>為什麼沒有「提案與質詢一致率」。</strong>原本的構想是用議題分類器替每件提案分領域，再跟他質詢的議題比。但分類器是在質詢摘要上評估過的，議案名稱（「○○法第十七條條文修正草案」）是另一種文字，在上面準不準沒有驗過。照「模型參與的指標要先過人工標註」的原則，要先有一份議案名稱的人工標註集，所以這一項先不做。
+            <strong class={term}>n 是分過領域的主提案件數</strong>，套最小樣本：不到 5 件時只顯示原始的值，不給百分位。還沒分領域的主提案不算進 n，所以 n 可能比主提案數少。
+          </li>
+          <li>
+            <strong class={term}>質詢也要夠。</strong>分過議題的質詢不到 5 篇時不給值，頁面寫「他這個會期分過議題的質詢不到 5 篇，不算一致率」：一兩篇質詢的分布拿去跟提案比，重疊不是很高就是很低，沒有意義。
+          </li>
+          <li>百分位的同儕是同一個會期裡，提案與質詢兩邊樣本都夠的立委；不到 5 人就不比較。</li>
+          <li>
+            卡片上寫「提案 N 件、質詢 M 篇」：M 就是議題分布那一塊的篇數。卡片底下的「看這 N 件提案的領域」連到他的主提案清單，每件旁邊標著領域；標「還沒分類」的不算進 n。
+          </li>
+        </ul>
+      </div>
+
+      <div class="prose-cn mt-6">
+        <p><strong class={term}>模型讀的是什麼。</strong>只有議案名稱：</p>
+      </div>
+      <pre
+        class="my-4 overflow-x-auto rounded-xl border border-line-soft bg-bg-soft/60 px-4 py-3 font-sans text-[0.88rem] leading-relaxed whitespace-pre-wrap text-ink">議案名稱：「○○法第十七條條文修正草案」，請審議案。</pre>
+      <div class="prose-cn">
+        <ul class={list}>
+          <li>
+            <strong class={term}>為什麼只給名稱。</strong>立法院的委員提案清單上有議案名稱，沒有案由；案由要逐件再查一次，同步一個會期就要多上千次請求。名稱寫出了要改哪一部法，多半夠判斷領域；代價是名稱很短，見下面的限制。
+          </li>
+          <li>
+            只分類<strong class={term}>有立委是主提案人</strong>的委員提案；行政院、黨團的提案不分類，本來也不算進任何人的主提案。
+          </li>
+          <li>
+            每晚分一批，新的會期先分。模型服務連不上時，那一晚整批停下，下一晚再分。分類讀的就是名稱，所以名稱被更正了就要重分：每週同步時發現已經分過的議案改了名稱，舊的分類刪掉，下一晚用新的名稱重分；等模型回覆的時候名稱被改了，那一次的結果不存。
+          </li>
+        </ul>
+      </div>
+
+      <div class="prose-cn mt-6">
+        <p><strong class={term}>兩道門檻都要過。</strong></p>
+        <ul class={list}>
+          <li>
+            <strong class={term}>議案名稱有自己的人工標註集。</strong>議題分類器是在質詢摘要上評估的，議案名稱是另一種文字，在質詢上準不代表在議案名稱上也準。所以從已同步的委員提案裡隨機抽一批（固定的亂數種子），由人工標主領域；標的人看得到議案名稱、會期與議事網的連結，看不到模型的答案。評估時用現在的模型與提示詞重新分類，人工標註至少 {BILL_TOPIC_MIN_LABELS} 件、準確率至少 {billMinAccuracy} 才通過。
+          </li>
+          <li>
+            <strong class={term}>質詢那一邊</strong>就是立法院的議題分布，要立法院的議題分類器通過它自己的評估（見「議題分布」的門檻）。
+          </li>
+          <li>
+            兩個分類器各自只看自己最近一次的評估，可以是不同的模型或提示詞版本；兩個都是正在上線的版本，才算一致率。任何一個換了模型或提示詞、還沒重新評估通過，這張卡就不出現，不是顯示 0。
+          </li>
+          <li>議案分類通過、質詢那一邊沒通過時，主提案清單上照樣標領域，只是沒有一致率。</li>
+        </ul>
+      </div>
+
+      <div class="prose-cn mt-6">
+        <p><strong class={term}>怎麼讀、限制。</strong></p>
+        <ul class={list}>
+          <li>
+            <strong class={term}>不是好壞，也不是「言行一致」的分數。</strong>提案跟質詢方向不同可能是分工：質詢常跟著委員會走，提案可能跟著選區或黨團的分配走。一致率低不代表言行不一，高也不代表比較好。
+          </li>
+          <li>
+            <strong class={term}>議案名稱很短。</strong>「○○法第十七條條文修正草案」只說了改哪一部法，沒說改什麼；同一部法的不同條文可能落在不同的領域，模型只能照法名與條文的字面判斷。
+          </li>
+          <li>
+            <strong class={term}>委員常一次提一系列同領域的案。</strong>同一件事拆成好幾部法各提一案，件數就集中在同一個領域，提案的分布會看起來比實際更集中。
+          </li>
+          <li>
+            <strong class={term}>兩邊都是模型分的。</strong>剛好過門檻的分類器大約每 5 件就有 1 件分錯，一致率同時受兩個分類器的誤差影響；看大致的高低比看小數點可靠。
+          </li>
+          <li>
+            <strong class={term}>一件只算一個主領域。</strong>跟議題分布一樣，次領域不計入。
+          </li>
+          <li>
+            <strong class={term}>最近的提案可能還沒分類。</strong>議案每週同步、每晚分一批，n 可能暫時比主提案數少，數字會變。
           </li>
         </ul>
       </div>
@@ -647,7 +811,7 @@ const CHAMBER_FORMULAS: Record<string, string> = {
           投入量是計數、不是比例，沒有分母，所以不套最小樣本：發言 1 次的人一樣有百分位。但同儕不到 5 人時，投入量也不比較。
         </p>
         <p class="mt-3">
-          院內紀錄的四個比例（院會出席率、委員會出席率、投票出席率、與所屬黨團一致率）也套最小樣本，分母是場數或表決次數，寫「需至少 5 場」「需至少 5 次」；主提案、連署、三讀與跨黨投票是計數，不套。
+          院內紀錄的四個比例（院會出席率、委員會出席率、投票出席率、與所屬黨團一致率）也套最小樣本，分母是場數或表決次數，寫「需至少 5 場」「需至少 5 次」；主提案、連署、三讀與跨黨投票是計數，不套。提案與質詢一致率的 n 是分過領域的主提案件數，寫「需至少 5 件」；另外分過議題的質詢不到 5 篇時不給值。
         </p>
       </div>
 
@@ -680,6 +844,9 @@ const CHAMBER_FORMULAS: Record<string, string> = {
             <strong class={term}>院內紀錄每週才同步一次。</strong>立法院公布紀錄本來就有延遲，最近幾週的數字會變；見上面「院內紀錄」的限制。
           </li>
           <li>
+            <strong class={term}>議案的領域是模型從議案名稱分的。</strong>議案分類器要過自己的人工標註門檻，提案與質詢一致率才會顯示，但過了門檻仍會分錯；見上面「提案與質詢一致率」。
+          </li>
+          <li>
             <strong class={term}>「有沒有再提」是模型判斷的。</strong>判斷器要過人工標註的門檻，追問率才會顯示，但過了門檻仍會判錯；見上面「追問率」的限制。
           </li>
         </ul>
@@ -689,14 +856,11 @@ const CHAMBER_FORMULAS: Record<string, string> = {
       <h3 id="profile-todo" class={h3}>還沒做的指標</h3>
       <div class="prose-cn mt-3">
         <p>
-          側寫目前有投入量、具體度、議題分布與追問四塊，立委另外有院內紀錄；議題分布要等那個議會的分類器通過評估才會出現，追問率要等判斷器通過評估才會顯示。下面幾項在規劃中，做好之前不會出現在頁面上：
+          側寫目前有投入量、具體度、議題分布與追問四塊，立委另外有院內紀錄；議題分布要等那個議會的分類器通過評估才會出現，追問率要等判斷器通過評估才會顯示，提案與質詢一致率要等議案分類器與立法院的議題分類器都通過評估才會顯示。下面這一項在規劃中，做好之前不會出現在頁面上：
         </p>
         <ul class={list}>
           <li>
             <strong class={term}>市議員的出席率</strong>：各市議會公開的出席資料格式不一、多半不是結構化的，暫不做。立委的出席率已經在「院內紀錄」裡。
-          </li>
-          <li>
-            <strong class={term}>提案與質詢一致率</strong>（立委）：要先有一份議案名稱的人工標註集，議題分類器在議案名稱上過了門檻才做（見「院內紀錄」的限制）。
           </li>
         </ul>
         <p class="mt-4">

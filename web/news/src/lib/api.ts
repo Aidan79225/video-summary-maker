@@ -22,7 +22,7 @@ import type {
   TopicShare,
 } from './types';
 import { toSource } from './sources';
-import { fixtureChamberBlock, fixtureRecords, normalizeRecords } from './records';
+import { dropUnverifiedAlignment, fixtureChamberBlock, fixtureRecords, normalizeRecords } from './records';
 import { ANY_TOPIC, TOPIC_AREAS, TOPIC_MIN_ACCURACY, TOPIC_MIN_LABELS, topicOrder } from './topics';
 import { FOLLOWUP_ANCHOR, FOLLOWUP_BLOCK, normalizeFollowupBlock } from './followups';
 import fixture from '../fixtures/sample.json';
@@ -404,6 +404,8 @@ function normalizeIndicator(raw: unknown): ProfileIndicator | null {
   // 沒有值的原因要帶過來，頁面才寫得出是哪一種「沒有」（沒有委員會資料、換判斷器待重判），
   // 而不是一律寫成樣本不足
   const reason = str(o.reason).trim();
+  // 提案與質詢一致率的質詢篇數（其他指標是 null）：卡片寫「質詢 M 篇」要用後端算一致率時的那個數
+  const speechN = num(o.speech_n);
   return {
     key,
     label,
@@ -417,6 +419,7 @@ function normalizeIndicator(raw: unknown): ProfileIndicator | null {
     evidence_url: str(o.evidence_url),
     // 「沒有值」的原因（沒有委員會資料、沒有參加黨團、換了判斷器正在重判）：丟掉的話頁面只能寫成樣本不足
     ...(reason ? { reason } : {}),
+    ...(speechN !== null ? { speech_n: Math.max(0, Math.round(speechN)) } : {}),
   };
 }
 
@@ -517,9 +520,14 @@ export function normalizeProfile(raw: unknown): Profile | null {
   const session = normalizeSession(o.session);
   if (personId === null || !session) return null;
 
-  const blocks = (Array.isArray(o.blocks) ? o.blocks : [])
-    .map(normalizeBlock)
-    .filter((b): b is ProfileBlock => b !== null);
+  // 議題分布被網站的門檻擋掉時，院內紀錄的提案與質詢一致率也要拿掉：它的質詢那一半就是那份分布。
+  // 要先記下後端有沒有給議題分布：沒給（會期還沒有報導）跟給了被擋掉是兩回事
+  const rawBlocks: unknown[] = Array.isArray(o.blocks) ? o.blocks : [];
+  const rawHadTopics = rawBlocks.some((b) => !!b && typeof b === 'object' && (b as Record<string, unknown>).key === 'topics');
+  const blocks = dropUnverifiedAlignment(
+    rawBlocks.map(normalizeBlock).filter((b): b is ProfileBlock => b !== null),
+    rawHadTopics,
+  );
   if (blocks.length === 0) return null;
 
   const sessions = (Array.isArray(o.sessions) ? o.sessions : [])
@@ -580,8 +588,10 @@ function fixtureProfile(personId: number, query: ProfileQuery): Result<unknown> 
   // 證據連結用這個人在該來源的寫法，跟後端一樣
   const name = (fx.people ?? []).find((p) => p.id === personId && p.source === source)?.name ?? '';
   const evidence = `/speaker/${encodeURIComponent(name)}?source=${source}&session=${picked.s.id}`;
-  // 院內紀錄放在 records.json：指標由假紀錄照後端的公式算，n 才會等於證據頁的筆數
-  const chamber = fixtureChamberBlock(personId, picked.s.id);
+  // 院內紀錄放在 records.json：指標由假紀錄照後端的公式算，n 才會等於證據頁的筆數。
+  // 提案與質詢一致率的質詢那一半是這個會期的議題分布；沒有議題區塊（分類器沒通過）就沒有這張卡
+  const topics = picked.p.blocks.find((b) => b.key === 'topics');
+  const chamber = fixtureChamberBlock(personId, picked.s.id, topics?.distribution ?? null);
   return {
     ok: true,
     data: {
