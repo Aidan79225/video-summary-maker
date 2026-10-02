@@ -30,6 +30,7 @@ from enum import StrEnum
 
 from django.conf import settings
 from django.db import transaction
+from django.db.models import F
 from django.utils import timezone
 
 from .gpu_client import GpuApiClient, GpuApiError, JobFailed
@@ -82,6 +83,9 @@ _NUM = r"(\d+|[零〇一二兩三四五六七八九十百]+)"
 # 「內」「之內」「以內」是同一個意思
 _WITHIN = r"(?:之|以)?內"
 _NUMERALS = "0-9零〇一二兩三四五六七八九十百"
+# 雙數會期九月開議（憲法第 68 條：九月至十二月底），延會與臨時會可能拖到隔年一、二月。
+# 七月起講的算當年開議的；上半年講的一定是前一年開議、拖過年的那一段
+_EVEN_SESSION_FIRST_MONTH = 7
 
 
 def _to_int(token: str) -> int | None:
@@ -186,16 +190,23 @@ def _year_end(match: re.Match, text: str, spoken: _Spoken) -> date:
 
 
 def _session_end(match: re.Match, text: str, spoken: _Spoken) -> date | None:
-    """立法院的本會期：單數會期 5 月 31 日、雙數會期 12 月 31 日（發言那年）。
+    """立法院的本會期：單數會期 5 月 31 日、雙數會期 12 月 31 日（那個會期開議的那年）。
 
     議會的會期起訖沒有結構化來源，不換算。「下會期」不是這一種。算出來比發言還早（延會或
     臨時會裡講的「本會期」）就是換不出來：到期日早於發言，等於還沒開始就過期了。
+
+    雙數會期九月開議，上半年講的只會是它延到隔年一月的延會或臨時會：會期是前一年開的，
+    照「發言那年」算會變成隔年年底，憑空多出將近一年的期限。
     """
     if spoken.source != ArticleSource.LY or spoken.session_number is None:
         return None
     if re.search(r"下一?個?會期", text):
         return None
-    due = date(spoken.day.year, 5, 31) if spoken.session_number % 2 else date(spoken.day.year, 12, 31)
+    if spoken.session_number % 2:
+        due = date(spoken.day.year, 5, 31)
+    else:
+        opened = spoken.day.year if spoken.day.month >= _EVEN_SESSION_FIRST_MONTH else spoken.day.year - 1
+        due = date(opened, 12, 31)
     return due if due >= spoken.day else None
 
 
@@ -473,7 +484,10 @@ def state_for(due: date | None, followed_by: int | None, classifier: str,
 
     - 判斷算數的條件：有通過評估的判斷器（judge），而且這一項的判斷都出自它（classifier）；
       一個候選都沒有、從來不必判斷的（classifier 空字串）也算——那是程式篩出來的結果。
-    - 判斷不算數時只給 pending：還沒到期是日期決定的；到期之後是不是追了，要靠判斷。
+    - 沒有通過的判斷器時只給 pending：還沒到期是日期決定的；到期之後是不是追了，要靠判斷。
+    - 有通過的判斷器、但這一項是別的版本判的（換了模型，還沒 --recheck）：到期之後是觀察中
+      ——上線的判斷器還沒看過它的候選，跟「還有候選沒判斷完」是同一回事。不能讓它從清單上消失：
+      清單不靠模型的部分永遠要給。舊版本說有追問也不算，所以不分有沒有 followed_by。
     - 觀察期過了，還要在觀察期結束**之後**確認過所有候選都判斷完（checked_at），才是未追問：
       還沒看完不能說沒有。
     """
@@ -485,7 +499,7 @@ def state_for(due: date | None, followed_by: int | None, classifier: str,
     if today <= due:
         return FollowUpState.PENDING
     if not trusted:
-        return None
+        return None if judge is None else FollowUpState.WATCHING
     end = window_end(due)
     if today <= end or checked_at is None or timezone.localdate(checked_at) <= end:
         return FollowUpState.WATCHING
@@ -553,8 +567,10 @@ class CandidateIndex:
         source = followup.article
         if followup.due_date is None:
             return []
-        pool = {doc.id: doc for doc in self._by_speaker.get((source.source, source.speaker.strip()), ())}
         person = self._person_of.get(source.membership_id)
+        # 講者寫法相同只在對不到人時才算數：對到別人的，是同名的另一位（換屆之後的同名新人）
+        pool = {doc.id: doc for doc in self._by_speaker.get((source.source, source.speaker.strip()), ())
+                if person is None or doc.person_id in (None, person)}
         if person is not None:
             pool.update((doc.id, doc) for doc in self._by_person.get((source.source, person), ()))
         end = window_end(followup.due_date)
@@ -590,6 +606,20 @@ def _clear_judgments(followup: FollowUp) -> None:
     followup.checked_at = None
 
 
+def _drop_follow_up_outside_window(followup: FollowUp) -> None:
+    """期限改短了：判定的追問落在新的觀察期之外，就不再是候選，也就不算追問。
+
+    要求的文字沒變，判斷本身（那篇有沒有講同一件事）還是對的；只是日期不在 (發言日, 到期日
+    + 90 天] 裡了。從 checked 一起拿掉：期限哪天又改長，那一篇回到觀察期裡會重判。
+    followed_day 是 sync_followups 讀進來的追問那篇的日期。
+    """
+    day = getattr(followup, "followed_day", None)
+    if day is None or followup.due_date is None or day <= window_end(followup.due_date):
+        return
+    followup.checked = [i for i in followup.checked if i != followup.followed_by_id]
+    followup.followed_by, followup.quote = None, ""
+
+
 _FOLLOWUP_FIELDS = ["request", "deadline_text", "due_date", "checked", "followed_by", "quote",
                     "classifier", "checked_at"]
 _DEADLINE_TEXT_LIMIT = 300
@@ -599,12 +629,14 @@ def sync_followups() -> SyncReport:
     """替基礎文章帶期限的每一項要求建立／更新 FollowUp，不打模型。
 
     - 期限每次都重新換算：會期晚一點才掛上、或換算規則改了，到期日跟著更新。到期日變了，
-      「觀察期結束後確認過」就不算數了（checked_at 清掉），下一輪重新確認。
+      「觀察期結束後確認過」就不算數了（checked_at 清掉），下一輪重新確認；判定的追問落在新的
+      觀察期之外也不算了。
     - 要求的文字變了（admin 改了摘要卡）：先前的判斷是對舊文字做的，全部清掉重判。
     - 文章已經不是基礎文章、或那一項不見了、期限被清空：刪掉。
     """
     report = SyncReport()
-    existing = {(fu.article_id, fu.ask_index): fu for fu in FollowUp.objects.all()}
+    existing = {(fu.article_id, fu.ask_index): fu
+                for fu in FollowUp.objects.annotate(followed_day=F("followed_by__date"))}
     wanted: dict[tuple[int, int], tuple[Ask, date | None]] = {}
     for article_id, source, day, brief, session_name, meeting in (
             base_articles().values_list("id", "source", "date", "brief", "session__name", "meeting")
@@ -628,6 +660,7 @@ def sync_followups() -> SyncReport:
             fu.request, dirty = ask.request, True
         if (fu.deadline_text, fu.due_date) != (deadline, due):
             fu.deadline_text, fu.due_date, fu.checked_at, dirty = deadline, due, None, True
+            _drop_follow_up_outside_window(fu)
         if dirty:
             changed.append(fu)
     gone = [fu.id for key, fu in existing.items() if key not in wanted]
@@ -917,6 +950,9 @@ def sample_labels(pairs: int = FOLLOWUP_MIN_LABELS, seed: int = 0) -> SampleRepo
                             request=followup.request,
                             candidate_id=(candidates[0] if i < top_half else rng.choice(candidates)).id)
               for i, (followup, candidates) in enumerate(picked)]
+    # 照要求排再建：admin 照 id 列，照抽的順序建的話前一半全是重疊最高的（多半有追問），
+    # 標的人看位置就猜得到答案——盲標不只是不給模型的判斷，也不能給這種線索
+    labels.sort(key=lambda label: (label.article_id, label.ask_index))
     FollowUpLabel.objects.bulk_create(labels)
     report.added = len(labels)
     report.total += len(labels)

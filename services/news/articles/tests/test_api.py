@@ -890,7 +890,11 @@ class FollowupProfileApiTests(TestCase):
         _judge("other#followup-v0#x")       # 通過的是別的判斷器：這些要求的判斷都不算數
         compute_profiles()
         block = self._block()
-        self.assertEqual({a["state"] for a in block["asks"]}, {"pending"})
+        # 到期的等上線的判斷器看（觀察中），不從清單上消失；舊版本判的已追問、未追問都不給
+        self.assertEqual([(a["request"], a["state"]) for a in block["asks"]],
+                         [("未追問的要求", "watching"), ("觀察中的要求", "watching"),
+                          ("今天到期的要求", "pending"), ("待追蹤的要求", "pending"),
+                          ("已追問的要求", "pending")])
         # 有通過的判斷器就有比率；只是他的要求沒有一項是它判的，分母是 0
         rate, = block["indicators"]
         self.assertEqual((rate["value"], rate["n"]), (None, 0))
@@ -932,7 +936,8 @@ class FollowupProfileApiTests(TestCase):
         block = self._block()
         self.assertEqual(block["indicators"], [])
         self.assertEqual(block["judge"]["name"], "new#followup-v2#y")
-        self.assertEqual({a["state"] for a in block["asks"]}, {"pending"})
+        self.assertEqual({a["state"] for a in block["asks"]}, {"pending", "watching"})
+        self.assertNotIn("清冊還沒給", str(block))
 
     def test_only_requests_whose_articles_have_a_page(self):
         _judge()

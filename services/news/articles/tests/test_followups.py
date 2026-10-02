@@ -171,6 +171,16 @@ class DeadlineTableTests(SimpleTestCase):
         self._check([("本會期", None)], session=5, spoken=date(2026, 7, 15))
         self._check([("下會期", None), ("下個會期內", None), ("下一會期結束前", None)])
 
+    def test_an_even_session_belongs_to_the_year_it_opened(self):
+        """攔的 bug：雙數會期延到隔年一月時，照「發言那年」算會變成隔年年底，憑空多出將近一年。"""
+        # 2026 年九月開議的第 6 會期：當年講的到 12/31，最後一天也算
+        self._check([("本會期", "2026-12-31")], session=6, spoken=date(2026, 9, 15))
+        self._check([("本會期", "2026-12-31")], session=6, spoken=date(2026, 12, 31))
+        # 延會或臨時會拖到 2027 年一、二月：會期是 2026 年開的，已經過了年底，換不出來
+        for spoken in (date(2027, 1, 5), date(2027, 2, 20)):
+            with self.subTest(spoken=spoken):
+                self._check([("本會期", None), ("會期結束前", None)], session=6, spoken=spoken)
+
     def test_vague_deadlines_are_not_converted(self):
         self._check([(text, None) for text in (
             "儘快", "盡速", "立即", "馬上", "下次", "預算審查前", "下次會議前", "", "   ", "半個月內",
@@ -357,17 +367,27 @@ class StateBoundaryTests(SimpleTestCase):
                          FollowUpState.NOT_FOLLOWED)
 
     def test_without_a_passing_judge_only_pending_is_given(self):
-        for judge, classifier in ((None, CLASSIFIER), (CLASSIFIER, "old#followup-v0#x")):
-            with self.subTest(judge=judge, classifier=classifier):
-                self.assertEqual(self._state(self.DUE, judge=judge, classifier=classifier),
+        for classifier in (CLASSIFIER, ""):
+            with self.subTest(classifier=classifier):
+                self.assertEqual(self._state(self.DUE, judge=None, classifier=classifier),
                                  FollowUpState.PENDING)
                 # 不能說他追了：判斷不算數，還沒到期就照樣是待追蹤
-                self.assertEqual(self._state(self.DUE, followed_by=7, judge=judge, classifier=classifier),
+                self.assertEqual(self._state(self.DUE, followed_by=7, judge=None, classifier=classifier),
                                  FollowUpState.PENDING)
                 for today in (self.DUE + timedelta(days=1), self.END + timedelta(days=1)):
-                    self.assertIsNone(self._state(today, judge=judge, classifier=classifier))
-                    self.assertIsNone(self._state(today, followed_by=7, judge=judge,
+                    self.assertIsNone(self._state(today, judge=None, classifier=classifier))
+                    self.assertIsNone(self._state(today, followed_by=7, judge=None,
                                                   classifier=classifier))
+
+    def test_another_versions_verdicts_wait_for_the_live_judge(self):
+        """有通過的判斷器、但這一項是別的版本判的：到期後是觀察中（等上線的判斷器看），不從清單上消失。"""
+        old = "old#followup-v0#x"
+        self.assertEqual(self._state(self.DUE, followed_by=7, classifier=old), FollowUpState.PENDING)
+        for today in (self.DUE + timedelta(days=1), self.END + timedelta(days=1)):
+            with self.subTest(today=today):
+                # 舊版本說有追問、或觀察期結束後確認過沒有，都不算數
+                self.assertEqual(self._state(today, classifier=old), FollowUpState.WATCHING)
+                self.assertEqual(self._state(today, followed_by=7, classifier=old), FollowUpState.WATCHING)
 
     def test_an_unparsed_deadline_has_no_state(self):
         self.assertIsNone(self._state(self.DUE, due=None))
@@ -431,6 +451,25 @@ class SyncTests(TestCase):
         fu = FollowUp.objects.get()
         self.assertEqual((fu.due_date, fu.checked, fu.checked_at), (date(2026, 5, 2), [other.id], None))
 
+    def test_a_shorter_deadline_drops_a_follow_up_outside_the_new_window(self):
+        """攔的 bug：期限改短、觀察期跟著縮，原本判定的追問落在新的觀察期之外還算數。"""
+        article = _article(day="2026-03-02", asks=[("甲", "6個月內", "")])
+        inside = _article(day="2026-03-20")
+        outside = _article(day="2026-08-01")      # 6 個月內 → 觀察期到 2026-12-01；一個月內 → 2026-07-01
+        sync_followups()
+        FollowUp.objects.update(checked=[inside.id, outside.id], followed_by=outside, quote="q",
+                                classifier=CLASSIFIER, checked_at=timezone.now())
+        Article.objects.filter(pk=article.pk).update(brief=_brief([("甲", "一個月內", "")]))
+        sync_followups()
+        fu = FollowUp.objects.get()
+        self.assertEqual((fu.due_date, fu.followed_by, fu.quote, fu.checked, fu.classifier),
+                         (date(2026, 4, 2), None, "", [inside.id], CLASSIFIER))
+        # 追問那篇還在新的觀察期裡：照樣算
+        FollowUp.objects.update(checked=[inside.id], followed_by=inside, quote="q")
+        Article.objects.filter(pk=article.pk).update(brief=_brief([("甲", "兩週內", "")]))
+        sync_followups()
+        self.assertEqual(FollowUp.objects.get().followed_by, inside)
+
 
 # --- 候選 ---
 
@@ -474,6 +513,17 @@ class CandidateTests(TestCase):
             self._candidate("2026-03-13", **kw)
         self._candidate("2026-03-14", one_liner="完全不相干的長照")   # 一個雙字組都沒有重疊
         self.assertEqual(sorted(self._ids()), sorted([kept.id, renamed.id, unlinked.id]))
+
+    def test_a_namesake_linked_to_someone_else_is_not_the_same_person(self):
+        """攔的 bug：講者寫法一樣、但任期對到另一個人（同名的另一位），不是他的追問。"""
+        namesake = _member("王立")                      # 另一個 Person，名字一樣
+        self._candidate("2026-03-10", membership=namesake)
+        mine = self._candidate("2026-03-11")
+        self.assertEqual(self._ids(), [mine.id])
+        # 來源自己對不到任期時，只能看講者寫法：同名的都算
+        Article.objects.filter(pk=self.source.pk).update(membership=None)
+        self.followup.article.refresh_from_db()
+        self.assertEqual(len(self._ids()), 2)
 
     def test_the_top_three_by_overlap_earlier_first_on_ties(self):
         best = self._candidate("2026-05-01", one_liner="無人機交機時程清冊")
@@ -758,7 +808,8 @@ class SampleTests(TestCase):
         self.assertEqual((report.added, report.total, report.available), (10, 10, 12))
         labels = list(FollowUpLabel.objects.order_by("id"))
         top = Article.objects.get(brief__one_liner="無人機交機時程清冊")
-        self.assertTrue(all(label.candidate_id == top.id for label in labels[:5]))
+        # 至少一半是最高的那篇（隨機的那一半也可能抽到它）
+        self.assertGreaterEqual(sum(label.candidate_id == top.id for label in labels), 5)
         index = CandidateIndex.load()
         for label in labels:
             fu = FollowUp.objects.select_related("article").get(article=label.article,
@@ -766,8 +817,18 @@ class SampleTests(TestCase):
             self.assertIn(label.candidate_id, [doc.id for doc in index.candidates(fu)])
             self.assertEqual((label.request, label.followed), (fu.request, None))
         # 隨機的那一半不全是最高的那篇（種子 0 的結果，固定可重現）
-        self.assertNotEqual({label.candidate_id for label in labels[5:]}, {top.id})
+        self.assertNotEqual({label.candidate_id for label in labels}, {top.id})
         self.assertEqual(len({(label.article_id, label.ask_index) for label in labels}), 10)
+
+    def test_the_admin_order_does_not_give_away_which_half_a_pair_came_from(self):
+        """攔的 bug：照抽的順序建，admin 前一半全是重疊最高的那篇（多半有追問），看位置就猜得到答案。"""
+        sample_labels(pairs=10, seed=0)
+        labels = list(FollowUpLabel.objects.order_by("id"))
+        self.assertEqual([(label.article_id, label.ask_index) for label in labels],
+                         sorted((label.article_id, label.ask_index) for label in labels))
+        top = Article.objects.get(brief__one_liner="無人機交機時程清冊").id
+        self.assertNotEqual([label.candidate_id == top for label in labels],
+                            sorted((label.candidate_id == top for label in labels), reverse=True))
 
     def test_the_same_seed_draws_the_same_pairs(self):
         sample_labels(pairs=6, seed=0)
