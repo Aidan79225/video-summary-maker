@@ -131,7 +131,10 @@ export type ProfileIndicator = {
   sample_ok: boolean;
   /** 網站的相對路徑，點進去就是算這個數字用的那幾篇 */
   evidence_url: string;
-  /** 沒有值的原因；'no_committee_data'＝有分類過的報導，但沒有他這個會期的委員會資料 */
+  /**
+   * 沒有值的原因；'no_committee_data'＝有分類過的報導，但沒有他這個會期的委員會資料；
+   * 'no_caucus'＝他那個會期沒有參加黨團（院內紀錄的黨團一致率與跨黨投票）
+   */
   reason?: string;
 };
 
@@ -185,6 +188,100 @@ export type Profile = {
 export type ProfileQuery = {
   source?: string;
   session?: number;
+};
+
+/* ------------------------------------------------------------------
+   院內紀錄（GET /api/people/{id}/records?session=&kind=）
+
+   側寫「院內紀錄」區塊每個數字的證據：那個會期、那一類的每一筆紀錄，
+   筆數等於指標的 n（或值）。只有立法院有。
+   ------------------------------------------------------------------ */
+
+/**
+ * 紀錄的類別，也是網址的 kind；每一類對到哪個指標見 lib/records.ts 的 RECORD_KINDS。
+ * 'caucus' 是一致率的分母（他有投票、黨團也有多數的表決）：設計列了七類，但一致率的 n
+ * 跟投票出席率的 n 不一樣，少了這一類，一致率就點不回「n 筆」（後端也多了這一類）
+ */
+export type RecordKind =
+  | 'plenary'
+  | 'committee'
+  | 'proposed'
+  | 'cosigned'
+  | 'passed'
+  | 'votes'
+  | 'caucus'
+  | 'defections';
+
+/*
+ * 下面三種是網站整理後的形狀。後端（RecordOut）把代碼、編號放在 id，名稱、議題放在
+ * title，票是中文（贊成／反對／棄權）；lib/records.ts 的 normalizeRecords 負責轉過來。
+ */
+
+/** 一場會議（院會或委員會），以及出席名單上有沒有他 */
+export type MeetingRecord = {
+  /** 會議代碼，例如「院會-11-5-23」 */
+  code: string;
+  /** 會議的第一天（YYYY-MM-DD） */
+  date: string;
+  name: string;
+  /** 會議單位：院會，或委員會名稱；聯席會議是全部單位，用頓號分隔 */
+  unit: string;
+  attended: boolean;
+  /** 官方連結（立法院議事暨公報資訊網）；沒有就是空字串 */
+  url: string;
+};
+
+/** 一件委員提案 */
+export type BillRecord = {
+  bill_no: string;
+  /** 提案日（YYYY-MM-DD）；後端沒給是空字串 */
+  date: string;
+  name: string;
+  /** 議案狀態原文，例如「三讀」「交付審查」 */
+  status: string;
+  proposers: string[];
+  url: string;
+};
+
+/** 一張票：贊成、反對、棄權 */
+export type Ballot = 'yes' | 'no' | 'abstain';
+
+/** 一次記名表決：他的票，以及他所屬黨團多數投的選項 */
+export type VoteRecord = {
+  /** 表決代碼 */
+  code: string;
+  meeting_code: string;
+  /** 表決的日期（YYYY-MM-DD）；後端沒給是空字串，頁面改用 voted_at */
+  date: string;
+  /** 表決時間原文（LYAPI 的「表決時間」） */
+  voted_at: string;
+  /** 表決議題 */
+  topic: string;
+  /** 全院的票數；後端沒給是 null */
+  tally: { yes: number; no: number; abstain: number } | null;
+  /** 他的票；沒有投票是 null */
+  vote: Ballot | null;
+  /** 他那個會期的黨團；沒有參加黨團是空字串 */
+  caucus: string;
+  /** 黨團多數；並列（沒有多數）或沒有黨團時是 null，這一次不算進一致率與跨黨投票 */
+  caucus_majority: Ballot | null;
+  url: string;
+};
+
+/**
+ * 一頁紀錄清單；items 的形狀跟著 kind 走。
+ * dropped 是讀不懂、沒畫出來的筆數：清單筆數要等於指標的 n，少了幾筆要照實說，
+ * 不能讓讀者以為數字錯了
+ */
+export type RecordList = { dropped: number } & (
+  | { kind: 'plenary' | 'committee'; items: MeetingRecord[] }
+  | { kind: 'proposed' | 'cosigned' | 'passed'; items: BillRecord[] }
+  | { kind: 'votes' | 'caucus' | 'defections'; items: VoteRecord[] }
+);
+
+export type RecordQuery = {
+  session: number;
+  kind: RecordKind;
 };
 
 export type Party = {

@@ -7,6 +7,7 @@
  * 不用程式欄位名稱，用「篇」「個數字」這種看得懂的字。
  *
  * 內容要跟後端的計算（services/news 的 compute_profiles）一致；改公式時兩邊一起改。
+ * 院內紀錄的指標名稱與分組來自 lib/records.ts，跟側寫上的卡片同一份。
  */
 import Base from '../layouts/Base.astro';
 import {
@@ -17,6 +18,7 @@ import {
   TOPIC_MIN_LABELS,
   topicLabel,
 } from '../lib/topics';
+import { CHAMBER_GROUPS, CHAMBER_INDICATORS } from '../lib/records';
 
 const toc = [
   { id: 'profile-principles', label: '原則' },
@@ -24,6 +26,7 @@ const toc = [
   { id: 'profile-volume', label: '投入量' },
   { id: 'profile-specificity', label: '具體度' },
   { id: 'profile-topics', label: '議題分布' },
+  { id: 'profile-chamber', label: '院內紀錄' },
   { id: 'profile-joint', label: '聯合質詢' },
   { id: 'profile-percentile', label: '百分位' },
   { id: 'profile-sample', label: '最小樣本' },
@@ -42,6 +45,18 @@ const formula =
   'my-4 rounded-xl border border-line-soft bg-bg-soft/60 px-4 py-3 text-[0.92rem] leading-relaxed text-ink';
 const term = 'font-semibold text-ink';
 const list = 'mt-3 grid list-disc gap-2 pl-5 marker:text-muted';
+
+// 院內紀錄八個指標的公式；名稱與單位照 CHAMBER_INDICATORS，跟側寫上的卡片一致
+const CHAMBER_FORMULAS: Record<string, string> = {
+  plenary_attendance: '出席名單上有他的院會場數 ÷ 他在任期間的院會場數 × 100',
+  committee_attendance: '出席名單上有他的委員會會議場數 ÷ 他那個會期所屬委員會、在他任期內的會議場數 × 100',
+  bills_proposed: '他列名提案人的委員提案件數',
+  bills_cosigned: '他列名連署人的委員提案件數',
+  bills_passed: '他列名提案人、而且議案狀態含「三讀」的委員提案件數',
+  vote_participation: '他有投票的記名表決次數 ÷ 他在任期間的記名表決次數 × 100',
+  caucus_agreement: '他的票跟所屬黨團多數相同的次數 ÷ 他有投票、而且黨團有多數的記名表決次數 × 100',
+  caucus_defections: '他有投票、黨團有多數，而他的票跟黨團多數不同的記名表決次數',
+};
 ---
 
 <Base
@@ -67,6 +82,7 @@ const list = 'mt-3 grid list-disc gap-2 pl-5 marker:text-muted';
           發言者頁上的「人物側寫」回答三件事：這位民意代表在一個會期裡<strong class={term}>發言了多少</strong>、他的質詢<strong
             class={term}>講得多具體</strong>，以及他<strong class={term}>問的是哪些議題</strong>。每個數字都跟同一個議會、同一個會期的人放在一起看，讓讀者知道他落在哪一段。
         </p>
+        <p class="mt-3">立委另外有一塊<strong class={term}>院內紀錄</strong>：出席、提案與記名表決，資料直接來自立法院（見「院內紀錄」）。</p>
         <p class="mt-3">側寫不是評分。這一頁的公式算出來的是計數與比例，不是好壞。</p>
       </div>
 
@@ -426,6 +442,143 @@ const list = 'mt-3 grid list-disc gap-2 pl-5 marker:text-muted';
         </ul>
       </div>
 
+      <!-- 院內紀錄（立委） -->
+      <h3 id="profile-chamber" class={h3}>院內紀錄（立委）</h3>
+      <div class="prose-cn mt-3">
+        <p>
+          院內紀錄回答「他在立法院裡做了什麼」：出席了多少會議、提了多少案、記名表決怎麼投。資料全部是立法院公開的結構化紀錄，由程式直接計數，<strong
+            class={term}>沒有模型參與</strong>。只有立委有：市議會沒有逐人、結構化的出席與表決資料。
+        </p>
+      </div>
+
+      <h4 id="profile-chamber-sources" class={h4}>資料來源與同步</h4>
+      <div class="prose-cn mt-2">
+        <ul class={list}>
+          <li>
+            來源是立法院的開放資料，經 <a
+              href="https://ly.govapi.tw/"
+              rel="noopener noreferrer"
+              target="_blank"
+              class="text-accent underline decoration-accent/40 underline-offset-4 hover:decoration-accent">LYAPI</a
+            > 整理成結構化的格式：<strong class={term}>會議</strong>（院會與委員會，每一場的出席委員名單）、<strong class={term}>議案</strong>（委員提案的提案人、連署人與議案狀態）、<strong
+              class={term}>表決</strong>（記名表決裡每位委員投了贊成、反對還是棄權）。
+          </li>
+          <li>
+            <strong class={term}>每週日同步一次</strong>，排在更新委員名冊之後；同步完重算側寫。只要有一頁資料抓不到，那一次就整個不更新，不會只更新一半。
+          </li>
+          <li>
+            每個數字底下的連結，列出算它用的每一筆紀錄，筆數就是那個數字的 n：出席率列出每一場會議與他有沒有出席，提案列出每一件議案，表決列出每一次他投了什麼、他的黨團多數投了什麼。與所屬黨團一致率另有一份清單，只列他有投票、黨團也有多數的那幾次（就是它的分母）。議案附官方的議案頁；會議與表決列出日期、名稱與會議代碼，有官方頁面的也附連結。
+          </li>
+          <li>
+            紀錄上的名字跟委員名冊比對前，會先去掉空白、統一間隔號的寫法（原住民族委員的名字常有這種差異）。
+          </li>
+        </ul>
+      </div>
+
+      <h4 id="profile-chamber-tenure" class={h4}>在任期間、會期與同儕</h4>
+      <div class="prose-cn mt-2">
+        <ul class={list}>
+          <li>
+            每個指標都<strong class={term}>只算他在任期間</strong>：任期的起訖用立法院資料裡的到職日與離職日。會期中途才就任（例如遞補）或中途離職的人，分母只有他在任時開的會、做的表決；他不在任的那幾場不算缺席。
+          </li>
+          <li>每筆紀錄都標了屆別與會期（例如第11屆第5會期），那就是側寫上的會期。</li>
+          <li>
+            同儕是同一個會期裡在任過的全體立委。院會出席率、委員會出席率、投票出席率與黨團一致率這四個比例，只跟分母也夠大（至少 5）的人比；主提案、連署與三讀是計數，跟全體比；跨黨投票也是計數，但只跟有參加黨團的人比（沒有黨團的人沒有這個數字，不是 0）。百分位的算法跟其他指標一樣（見「百分位」）。
+          </li>
+        </ul>
+      </div>
+
+      <h4 id="profile-chamber-formulas" class={h4}>公式</h4>
+      {
+        CHAMBER_GROUPS.map((g) => (
+          <div class={formula}>
+            {CHAMBER_INDICATORS.filter((i) => i.group === g.key).map((i, idx) => (
+              <p class:list={[idx > 0 && 'mt-2']}>
+                <span class={term}>{i.label}</span>（{i.unit}）＝ {CHAMBER_FORMULAS[i.key]}
+              </p>
+            ))}
+          </div>
+        ))
+      }
+      <div class="prose-cn">
+        <ul class={list}>
+          <li>
+            <strong class={term}>委員會</strong>指的是他那個會期所屬的委員會；同一個會期屬於不只一個委員會時，每一個都算。<strong
+              class={term}>聯席會議</strong>只要會議單位裡有他的委員會，就算一場。
+          </li>
+          <li>開好幾天的會議算一場。</li>
+          <li>
+            四個比例的 n 是分母（場數或表決次數），套最小樣本：不到 5 時只顯示原始的值，不給百分位。四個計數的 n 就是值本身，不套最小樣本。
+          </li>
+        </ul>
+      </div>
+
+      <h4 id="profile-chamber-caucus" class={h4}>黨團多數</h4>
+      <div class="prose-cn mt-2">
+        <ul class={list}>
+          <li>
+            <strong class={term}>黨團多數</strong>是那一次表決裡，同一個黨團、有投票的委員中，票數最多的選項（贊成、反對或棄權）。算的時候包括他自己的票。
+          </li>
+          <li>
+            兩個選項票數一樣多（並列）就是<strong class={term}>沒有多數</strong>：這一次不算進一致率，也不算跨黨投票。
+          </li>
+          <li>棄權也是一個選項：黨團多數投贊成而他棄權，算一次跟黨團不同。</li>
+          <li>
+            他屬於哪個黨團，看他那個會期任期上登記的黨團。沒有參加黨團的委員（例如無黨籍、沒有加入任何黨團）不算這兩項，頁面寫「沒有參加黨團」。
+          </li>
+        </ul>
+      </div>
+      <div class={formula}>
+        <p class="text-[0.85rem] text-muted">
+          例：某次表決，他的黨團有 51 人投票，48 人贊成、3 人反對，黨團多數是贊成。他投反對，就是一次跨黨投票；他沒有投票，這一次不在一致率的分母裡，但會讓投票出席率少一次。
+        </p>
+      </div>
+
+      <h4 id="profile-chamber-reading" class={h4}>怎麼讀</h4>
+      <div class="prose-cn mt-2">
+        <ul class={list}>
+          <li>
+            <strong class={term}>出席、投票多不代表比較好。</strong>不出席、不投票可能是請假、公務，也可能是議事策略。
+          </li>
+          <li>
+            <strong class={term}>跟黨團不一致也不代表好或壞。</strong>可能是選區的立場、個人的理念，也可能只是按錯。側寫只描述，不評價。
+          </li>
+          <li>
+            <strong class={term}>提案多不代表立法成果多。</strong>一件提案可能只改一個字，也可能是一整部新法；三讀的法案也常是好幾個版本併在一起審的結果。
+          </li>
+        </ul>
+      </div>
+
+      <h4 id="profile-chamber-limits" class={h4}>限制</h4>
+      <div class="prose-cn mt-2">
+        <ul class={list}>
+          <li>
+            <strong class={term}>資料有延遲。</strong>立法院公布出席名單、公報與議案進度要時間，LYAPI 整理也要時間，我們又是每週才同步一次；最近幾週的紀錄可能還不完整，數字會變。
+          </li>
+          <li>
+            <strong class={term}>出席看的是出席名單。</strong>名單上有他就算出席，不代表整場都在。
+          </li>
+          <li>
+            <strong class={term}>聯席會議會讓分母變大。</strong>只要單位裡有他的委員會就算一場，所以他的委員會常開聯席會議時，委員會出席率的分母會比較大。他不是委員、只是去列席發言的委員會會議，不算進來。
+          </li>
+          <li>
+            <strong class={term}>只算記名表決。</strong>口頭表決、舉手表決沒有逐人的紀錄，所以「投票出席率」是記名表決的出席率，不是所有表決的。
+          </li>
+          <li>
+            <strong class={term}>三讀看的是議案狀態的文字。</strong>狀態寫著「三讀」才算。好幾個版本併案審查時，最後三讀的條文可能主要來自別的版本。
+          </li>
+          <li>
+            <strong class={term}>只算委員提案。</strong>行政院與黨團提出的議案不算進任何人的主提案或連署。連署人在 LYAPI 的清單裡沒有，我們逐一查每位委員、每個會期的連署紀錄補上。
+          </li>
+          <li>
+            <strong class={term}>名字要對得到。</strong>紀錄上的寫法跟名冊差太多時（例如異體字），那幾筆會對不到人，暫時不計入。
+          </li>
+          <li>
+            <strong class={term}>為什麼沒有「提案與質詢一致率」。</strong>原本的構想是用議題分類器替每件提案分領域，再跟他質詢的議題比。但分類器是在質詢摘要上評估過的，議案名稱（「○○法第十七條條文修正草案」）是另一種文字，在上面準不準沒有驗過。照「模型參與的指標要先過人工標註」的原則，要先有一份議案名稱的人工標註集，所以這一項先不做。
+          </li>
+        </ul>
+      </div>
+
       <!-- 聯合質詢 -->
       <h3 id="profile-joint" class={h3}>聯合質詢</h3>
       <div class="prose-cn">
@@ -477,6 +630,9 @@ const list = 'mt-3 grid list-disc gap-2 pl-5 marker:text-muted';
         <p class="mt-3">
           投入量是計數、不是比例，沒有分母，所以不套最小樣本：發言 1 次的人一樣有百分位。但同儕不到 5 人時，投入量也不比較。
         </p>
+        <p class="mt-3">
+          院內紀錄的四個比例（院會出席率、委員會出席率、投票出席率、與所屬黨團一致率）也套最小樣本，分母是場數或表決次數，寫「需至少 5 場」「需至少 5 次」；主提案、連署、三讀與跨黨投票是計數，不套。
+        </p>
       </div>
 
       <!-- 資料限制 -->
@@ -504,6 +660,9 @@ const list = 'mt-3 grid list-disc gap-2 pl-5 marker:text-muted';
           <li>
             <strong class={term}>議題是模型分的。</strong>分類器要過人工標註的門檻才上線，但過了門檻仍會分錯；見上面「議題分布」的限制。
           </li>
+          <li>
+            <strong class={term}>院內紀錄每週才同步一次。</strong>立法院公布紀錄本來就有延遲，最近幾週的數字會變；見上面「院內紀錄」的限制。
+          </li>
         </ul>
       </div>
 
@@ -511,16 +670,15 @@ const list = 'mt-3 grid list-disc gap-2 pl-5 marker:text-muted';
       <h3 id="profile-todo" class={h3}>還沒做的指標</h3>
       <div class="prose-cn mt-3">
         <p>
-          側寫目前有投入量、具體度與議題分布三塊；議題分布要等那個議會的分類器通過評估才會出現。下面幾項在規劃中，做好之前不會出現在頁面上：
+          側寫目前有投入量、具體度與議題分布三塊，立委另外有院內紀錄；議題分布要等那個議會的分類器通過評估才會出現。下面幾項在規劃中，做好之前不會出現在頁面上：
         </p>
         <ul class={list}>
           <li>
-            <strong class={term}>出席率</strong>（立委）：立法院開放資料有結構化的出席紀錄，會跟立法產出一起做。市議會的出席資料各市公開程度不同，暫不做。
+            <strong class={term}>市議員的出席率</strong>：各市議會公開的出席資料格式不一、多半不是結構化的，暫不做。立委的出席率已經在「院內紀錄」裡。
           </li>
           <li><strong class={term}>追問率</strong>：要求的期限過了以後，有沒有再追問同一件事。</li>
-          <li><strong class={term}>立法產出</strong>（立委）：主提案、連署與三讀的數量。</li>
           <li>
-            <strong class={term}>表決</strong>（立委）：要先確認公報裡的表決紀錄是不是逐人記名的結構化資料；不是的話就不做，不讓模型從內文猜。
+            <strong class={term}>提案與質詢一致率</strong>（立委）：要先有一份議案名稱的人工標註集，議題分類器在議案名稱上過了門檻才做（見「院內紀錄」的限制）。
           </li>
         </ul>
         <p class="mt-4">

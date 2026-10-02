@@ -6,11 +6,13 @@
  * 所以這裡沒有總分、沒有名次，每個指標各自一格；每格都能點回算它用的那幾篇。
  * 議題分布多一張各領域的長條圖（ProfileTopics），只有後端給了才出現——
  * 那個來源的分類器沒通過人工標註的評估，就整塊不上線。
+ * 立委多一塊院內紀錄（ProfileChamber）：八個指標分成出席、提案、表決三組，放在最後。
  */
 import type { Profile } from '../lib/types';
 import { formatDate, formatDateTime } from '../lib/format';
 import ProfileIndicator from './ProfileIndicator.astro';
 import ProfileTopics from './ProfileTopics.astro';
+import ProfileChamber from './ProfileChamber.astro';
 
 interface Props {
   profile: Profile;
@@ -36,6 +38,10 @@ const coverage =
     : '';
 const computed = formatDateTime(profile.computed_at);
 const sessionHref = (id: number) => `${basePath}?source=${profile.source}&session=${id}#profile`;
+// 院內紀錄的卡片要分組，由 ProfileChamber 自己排，不走下面通用的一排卡片。
+// 只有立法院有這份資料：後端只替立委算，別的議會萬一帶了也不畫（跟議題分布的門檻一樣兩邊各擋一次）
+const chamber = profile.blocks.find((b) => b.key === 'chamber');
+const showChamber = chamber && profile.source === 'ly';
 ---
 
 <section
@@ -104,7 +110,7 @@ const sessionHref = (id: number) => `${basePath}?source=${profile.source}&sessio
 
   <div class="mt-6 grid gap-7">
     {
-      profile.blocks.map((block) => (
+      profile.blocks.filter((b) => b !== chamber).map((block) => (
         <section aria-labelledby={`profile-${block.key}`}>
           <h3 id={`profile-${block.key}`} class="text-[0.72rem] tracking-[0.2em] text-muted">
             {block.title}
@@ -129,5 +135,6 @@ const sessionHref = (id: number) => `${basePath}?source=${profile.source}&sessio
         </section>
       ))
     }
+    {showChamber && <ProfileChamber block={chamber} minSample={profile.min_sample} />}
   </div>
 </section>
