@@ -83,8 +83,12 @@ def classifiable(name: str, proposers: object, keys: frozenset[str]) -> bool:
 class BillClassifyReport(topics.ClassifyReport):
     """跟議題分類同一個形狀，報告前面多「議案」兩個字：排程的 log 裡兩種分類才分得出來。"""
 
+    # 名稱一模一樣、沿用已經分好的結果（沒送 GPU）的件數
+    reused: int = 0
+
     def __str__(self) -> str:
-        return "議案" + super().__str__()
+        text = "議案" + super().__str__()
+        return text + (f"（其中 {self.reused} 件名稱跟已分類的一樣，直接沿用）" if self.reused else "")
 
 
 def classify_bill_topics(client: GpuApiClient, limit: int, reclassify: bool = False,
@@ -100,10 +104,22 @@ def classify_bill_topics(client: GpuApiClient, limit: int, reclassify: bool = Fa
     timeout = timeout or settings.GPU_JOB_TIMEOUT_SECONDS
     keys = legislator_keys()
     report = BillClassifyReport()
+    # 名稱一樣的議案很多（同一部法的修正案常常一字不差，第 11 屆七千多件只有兩千多種名稱）。分類器
+    # 溫度 0、同一段文字答案一樣，所以每種名稱只送一次：這一輪分過的直接沿用；之前分過、而且是
+    # 現在這個分類器分的也沿用（重分的時候不沿用之前的，那就是要重來）
+    done: dict[str, topics.TopicResult] = {} if reclassify else _known_results()
     for bill_id, bill_no, name in _work(keys, limit, reclassify):
         try:
             text = bill_input(name)
-            result = topics.classify_text(client, text, timeout)
+            result = done.get(text)
+            if result is None:
+                result = topics.classify_text(client, text, timeout)
+                if done and _latest_classifier(done) != result.classifier:
+                    # 分類器換了：之前留下來的結果不能再沿用
+                    done = {t: r for t, r in done.items() if r.classifier == result.classifier}
+                done[text] = result
+            else:
+                report.reused += 1
             # 等 GPU 的這段時間裡，每週的同步可能改了名稱（ly_records 會刪掉 BillTopic）或刪了這件：
             # 存之前重讀一次，不一樣就不存，否則舊名稱的分類會掛在新名稱上、而且之後不會再重分
             if _current_input(bill_id) != text:
@@ -147,13 +163,37 @@ def _work(keys: frozenset[str], limit: int, reclassify: bool) -> list[tuple[int,
     rows = queryset.order_by(F("topic__labeled_at").asc(nulls_first=True), "-term", "-session_number",
                              F("proposed_on").desc(nulls_last=True), "-id").values_list(
         "id", "bill_no", "name", "proposers")
+    # 上限算的是「送 GPU 的不同名稱」：同名的議案一起排進來，沿用同一個結果，不佔上限
     work: list[tuple[int, str, str]] = []
+    texts: set[str] = set()
     for bill_id, bill_no, name, proposers in rows:
-        if len(work) >= max(0, limit):
-            break
-        if classifiable(name, proposers, keys):
-            work.append((bill_id, bill_no, name))
+        if not classifiable(name, proposers, keys):
+            continue
+        text = bill_input(name)
+        if text not in texts:
+            if len(texts) >= max(0, limit):
+                continue
+            texts.add(text)
+        work.append((bill_id, bill_no, name))
     return work
+
+
+def _known_results() -> dict[str, topics.TopicResult]:
+    """之前分過的名稱 → 結果，只留最新那個分類器分的（換了模型之後，舊的不能沿用）。"""
+    rows = list(BillTopic.objects.order_by("-labeled_at", "-id")
+                .values_list("bill__name", "primary", "secondary", "classifier"))
+    if not rows:
+        return {}
+    latest = rows[0][3]
+    known: dict[str, topics.TopicResult] = {}
+    for name, primary, secondary, classifier in rows:
+        if classifier == latest:
+            known.setdefault(bill_input(name), topics.TopicResult(primary, secondary, classifier))
+    return known
+
+
+def _latest_classifier(done: dict[str, topics.TopicResult]) -> str:
+    return next(iter(done.values())).classifier
 
 
 def _current_input(bill_id: int) -> str | None:

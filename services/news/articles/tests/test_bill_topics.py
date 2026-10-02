@@ -449,8 +449,9 @@ class CommandTests(TestCase):
         return mock.patch(f"articles.management.commands.{module}.GpuApiClient", return_value=gpu)
 
     def test_classify_bill_topics_respects_limit_and_reclassify(self):
-        for _ in range(3):
-            _bill()
+        # 名稱各不相同：同名的議案只送一次 GPU（見 SameNameTests）
+        for i in range(3):
+            _bill(name=f"finance 所得稅法第{i + 1}條修正草案")
         out = io.StringIO()
         with self._gpu("classify_bill_topics", FakeTopicGpu()):
             call_command("classify_bill_topics", limit=2, stdout=out)
@@ -498,3 +499,48 @@ class CommandTests(TestCase):
                 self.assertRaises(CommandError):
             call_command("eval_bill_topics", stdout=io.StringIO())
         self.assertFalse(BillTopicEvaluation.objects.exists())
+
+
+class SameNameTests(TestCase):
+    """攔的效率問題：第 11 屆七千多件委員提案只有兩千多種名稱，每件各送一次 GPU，三分之二是重複的。"""
+
+    def setUp(self):
+        _legislators("甲", "乙")
+
+    def test_bills_with_the_same_name_are_classified_once(self):
+        same = [_bill(name="finance 所得稅法第十七條條文修正草案", proposers=(p,)) for p in ("甲", "乙", "甲")]
+        _bill(name="welfare 長期照顧服務法修正草案")
+        gpu = FakeTopicGpu()
+        report = classify_bill_topics(gpu, limit=10)
+        self.assertEqual(len(gpu.texts), 2)
+        self.assertEqual((report.classified, report.reused), (4, 2))
+        self.assertEqual({BillTopic.objects.get(bill=b).primary for b in same}, {"finance"})
+
+    def test_the_limit_counts_distinct_names_sent_to_the_gpu(self):
+        # 新的先分：最後建的三件同名議案排在最前面，佔掉一個名額
+        _bill(name="welfare 另一部法")
+        _bill(name="labor 第三部法")
+        for _ in range(3):
+            _bill(name="finance 同一部法的修正草案")
+        gpu = FakeTopicGpu()
+        classify_bill_topics(gpu, limit=2)
+        self.assertEqual(len(gpu.texts), 2)
+        self.assertEqual(BillTopic.objects.count(), 4)
+
+    def test_a_name_classified_on_an_earlier_night_is_reused(self):
+        _bill(name="finance 所得稅法修正草案")
+        classify_bill_topics(FakeTopicGpu(), limit=10)
+        later = _bill(name="finance 所得稅法修正草案", proposers=("乙",))
+        gpu = FakeTopicGpu()
+        report = classify_bill_topics(gpu, limit=10)
+        self.assertEqual((len(gpu.texts), report.reused), (0, 1))
+        self.assertEqual(BillTopic.objects.get(bill=later).classifier, CLASSIFIER)
+
+    def test_reclassify_sends_each_name_again_but_still_only_once(self):
+        for _ in range(3):
+            _bill(name="finance 所得稅法修正草案")
+        classify_bill_topics(FakeTopicGpu(), limit=10)
+        gpu = FakeTopicGpu(classifier="new-model#topic-v2")
+        classify_bill_topics(gpu, limit=10, reclassify=True)
+        self.assertEqual(len(gpu.texts), 1)
+        self.assertEqual(set(BillTopic.objects.values_list("classifier", flat=True)), {"new-model#topic-v2"})
