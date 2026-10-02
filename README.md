@@ -299,7 +299,7 @@ uv run --group api serve_api.py
  "excerpt": "後來那篇逐字稿裡跟要求最相關的一段"}
 ```
 
-- `request`（舊的要求）與 `card`（後來那篇的一句話＋要求＋各段小標）必填；`response`（官員當時的回應）與 `excerpt`（逐字稿片段）可以空；`url` 不需要（帶了就要是 http／https）
+- `request`（舊的要求）、`card`（後來那篇的一句話＋要求＋各段小標）與 `excerpt`（逐字稿片段）必填，只有空白也算沒帶（422）；只有 `response`（官員當時的回應）可以空；`url` 不需要（帶了就要是 http／https）。`excerpt` 必填是因為引用只能從片段裡抄：沒有片段的一對注定判成沒有追問，新聞服務記成判過之後就不會再判，所以挑不出片段的那一對不要送
 - 上限：`excerpt` 1500 字（新聞服務挑的是一段視窗，不是整份逐字稿）、`request` 與 `response` 各 500 字、`card` 4000 字
 - 成品：`{"followed_up": true, "quote": "……", "classifier": "qwen3.5:9b#followup-v1#1a2b3c4d"}`。沒有追問時 `quote` 一律是空字串；有追問卻沒抄出引用就照實回傳——**引用是不是真的在逐字稿裡由新聞服務檢查**（落地檢查），GPU 端不改判
 - `classifier` 的做法同議題分類：「模型#提示詞版本#提示指紋」，指紋涵蓋提示詞與 schema；解析規則、溫度、思考開關改了要手動升 `PROMPT_VERSION`（`src/slidebox/usecases/followups.py`）

@@ -372,27 +372,33 @@ def test_deck_and_topic_jobs_carry_no_pair(kit):
     assert store.get(topic["id"]).followup is None
 
 
-@pytest.mark.parametrize("field", ["request", "card"])
+@pytest.mark.parametrize("field", ["request", "card", "excerpt"])
 @pytest.mark.parametrize("value", ["", "  \n"])
-def test_a_followup_job_without_a_request_or_a_card_is_refused(kit, field, value):
-    """沒有舊的要求就沒有東西可追；沒有新文章的摘要卡，模型只能憑一段逐字稿猜。"""
-    client, *_ = kit
-    assert client.post("/jobs", json=_followup(**{field: value})).status_code == 422
+def test_a_followup_job_without_a_request_a_card_or_an_excerpt_is_refused(kit, field, value):
+    """沒有舊的要求就沒有東西可追；沒有新文章的摘要卡，模型只能憑一段逐字稿猜。
+
+    攔的 bug：沒有逐字稿片段也收的話，模型找不到能抄的證據、照提示判成「沒有」，
+    新聞服務把那一對記成判過、之後不再判——一個沒看過證據的「沒有追問」就這樣
+    算進追問率，而且不會有任何地方報錯。"""
+    client, store, *_ = kit
+    response = client.post("/jobs", json=_followup(**{field: value}))
+    assert response.status_code == 422
+    assert field in response.json()["detail"]
+    assert store.recent_snapshots() == []
 
 
-@pytest.mark.parametrize("field", ["request", "card"])
+@pytest.mark.parametrize("field", ["request", "card", "excerpt"])
 def test_a_followup_job_that_omits_a_required_field_is_refused(kit, field):
     client, *_ = kit
     assert client.post("/jobs", json=_without(_followup(), field)).status_code == 422
 
 
-@pytest.mark.parametrize("field", ["response", "excerpt"])
-def test_the_response_and_the_excerpt_may_be_left_out(kit, field):
-    """官員當場可能沒回應；逐字稿可能挑不出片段——那一對照樣要判。"""
+def test_the_response_may_be_left_out(kit):
+    """官員當場可能沒回應——那一對照樣要判。"""
     client, store, *_ = kit
-    response = client.post("/jobs", json=_without(_followup(), field))
+    response = client.post("/jobs", json=_without(_followup(), "response"))
     assert response.status_code == 202
-    assert getattr(store.get(response.json()["id"]).followup, field) == ""
+    assert store.get(response.json()["id"]).followup.response == ""
 
 
 def test_the_excerpt_is_capped_at_1500_characters(kit):

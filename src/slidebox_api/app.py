@@ -62,7 +62,7 @@ class JobRequest(BaseModel):
     text: str = Field(default="", max_length=MAX_TOPIC_TEXT)
     labels: list[TopicLabelIn] = Field(default_factory=list)
     # 以下只有追問工作用得到：舊的要求、官員當時的回應（可空）、後來那篇的摘要卡、
-    # 後來那篇逐字稿裡挑出來的一段（可空）
+    # 後來那篇逐字稿裡挑出來的一段
     request: str = Field(default="", max_length=MAX_FOLLOWUP_REQUEST)
     response: str = Field(default="", max_length=MAX_FOLLOWUP_RESPONSE)
     card: str = Field(default="", max_length=MAX_FOLLOWUP_CARD)
@@ -234,9 +234,11 @@ def _has_duplicates(values) -> bool:
 def _validate_followup(request: JobRequest) -> None:
     """沒有舊的要求就沒有東西可追；沒有後來那篇的摘要卡，模型只能憑一段逐字稿猜。
 
-    回應與逐字稿片段可以空：官員當場可能沒回應，逐字稿也可能挑不出片段，那一對
-    照樣要判（沒有片段就抄不出引用，新聞服務的落地檢查會把它記下來）。網址同分類
-    工作：用不到，帶了就照摘要工作的規矩檢查。
+    逐字稿片段也必填：引用只能從片段裡抄，提示詞又要模型找不到證據就判「沒有」，
+    沒有片段的一對注定判成沒有追問——新聞服務會把它記成判過、之後不再判，等於
+    一個沒看證據的「沒有追問」悄悄算進去。擋下來，新聞服務那邊才看得到是哪一對
+    挑不出片段。只有回應可以空：官員當場可能真的沒回應。網址同分類工作：用不到，
+    帶了就照摘要工作的規矩檢查。
     """
     if request.url:
         _validate_url(request.url)
@@ -244,6 +246,8 @@ def _validate_followup(request: JobRequest) -> None:
         raise HTTPException(status_code=422, detail="追問工作必須帶 request")
     if not request.card.strip():
         raise HTTPException(status_code=422, detail="追問工作必須帶 card")
+    if not request.excerpt.strip():
+        raise HTTPException(status_code=422, detail="追問工作必須帶 excerpt")
 
 
 def _followup_pair(request: JobRequest) -> FollowUpPair | None:
