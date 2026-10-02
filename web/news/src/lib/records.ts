@@ -23,9 +23,10 @@ import type {
   RecordList,
   RecordQuery,
   Result,
+  TopicClassifier,
   VoteRecord,
 } from './types';
-import { isTopicKey, topicLabel } from './topics';
+import { BILL_TOPIC_MIN_ACCURACY, BILL_TOPIC_MIN_LABELS, isTopicKey, topicLabel } from './topics';
 import fixture from '../fixtures/records.json';
 
 /** 後端的 MIN_SAMPLE：比例類指標的分母不到這個數就不比較 */
@@ -276,8 +277,8 @@ export function distributionOverlap(a: ReadonlyMap<string, number>, b: ReadonlyM
 }
 
 /**
- * 一致率的另一半（質詢的分布）從哪來：議題分布區塊。各領域篇數加起來就是分過類的
- * 基礎報導篇數（每篇剛好一個主領域），也就是一致率說明裡的「質詢 M 篇」。
+ * 後端沒給 speech_n 時的退路：議題分布區塊各領域篇數的總和。每篇基礎報導剛好一個主領域，
+ * 總和就是分過類的基礎報導篇數，跟後端的 speech_n（聚焦度的 n）是同一個數。
  * 沒有議題分布區塊就是 null。
  */
 export function alignmentSpeeches(blocks: readonly ProfileBlock[]): number | null {
@@ -285,8 +286,13 @@ export function alignmentSpeeches(blocks: readonly ProfileBlock[]): number | nul
   return topics?.distribution ? topics.distribution.reduce((sum, t) => sum + t.count, 0) : null;
 }
 
-/** 卡片上的說明：兩邊各算了多少，讀者才知道這個百分比是拿什麼跟什麼比 */
-export function alignmentNote(ind: Pick<ProfileIndicator, 'n'>, speeches: number | null): string {
+/**
+ * 卡片上的說明：兩邊各算了多少，讀者才知道這個百分比是拿什麼跟什麼比。
+ * 質詢篇數以後端給的 speech_n 為準（一致率比的就是那一份分布）；沒給才用議題分布的篇數，
+ * 兩個都沒有就只寫提案——寫「質詢 0 篇」會把「不知道」說成「沒有」
+ */
+export function alignmentNote(ind: Pick<ProfileIndicator, 'n' | 'speech_n'>, fallbackSpeeches: number | null): string {
+  const speeches = ind.speech_n ?? fallbackSpeeches;
   return speeches === null ? `提案 ${ind.n} 件` : `提案 ${ind.n} 件、質詢 ${speeches} 篇`;
 }
 
@@ -295,13 +301,19 @@ export const ALIGNMENT_EMPTY = '這個會期還沒有分過領域的主提案';
 
 /**
  * 一致率要兩道門檻都過（議案分類、質詢的議題分類）。後端只在兩個分類器都是上線版本時
- * 給這張卡；網站再擋看得到的那一道：質詢的分類器結果就在議題分布區塊上，網站已經照
- * 門檻再擋過一次（api.ts 的 normalizeBlock）。那一塊沒有了，一致率另一半的分布就沒有
- * 通過驗證，卡片一起拿掉——跟議題分布「沒過就不上線」同一條底線，不只靠後端守。
- * 議案分類器的評估 API 沒有回，網站擋不到，只能靠後端。
+ * 給這張卡；網站再擋看得到的那一道：質詢的分類器結果就在議題分布區塊上，網站照門檻
+ * 再擋一次（api.ts 的 normalizeBlock）。後端給了議題分布、網站卻擋掉了，一致率另一半的
+ * 分布就沒有通過驗證，卡片一起拿掉——跟議題分布「沒過就不上線」同一條底線，不只靠後端守。
+ *
+ * 後端根本沒給議題分布時不拿：那是這個會期還沒有任何報導（只有院內紀錄），不是分類器
+ * 沒過——沒過的話後端連這張卡都不會給。這時卡片照樣出現，寫質詢不到 5 篇（few_speeches）。
+ * 議案分類器的評估結果側寫 API 沒有回，側寫上擋不到，只能靠後端；證據頁的清單附了它，
+ * 在那裡再擋一次（normalizeRecords）。
+ *
+ * rawHadTopics：後端的回應裡有沒有 topics 區塊（網站整理之前）。
  */
-export function dropUnverifiedAlignment(blocks: ProfileBlock[]): ProfileBlock[] {
-  if (blocks.some((b) => b.key === 'topics')) return blocks;
+export function dropUnverifiedAlignment(blocks: ProfileBlock[], rawHadTopics: boolean): ProfileBlock[] {
+  if (!rawHadTopics || blocks.some((b) => b.key === 'topics')) return blocks;
   return blocks
     .map((b) => (b.key === 'chamber' ? { ...b, indicators: b.indicators.filter((i) => i.key !== ALIGNMENT_KEY) } : b))
     .filter((b) => b.key !== 'chamber' || b.indicators.length > 0);
@@ -358,9 +370,9 @@ function normalizeMeeting(raw: unknown): MeetingRecord | null {
 }
 
 /**
- * 議案的領域：{key, label}，也收只有代碼的字串。名稱以後端給的為準（後端改了名稱不必
- * 等網站），沒給才照網站的列舉補；兩邊都沒有名稱的代碼不畫——畫出「finance」這種代碼
- * 讀者看不懂。讀不懂就當成沒分類，不讓整件議案被丟掉
+ * 議案的領域（後端 RecordOut 的 topic）：{key, label}，也收只有代碼的字串。名稱以後端給的
+ * 為準（後端改了名稱不必等網站），沒給才照網站的列舉補；兩邊都沒有名稱的代碼不畫——
+ * 畫出「finance」這種代碼讀者看不懂。讀不懂就當成沒分類，不讓整件議案被丟掉
  */
 function billArea(v: unknown): BillArea | null {
   const o = asObject(v);
@@ -382,7 +394,42 @@ function normalizeBill(raw: unknown): BillRecord | null {
     status: text(o.status),
     proposers: (Array.isArray(o.proposers) ? o.proposers : []).map(text).filter(Boolean),
     url: text(o.url),
-    area: billArea(o.area),
+    // 後端的欄位叫 topic；area 是這個分支早先的寫法，也收，哪一邊先改都不會整欄消失
+    area: billArea(o.topic ?? o.area),
+  };
+}
+
+/**
+ * 主提案清單附的議案分類器（後端 RecordListOut 的 bill_classifier）。準確率照契約是 0～1，
+ * 超出範圍的不猜它是不是百分比（「85」讀成 85% 就讓格式錯的回應過了門檻），當成沒有
+ */
+function normalizeBillClassifier(raw: unknown): TopicClassifier | null {
+  const o = asObject(raw);
+  const accuracy = o && typeof o.accuracy === 'number' && Number.isFinite(o.accuracy) ? o.accuracy : null;
+  if (!o || accuracy === null || accuracy < 0 || accuracy > 1) return null;
+  return { name: text(o.name), accuracy, labeled: count(o.labeled), evaluated_at: text(o.evaluated_at) };
+}
+
+/**
+ * 議案分類器有沒有過門檻（至少 20 件人工標註、準確率至少 80%）。後端只在通過時給，網站再擋
+ * 一次：同議題分布，「沒通過就不上線」不只靠一邊守。浮點留一點餘裕：16 ÷ 20 在後端是剛好 0.8
+ */
+export function billClassifierPassed(c: TopicClassifier | null): c is TopicClassifier {
+  return c !== null && c.labeled >= BILL_TOPIC_MIN_LABELS && c.accuracy >= BILL_TOPIC_MIN_ACCURACY - 1e-9;
+}
+
+/**
+ * 議案清單的領域只有在附了通過門檻的議案分類器時才留著：沒附、或附的沒過，就不知道
+ * 這些領域是不是驗過的分類器分的，整份清單的領域拿掉（跟議題分布沒過門檻就整塊不畫一樣）
+ */
+function billsWithVerifiedAreas(raw: unknown, rows: unknown[]) {
+  const classifier = normalizeBillClassifier(asObject(raw)?.bill_classifier);
+  const passed = billClassifierPassed(classifier);
+  const { items, dropped } = normalizeRows(rows, normalizeBill);
+  return {
+    items: passed ? items : items.map((b) => ({ ...b, area: null })),
+    dropped,
+    bill_classifier: passed ? classifier : null,
   };
 }
 
@@ -431,15 +478,15 @@ export function normalizeRecords(kind: RecordKind, raw: unknown): RecordList | n
   switch (kind) {
     case 'plenary':
     case 'committee':
-      return { kind, ...normalizeRows(rows, normalizeMeeting) };
+      return { kind, bill_classifier: null, ...normalizeRows(rows, normalizeMeeting) };
     case 'proposed':
     case 'cosigned':
     case 'passed':
-      return { kind, ...normalizeRows(rows, normalizeBill) };
+      return { kind, ...billsWithVerifiedAreas(raw, rows) };
     case 'votes':
     case 'caucus_votes':
     case 'defections':
-      return { kind, ...normalizeRows(rows, (r) => normalizeVote(r, listCaucus)) };
+      return { kind, bill_classifier: null, ...normalizeRows(rows, (r) => normalizeVote(r, listCaucus)) };
   }
 }
 
@@ -475,15 +522,21 @@ type FixtureChamber = {
   };
 };
 
+const fx = fixture as unknown as { chamber?: FixtureChamber[]; bill_classifier?: unknown };
+
 /**
- * bill_topics_live：假資料的議案分類器有沒有通過評估。false 時議案不帶領域、也沒有
- * 一致率的卡片（後端的規則）；改成 false 就能看到議案分類器沒過的版面
+ * 假資料的議案分類器（records.json 的 bill_classifier）。後端只認通過評估的版本：拿掉它、
+ * 或把數字改到門檻以下（例如 accuracy 0.7），議案就沒有領域、也沒有一致率的卡片，
+ * 就能看到議案分類器沒過的版面
  */
-const fx = fixture as unknown as { chamber?: FixtureChamber[]; bill_topics_live?: boolean };
+function fixtureBillClassifier(): TopicClassifier | null {
+  const c = normalizeBillClassifier(fx.bill_classifier);
+  return billClassifierPassed(c) ? c : null;
+}
 
 /** 議案分類器沒通過就沒有領域：後端不會把沒通過的分類結果放進清單 */
 function fixtureBillArea(key: string | undefined): BillArea | null {
-  return fx.bill_topics_live === true && key && isTopicKey(key) ? { key, label: topicLabel(key) } : null;
+  return fixtureBillClassifier() && key && isTopicKey(key) ? { key, label: topicLabel(key) } : null;
 }
 
 function fixtureEntry(personId: number, sessionId: number): FixtureChamber | null {
@@ -528,18 +581,19 @@ function fixtureLists(entry: FixtureChamber): FixtureLists {
 
 const share = (part: number, whole: number) => (whole > 0 ? (part / whole) * 100 : null);
 
-type FixtureValue = { value: number | null; n: number; reason?: string };
+type FixtureValue = { value: number | null; n: number; reason?: string; speech_n?: number };
 
 /**
  * 提案與質詢一致率：n 是分過領域的主提案件數；質詢（議題分布的篇數）不到最小樣本時
- * 不給值（few_speeches）——一兩篇質詢的分布拿去比，重疊幾乎一定很低或很高
+ * 不給值（few_speeches）——一兩篇質詢的分布拿去比，重疊幾乎一定很低或很高。
+ * speech_n 跟後端一樣另外給，卡片才寫得出「質詢 M 篇」
  */
 function fixtureAlignment(lists: FixtureLists, speeches: ReadonlyMap<string, number>): FixtureValue {
   const bills = countAreas(lists.proposed.flatMap((b) => (b.area ? [b.area.key] : [])));
   const n = [...bills.values()].reduce((sum, c) => sum + c, 0);
   const speechTotal = [...speeches.values()].reduce((sum, c) => sum + c, 0);
-  if (speechTotal < MIN_SAMPLE) return { value: null, n, reason: 'few_speeches' };
-  return { value: distributionOverlap(bills, speeches), n };
+  if (speechTotal < MIN_SAMPLE) return { value: null, n, reason: 'few_speeches', speech_n: speechTotal };
+  return { value: distributionOverlap(bills, speeches), n, speech_n: speechTotal };
 }
 
 /** 一個指標的值與 n（公式見 spec 的指標表；方法頁寫的是同一套） */
@@ -592,10 +646,10 @@ export function fixtureChamberBlock(
   if (!entry) return null;
   const lists = fixtureLists(entry);
   const speeches = new Map((speechAreas ?? []).map((t) => [t.key, t.count]));
-  const live = fx.bill_topics_live === true && speechAreas !== null;
+  const live = fixtureBillClassifier() !== null && speechAreas !== null;
   const shown = CHAMBER_INDICATORS.filter((info) => info.key !== ALIGNMENT_KEY || live);
   const indicators = shown.map((info): ProfileIndicator => {
-    const { value, n, reason } = fixtureValue(info.key, lists, entry.caucus, speeches);
+    const { value, n, reason, speech_n } = fixtureValue(info.key, lists, entry.caucus, speeches);
     const sampleOk = !info.rate || n >= MIN_SAMPLE;
     const percentile = entry.percentiles[info.key];
     return {
@@ -610,6 +664,7 @@ export function fixtureChamberBlock(
       sample_ok: sampleOk,
       evidence_url: `/records/${personId}?session=${sessionId}&kind=${info.kind}`,
       ...(reason ? { reason } : {}),
+      ...(speech_n !== undefined ? { speech_n } : {}),
     };
   });
   return { key: 'chamber', title: '院內紀錄', indicators };
@@ -620,7 +675,8 @@ const ballotZh = (b: Ballot | null) => (b ? BALLOT_ZH[b] : null);
 
 /**
  * 一筆假紀錄轉成後端 RecordOut 的形狀；unit、tally、voted_at 是後端目前沒給、網站會用的欄位。
- * 議案的 area 是 {key, label}，沒分類（或議案分類器沒通過）是 null
+ * 議案的領域照後端放在 topic（{key, label}）：只有主提案清單標，連署、三讀是 null，
+ * 沒分類（或議案分類器沒通過）也是 null
  */
 function apiRow(kind: RecordKind, row: MeetingRecord | BillRecord | VoteRecord): Record<string, unknown> {
   if (kind === 'plenary' || kind === 'committee') {
@@ -636,7 +692,7 @@ function apiRow(kind: RecordKind, row: MeetingRecord | BillRecord | VoteRecord):
       url: b.url,
       status: b.status,
       proposers: b.proposers,
-      area: b.area,
+      topic: kind === 'proposed' ? b.area : null,
     };
   }
   const v = row as VoteRecord;
@@ -673,6 +729,15 @@ export function fixtureRecords(personId: number, query: RecordQuery): Result<unk
   const info = recordKindInfo(query.kind);
   return {
     ok: true,
-    data: { kind: query.kind, label: info.title, indicator: info.indicator, caucus: entry.caucus, count: items.length, items },
+    data: {
+      kind: query.kind,
+      label: info.title,
+      indicator: info.indicator,
+      caucus: entry.caucus,
+      count: items.length,
+      items,
+      // 跟後端一樣：只有主提案清單、而且議案分類器通過時才附
+      bill_classifier: query.kind === 'proposed' ? fixtureBillClassifier() : null,
+    },
   };
 }

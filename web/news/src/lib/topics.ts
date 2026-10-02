@@ -54,9 +54,10 @@ export const TOPIC_MIN_LABELS = 20;
 export const TOPIC_MIN_ACCURACY = 0.8;
 
 /**
- * 議案分類的門檻（後端 eval_bill_topics 的門檻）：議案名稱另有自己的人工標註集，
- * 數字跟質詢的一樣，但兩邊各自評估、各自上線。API 不回議案分類器的評估結果，
- * 網站擋不到這一道，只在方法頁寫出來；後端改門檻時這裡要跟著改。
+ * 議案分類的門檻（後端 bill_topics 的 BILL_TOPIC_MIN_LABELS、BILL_TOPIC_MIN_ACCURACY）：議案名稱
+ * 另有自己的人工標註集，數字跟質詢的一樣，但兩邊各自評估、各自上線。側寫 API 不回議案分類器
+ * 的評估結果，一致率的卡片只能靠後端擋；主提案清單附了它（bill_classifier），證據頁照這兩個數
+ * 再擋一次（records.ts 的 billClassifierPassed），方法頁也照這兩個數寫。後端改門檻時這裡要跟著改。
  */
 export const BILL_TOPIC_MIN_LABELS = 20;
 export const BILL_TOPIC_MIN_ACCURACY = 0.8;

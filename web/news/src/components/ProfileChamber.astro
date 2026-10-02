@@ -20,8 +20,8 @@ interface Props {
   /** 最小樣本（API 的 min_sample），傳給指標卡 */
   minSample: number;
   /**
-   * 一致率的質詢那一邊有幾篇（議題分布各領域篇數的總和，見 records.ts 的 alignmentSpeeches）；
-   * 沒有議題分布就是 null，卡片說明只寫提案件數
+   * 後端沒給一致率的 speech_n 時，質詢那一邊的退路篇數（議題分布各領域篇數的總和，見 records.ts
+   * 的 alignmentSpeeches）；兩個都沒有就是 null，卡片說明只寫提案件數
    */
   speeches: number | null;
 }

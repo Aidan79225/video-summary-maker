@@ -404,6 +404,8 @@ function normalizeIndicator(raw: unknown): ProfileIndicator | null {
   // 沒有值的原因要帶過來，頁面才寫得出是哪一種「沒有」（沒有委員會資料、換判斷器待重判），
   // 而不是一律寫成樣本不足
   const reason = str(o.reason).trim();
+  // 提案與質詢一致率的質詢篇數（其他指標是 null）：卡片寫「質詢 M 篇」要用後端算一致率時的那個數
+  const speechN = num(o.speech_n);
   return {
     key,
     label,
@@ -417,6 +419,7 @@ function normalizeIndicator(raw: unknown): ProfileIndicator | null {
     evidence_url: str(o.evidence_url),
     // 「沒有值」的原因（沒有委員會資料、沒有參加黨團、換了判斷器正在重判）：丟掉的話頁面只能寫成樣本不足
     ...(reason ? { reason } : {}),
+    ...(speechN !== null ? { speech_n: Math.max(0, Math.round(speechN)) } : {}),
   };
 }
 
@@ -517,9 +520,13 @@ export function normalizeProfile(raw: unknown): Profile | null {
   const session = normalizeSession(o.session);
   if (personId === null || !session) return null;
 
-  // 議題分布被門檻擋掉時，院內紀錄的提案與質詢一致率也要拿掉：它的質詢那一半就是那份分布
+  // 議題分布被網站的門檻擋掉時，院內紀錄的提案與質詢一致率也要拿掉：它的質詢那一半就是那份分布。
+  // 要先記下後端有沒有給議題分布：沒給（會期還沒有報導）跟給了被擋掉是兩回事
+  const rawBlocks: unknown[] = Array.isArray(o.blocks) ? o.blocks : [];
+  const rawHadTopics = rawBlocks.some((b) => !!b && typeof b === 'object' && (b as Record<string, unknown>).key === 'topics');
   const blocks = dropUnverifiedAlignment(
-    (Array.isArray(o.blocks) ? o.blocks : []).map(normalizeBlock).filter((b): b is ProfileBlock => b !== null),
+    rawBlocks.map(normalizeBlock).filter((b): b is ProfileBlock => b !== null),
+    rawHadTopics,
   );
   if (blocks.length === 0) return null;
 

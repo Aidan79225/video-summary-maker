@@ -139,6 +139,11 @@ export type ProfileIndicator = {
    * 'few_speeches'＝提案與質詢一致率：分過議題的質詢不到最小樣本，質詢那一邊的分布不可靠，不給值
    */
   reason?: string;
+  /**
+   * 只有提案與質詢一致率有（後端 IndicatorOut 的 speech_n）：質詢那一邊的基礎報導篇數。
+   * n 只寫得出提案有幾件，卡片要寫「提案 N 件、質詢 M 篇」，M 以後端給的為準
+   */
+  speech_n?: number;
 };
 
 /** 議題分布的一列：一個領域在這個會期的篇數與占比（只算主領域） */
@@ -301,8 +306,9 @@ export type BillRecord = {
   proposers: string[];
   url: string;
   /**
-   * 議案分類器（通過評估、正在上線的那一版）給的主領域。分類器沒通過、或這一件還沒分類時
-   * 是 null：提案與質詢一致率只算有領域的，證據頁要標得出哪幾件算進去了
+   * 議案分類器（通過評估、正在上線的那一版）給的主領域；API 的欄位是 topic（RecordOut.topic，
+   * 不叫 topic 是因為表決的 topic 是議題原文）。分類器沒通過、或這一件還沒分類時是 null：
+   * 提案與質詢一致率只算有領域的，證據頁要標得出哪幾件算進去了
    */
   area: BillArea | null;
 };
@@ -337,7 +343,14 @@ export type VoteRecord = {
  * dropped 是讀不懂、沒畫出來的筆數：清單筆數要等於指標的 n，少了幾筆要照實說，
  * 不能讓讀者以為數字錯了
  */
-export type RecordList = { dropped: number } & (
+export type RecordList = {
+  dropped: number;
+  /**
+   * 主提案清單標領域用的議案分類器（後端的 bill_classifier）；只有過了網站這一道門檻的才留著，
+   * 其他類別、分類器沒上線、或沒過門檻時是 null——那時清單上的領域一律拿掉
+   */
+  bill_classifier: TopicClassifier | null;
+} & (
   | { kind: 'plenary' | 'committee'; items: MeetingRecord[] }
   | { kind: 'proposed' | 'cosigned' | 'passed'; items: BillRecord[] }
   | { kind: 'votes' | 'caucus_votes' | 'defections'; items: VoteRecord[] }

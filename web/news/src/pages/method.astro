@@ -711,7 +711,7 @@ const exampleOverlap = distributionOverlap(exampleBills, exampleSpeeches) ?? 0;
             只分類<strong class={term}>有立委是主提案人</strong>的委員提案；行政院、黨團的提案不分類，本來也不算進任何人的主提案。
           </li>
           <li>
-            每晚分一批，新的會期先分。模型服務連不上時，那一晚整批停下，下一晚再分；送出之後議案名稱被更正了，那一次的結果不存，會用新的名稱重新分類。
+            每晚分一批，新的會期先分。模型服務連不上時，那一晚整批停下，下一晚再分。分類讀的就是名稱，所以名稱被更正了就要重分：每週同步時發現已經分過的議案改了名稱，舊的分類刪掉，下一晚用新的名稱重分；等模型回覆的時候名稱被改了，那一次的結果不存。
           </li>
         </ul>
       </div>
@@ -720,7 +720,7 @@ const exampleOverlap = distributionOverlap(exampleBills, exampleSpeeches) ?? 0;
         <p><strong class={term}>兩道門檻都要過。</strong></p>
         <ul class={list}>
           <li>
-            <strong class={term}>議案名稱有自己的人工標註集。</strong>議題分類器是在質詢摘要上評估的，議案名稱是另一種文字，在質詢上準不代表在議案名稱上也準。所以從已同步的委員提案裡隨機抽一批（固定的亂數種子），由人工標主領域；標的人只看到議案名稱與議事網的連結，看不到模型的答案。評估時用現在的模型與提示詞重新分類，人工標註至少 {BILL_TOPIC_MIN_LABELS} 件、準確率至少 {billMinAccuracy} 才通過。
+            <strong class={term}>議案名稱有自己的人工標註集。</strong>議題分類器是在質詢摘要上評估的，議案名稱是另一種文字，在質詢上準不代表在議案名稱上也準。所以從已同步的委員提案裡隨機抽一批（固定的亂數種子），由人工標主領域；標的人看得到議案名稱、會期與議事網的連結，看不到模型的答案。評估時用現在的模型與提示詞重新分類，人工標註至少 {BILL_TOPIC_MIN_LABELS} 件、準確率至少 {billMinAccuracy} 才通過。
           </li>
           <li>
             <strong class={term}>質詢那一邊</strong>就是立法院的議題分布，要立法院的議題分類器通過它自己的評估（見「議題分布」的門檻）。
