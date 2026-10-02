@@ -269,6 +269,29 @@ class VoteDateTests(SimpleTestCase):
                          date(2025, 1, 21))
         self.assertEqual(vote_date("中華民國年1月2日 上午1時", [date(2025, 12, 31)]), date(2026, 1, 2))
 
+    def test_a_year_that_contradicts_the_meeting_is_a_typo(self):
+        """1150601_00002_718（2026-10-03 實測，原樣存成 fixture）：院會-11-4-16 開在 2026-01-02 與
+        01-06，表決時間卻寫「中華民國114年」（2025）。照原文的年會掉到整整一年前、不在那場會議裡。"""
+        row = _rows("lyapi_votes_11_wrong_year.json", "votes")[0]
+        vote = parse_vote(row)
+        self.assertEqual((vote.code, vote.meeting_code, vote.voted_at),
+                         ("1150601_00002_718", "院會-11-4-16", "中華民國114年1月2日 下午12時39分54秒"))
+        days = [date(2026, 1, 2), date(2026, 1, 6)]
+        self.assertEqual(vote_date(vote.voted_at, days, vote.code), date(2026, 1, 2))
+        # 月日也不是會議的任何一天：跟沒有年的一樣，用會議第一天的年份（比第一天早就是跨年）
+        self.assertEqual(vote_date("中華民國114年1月3日", days), date(2026, 1, 3))
+        self.assertEqual(vote_date("中華民國114年12月31日", [date(2026, 1, 2)]), date(2026, 12, 31))
+
+    def test_a_written_year_inside_the_meeting_is_kept(self):
+        """原文的日期落在會議第一天到最後一天的隔天（過了午夜）之間，就照原文。"""
+        days = [date(2026, 1, 2), date(2026, 1, 6)]
+        self.assertEqual(vote_date("中華民國115年1月6日 下午3時", days), date(2026, 1, 6))
+        self.assertEqual(vote_date("中華民國115年1月7日 上午0時30分", days), date(2026, 1, 7))
+        self.assertEqual(vote_date("中華民國114年1月21日 上午1時10分", [date(2025, 1, 20)]),
+                         date(2025, 1, 21))
+        # 會議的日期不知道，就只能信原文
+        self.assertEqual(vote_date("中華民國114年1月2日", []), date(2025, 1, 2))
+
     def test_without_the_meeting_the_gazette_year_of_the_code(self):
         self.assertEqual(vote_date("中華民國年3月20日", [], "1151901_00002_717"), date(2026, 3, 20))
 
@@ -537,6 +560,17 @@ class SaveTests(TestCase):
                                  date=date(2025, 1, 20), dates=["2025-01-20"], name="m", synced_at=NOW)
         save(self._fetched(session=2), now=NOW)
         self.assertEqual(LyVote.objects.get(code="1141921_00002_591").date, date(2025, 1, 21))
+
+    def test_a_vote_with_a_mistyped_year_is_dated_by_its_meeting(self):
+        """表決時間寫錯年份（114 年，會議在 2026 年）：存成會議那天。存錯的話，這個會期的紀錄期間
+        會被撐到前一年，早就離職的人也會跑進母體。"""
+        LyMeeting.objects.create(code="院會-11-4-16", kind="plenary", term=11, session_number=4,
+                                 date=date(2026, 1, 2), dates=["2026-01-02", "2026-01-06"], name="m",
+                                 synced_at=NOW)
+        routes = {("votes", None, 1): _payload("votes", _rows("lyapi_votes_11_wrong_year.json", "votes"))}
+        source, _, _ = _source(routes)
+        save(source.fetch(session=4), now=NOW)
+        self.assertEqual(LyVote.objects.get(code="1150601_00002_718").date, date(2026, 1, 2))
 
     def test_a_vote_without_any_ballot_is_kept_and_reported(self):
         """第 11 屆有一筆表決的投票委員是空的（2026-10-03 實測，原樣存成 fixture）：照樣存，報告點出來；

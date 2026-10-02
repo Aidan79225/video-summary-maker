@@ -36,7 +36,7 @@ import urllib.request
 from collections import Counter
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
 from django.conf import settings
 from django.db import transaction
@@ -303,11 +303,14 @@ _ROC_OFFSET = 1911
 
 def vote_date(voted_at: str, meeting_days: Sequence[date], code: str = "") -> date | None:
     """表決的日期。原文多半是「中華民國115年3月20日 上午11時52分30秒」，但第 11 屆有九筆沒有年
-    （「中華民國年1月21日」）。
+    （「中華民國年1月21日」），也有年份寫錯的（1150601_00002_718：院會-11-4-16 開在 2026-01-02，
+    原文寫「中華民國114年1月2日」）。
 
-    順序：原文有年就用它；沒有年就找會議裡同月同日的那一天；再沒有（過了午夜的表決，月日已經是
-    會議的隔天）就用會議第一天的年份，比第一天早就是跨年了、加一年；會議也沒有就用表決代碼開頭的
-    公報年份（「1151901_…」是民國 115 年）。月日讀不出來就用會議第一天。
+    順序：原文有年、而且落在會議第一天到最後一天的隔天（過了午夜的表決）之間，就用它；會議的日期
+    不知道時也只能信它。沒有年、或年份跟會議對不上（打錯了：表決一定在那場會議裡），就找會議裡同月
+    同日的那一天；再沒有（過了午夜的表決，月日已經是會議的隔天）就用會議第一天的年份，比第一天早
+    就是跨年了、加一年；會議也沒有就用表決代碼開頭的公報年份（「1151901_…」是民國 115 年）。
+    月日讀不出來就用會議第一天。
     """
     days = sorted(meeting_days)
     match = _MONTH_DAY_RE.search(voted_at or "")
@@ -319,7 +322,9 @@ def vote_date(voted_at: str, meeting_days: Sequence[date], code: str = "") -> da
         if years:
             # 民國年；萬一哪天改寫西元年也認得
             year = years[-1] if years[-1] > _ROC_OFFSET else years[-1] + _ROC_OFFSET
-            return date(year, month, day)
+            written = date(year, month, day)
+            if not days or days[0] <= written <= days[-1] + timedelta(days=1):
+                return written
         for meeting_day in days:
             if (meeting_day.month, meeting_day.day) == (month, day):
                 return meeting_day
