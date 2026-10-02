@@ -457,9 +457,9 @@ class CommandTests(TestCase):
         self.assertEqual(ProfileStat.objects.filter(indicator="speeches").count(), 1)
 
 
-@override_settings(TOPIC_DAILY_LIMIT=200)
+@override_settings(TOPIC_DAILY_LIMIT=200, FOLLOWUP_DAILY_LIMIT=200)
 class NightlyJobTests(SimpleTestCase):
-    """排程：匯入 → 分政策領域 → 重算；任何一步失敗都不能冒出排程（APScheduler 會把工作移除）。"""
+    """排程：匯入 → 分政策領域 → 判斷追問 → 重算；任何一步失敗都不能冒出排程（APScheduler 會把工作移除）。"""
 
     LOGGER = "articles.management.commands.run_scheduler"
 
@@ -477,12 +477,23 @@ class NightlyJobTests(SimpleTestCase):
             run_scheduler.nightly(3)
         return calls
 
-    STEPS = ["ingest_ivod", "classify_topics", "compute_profiles"]
+    STEPS = ["ingest_ivod", "classify_topics", "check_followups", "compute_profiles"]
 
     def test_topics_are_classified_after_the_ingest_and_before_the_recompute(self):
         self.assertEqual(self._run(), [("ingest_ivod", {"days": 3}),
                                        ("classify_topics", {"limit": 200}),
+                                       ("check_followups", {"limit": 200}),
                                        ("compute_profiles", {})])
+
+    @override_settings(FOLLOWUP_DAILY_LIMIT=9)
+    def test_the_followup_limit_comes_from_the_settings(self):
+        self.assertEqual(self._run()[2], ("check_followups", {"limit": 9}))
+
+    def test_a_failing_followup_check_still_recomputes(self):
+        with self.assertLogs(self.LOGGER, "ERROR") as logs:
+            calls = self._run(fail={"check_followups"})
+        self.assertEqual([name for name, _ in calls], self.STEPS)
+        self.assertIn("追問判斷失敗", logs.output[0])
 
     @override_settings(TOPIC_DAILY_LIMIT=7)
     def test_the_classification_limit_comes_from_the_settings(self):
@@ -843,3 +854,117 @@ class CommitteeAlignmentTests(TestCase):
 
         queries(1)
         self.assertEqual(queries(5), queries(40))
+
+
+# --- 追問率 ---
+
+JUDGE = "fake-model#followup-v1#abcd1234"
+# 2026-10-03 中午：狀態依這一天決定
+FOLLOWUP_NOW = timezone.make_aware(datetime(2026, 10, 3, 12, 0))
+
+
+def _judge(classifier=JUDGE, passed=True):
+    from articles.models import FollowUpEvaluation
+
+    return FollowUpEvaluation.objects.create(
+        classifier=classifier, labeled=30, correct=28 if passed else 20,
+        accuracy=28 / 30 if passed else 20 / 30, passed=passed, ran_at=timezone.now())
+
+
+def _requests(speaker, followed=0, not_followed=0, pending=0, watching=0, classifier=JUDGE, **kw):
+    """speaker 當來源的要求，各種狀態幾項（以 FOLLOWUP_NOW 那天看）。每項各自一篇基礎文章。"""
+    from articles.models import FollowUp
+
+    later = _article(speaker, day="2026-09-20", brief=_brief(numbers=1), **kw)
+    # (到期日, 追問的那篇, 觀察期結束後確認過的時間)
+    shapes = ([(date(2026, 10, 20), later, None)] * followed
+              + [(date(2026, 6, 1), None, timezone.make_aware(datetime(2026, 9, 1)))] * not_followed
+              + [(date(2026, 10, 20), None, None)] * pending
+              + [(date(2026, 9, 1), None, None)] * watching)
+    for due, followed_by, checked_at in shapes:
+        article = _article(speaker, day="2026-03-01", brief=_brief(asks=1, deadlines=1), **kw)
+        FollowUp.objects.create(article=article, ask_index=0, request="要求0", deadline_text="一個月內",
+                                due_date=due, followed_by=followed_by, classifier=classifier,
+                                checked=[followed_by.id] if followed_by else [], checked_at=checked_at)
+
+
+class FollowupRateTests(TestCase):
+    def setUp(self):
+        _member("甲")
+        _member("乙")
+
+    def test_without_a_passing_judge_nothing_about_followups_is_computed(self):
+        _requests("甲", followed=3, not_followed=2)
+        _judge(passed=False)
+        report = compute_profiles(now=FOLLOWUP_NOW)
+        self.assertFalse(ProfileStat.objects.filter(indicator="followup_rate").exists())
+        self.assertIn("追問率：沒有通過的評估，不計算", str(report))
+
+    def test_followed_over_followed_plus_not_followed(self):
+        _requests("甲", followed=3, not_followed=2, pending=4, watching=1)
+        _judge()
+        report = compute_profiles(now=FOLLOWUP_NOW)
+        row = _stats("followup_rate")["甲"]
+        self.assertEqual((row.value, row.n, row.classifier), (60.0, 5, JUDGE))
+        # 沒有要求的人也有一列：分母是 0，沒有值
+        quiet = _stats("followup_rate")["乙"]
+        self.assertEqual((quiet.value, quiet.n, quiet.classifier), (None, 0, JUDGE))
+        self.assertIn(f"追問率：用判斷器 {JUDGE}（評估通過）", str(report))
+
+    def test_only_the_passing_judges_verdicts_count(self):
+        _requests("甲", followed=2, not_followed=1)
+        _requests("甲", followed=5, not_followed=5, classifier="old#followup-v0#x")
+        # 一個候選都沒有的：沒有判斷器也算數（程式篩出來的）
+        _requests("甲", not_followed=1, classifier="")
+        _judge()
+        compute_profiles(now=FOLLOWUP_NOW)
+        row = _stats("followup_rate")["甲"]
+        self.assertEqual((row.value, row.n), (50.0, 4))
+
+    def test_the_states_depend_on_the_day_of_the_recompute(self):
+        _requests("甲", followed=1, watching=1)
+        _judge()
+        compute_profiles(now=FOLLOWUP_NOW)
+        self.assertEqual(_stats("followup_rate")["甲"].n, 1)
+        # 觀察中的那項（到期 9/1，觀察期到 11/30）在 12/1 還沒有觀察期結束後的確認：仍不計入
+        compute_profiles(now=timezone.make_aware(datetime(2026, 12, 1, 12, 0)))
+        self.assertEqual(_stats("followup_rate")["甲"].n, 1)
+
+    def test_only_solo_requests_in_that_session_count(self):
+        _requests("甲", followed=1, not_followed=1)
+        _requests("甲", followed=3, meeting="第4屆第7次定期會")         # 別的會期
+        _judge()
+        compute_profiles(now=FOLLOWUP_NOW)
+        rows = {(s.session.name, s.value, s.n) for s in ProfileStat.objects.filter(
+            indicator="followup_rate", person__name="甲").select_related("session")}
+        self.assertEqual(rows, {("第4屆第8次定期會", 50.0, 2), ("第4屆第7次定期會", 100.0, 3)})
+
+    def test_small_samples_are_not_peers_and_the_rest_get_mid_rank(self):
+        names = [f"議員{i}" for i in range(6)]
+        for name in names:
+            _member(name)
+        # 議員 i（0～4）：5 項裡 i 項已追問 → 0、20、40、60、80%；議員 5 只有 4 項
+        for i, name in enumerate(names[:5]):
+            _requests(name, followed=i, not_followed=5 - i)
+        _requests(names[5], followed=4)
+        _judge()
+        compute_profiles(now=FOLLOWUP_NOW)
+        rows = _stats("followup_rate")
+        self.assertEqual([rows[name].percentile for name in names[:5]], [10.0, 30.0, 50.0, 70.0, 90.0])
+        self.assertEqual({rows[name].peers for name in names}, {5})
+        self.assertEqual((rows[names[5]].value, rows[names[5]].n, rows[names[5]].percentile),
+                         (100.0, 4, None))
+
+    def test_followup_rows_are_not_mistaken_for_topic_rows(self):
+        """攔的 bug：ProfileStat.classifier 非空原本只有議題列，追問率列不能讓議題被當成過期。"""
+        from articles.profiles import followup_stats_stale, topic_stats_stale
+
+        _requests("甲", followed=1)
+        _judge()
+        compute_profiles(now=FOLLOWUP_NOW)
+        self.assertFalse(topic_stats_stale())
+        self.assertFalse(followup_stats_stale())
+        _judge("new#followup-v2#y")
+        self.assertTrue(followup_stats_stale())
+        compute_profiles(now=FOLLOWUP_NOW)
+        self.assertFalse(followup_stats_stale())

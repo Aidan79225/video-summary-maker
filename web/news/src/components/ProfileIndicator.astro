@@ -16,9 +16,16 @@ interface Props {
   indicator: ProfileIndicator;
   /** 最小樣本（API 的 min_sample），寫進「樣本不足（需至少 5 篇）」 */
   minSample: number;
+  /**
+   * 證據連結的字。預設照 n 的單位寫（「看這 12 篇」）；證據不是文章清單的指標
+   * （追問率指到側寫裡的追問清單）由呼叫端給
+   */
+  evidenceLabel?: string;
+  /** n 是 0 時底下那行字。預設照 n 的單位寫「沒有可計算的報導／數字」 */
+  emptyNote?: string;
 }
 
-const { indicator: ind, minSample } = Astro.props;
+const { indicator: ind, minSample, evidenceLabel: labelOverride, emptyNote } = Astro.props;
 
 const hasValue = ind.value !== null;
 // 委員會職掌沒有值的時候，常常不是樣本不足，而是沒有他這個會期的委員會資料：照實說。
@@ -29,17 +36,20 @@ const pct = ind.percentile;
 const pctLabel = pct !== null ? `第 ${Math.round(pct)} 百分位，在 ${ind.peers} 位同儕中` : '';
 const evidence = ind.n > 0 ? evidenceHref(ind.evidence_url) : null;
 // 證據連結列出的是文章；「有來源的數字占比」的 n 是數字個數，不能寫成「看這 23 篇」。
-// 院內紀錄連到紀錄清單頁，寫法照紀錄的單位（場、件、次表決）
-const evidenceLabel = isRecordsPath(ind.evidence_url)
-  ? recordEvidenceLabel(ind)
-  : ind.n_unit === '篇'
-    ? `看這 ${ind.n} 篇`
-    : '看這些數字出自哪幾篇';
-// n 是 0 時沒有連結，改寫一句「沒有…」：院內紀錄（場次、議案、表決）照紀錄寫，
-// 其他指標維持原本的「報導／數字」（別的區塊之後加新的 n_unit，也不會被寫成「紀錄」）
-const emptyText = isRecordsPath(ind.evidence_url)
-  ? '這個會期沒有紀錄可列'
-  : `這個會期沒有可計算的${ind.n_unit === '篇' ? '報導' : '數字'}`;
+// 院內紀錄連到紀錄清單頁，寫法照紀錄的單位（場、件、次表決）；呼叫端另外給的（追問率）優先
+const evidenceLabel =
+  labelOverride ??
+  (isRecordsPath(ind.evidence_url)
+    ? recordEvidenceLabel(ind)
+    : ind.n_unit === '篇'
+      ? `看這 ${ind.n} 篇`
+      : '看這些數字出自哪幾篇');
+// n 是 0 時沒有連結，改寫一句「沒有…」：呼叫端給的優先，院內紀錄照紀錄寫，其他維持「報導／數字」
+const emptyText =
+  emptyNote ??
+  (isRecordsPath(ind.evidence_url)
+    ? '這個會期沒有紀錄可列'
+    : `這個會期沒有可計算的${ind.n_unit === '篇' ? '報導' : '數字'}`);
 // 百分號緊貼數字，其他單位留一點空隙
 const tightUnit = ind.unit === '%';
 ---

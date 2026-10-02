@@ -12,7 +12,7 @@ from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from ninja import NinjaAPI, Query, Schema
 
-from . import chamber, profiles, topics
+from . import chamber, followups, profiles, topics
 from .models import Article, ArticleStatus, Membership, Person, ProfileStat, Session, TopicEvaluation
 
 api = NinjaAPI(title="議會質詢摘要 API", version="1.0", urls_namespace="news")
@@ -184,6 +184,37 @@ class TopicsBlockOut(BlockOut):
     classifier: ClassifierOut
 
 
+class ArticleRefOut(Schema):
+    slug: str
+    title: str
+    date: date_type
+
+
+class FollowupAskOut(Schema):
+    # 提出要求的那篇
+    article: ArticleRefOut
+    request: str
+    # 期限原文
+    deadline: str
+    # 程式換算出來的到期日（換不出來的不在清單裡，只算進 unparsed）
+    due_date: date_type
+    state: Literal["pending", "watching", "followed", "not_followed"]
+    # 已追問時是追問的那篇，其餘是 null
+    followed_by: ArticleRefOut | None
+    # 已追問時是模型的引用（已通過落地檢查：在 followed_by 的逐字稿裡），其餘是空字串
+    quote: str
+
+
+class FollowupBlockOut(BlockOut):
+    """追問：永遠出現（清單不靠模型）。判斷器沒通過時 indicators 是空的、asks 只有 pending。"""
+
+    asks: list[FollowupAskOut]
+    # 期限寫法無法換算的要求數
+    unparsed: int
+    # 上線的判斷器；null 是沒有通過評估的判斷器
+    judge: ClassifierOut | None
+
+
 class ProfileOut(Schema):
     person: PersonRefOut
     source: str
@@ -192,8 +223,9 @@ class ProfileOut(Schema):
     sessions: list[SessionOut]
     computed_at: datetime
     min_sample: int
-    # 議題分布的區塊多了 distribution 與 classifier；其他區塊沒有這兩個欄位
-    blocks: list[TopicsBlockOut | BlockOut]
+    # 議題分布的區塊多了 distribution 與 classifier；追問的區塊多了 asks、unparsed 與 judge；
+    # 其他區塊沒有這些欄位
+    blocks: list[TopicsBlockOut | FollowupBlockOut | BlockOut]
 
 
 RecordKindParam = Literal[chamber.KIND_KEYS]
@@ -463,6 +495,9 @@ def _evidence_url(name: str, session: Session, indicator: profiles.Indicator) ->
     文章的篇數、就是 0（那個會期沒有他的委員會資料，值是 null、頁面顯示樣本不足）。
     """
     url = _speaker_url(name, session)
+    if indicator.block == profiles.FOLLOWUP_BLOCK:
+        # 追問率的證據就是側寫裡的清單：哪幾項追了、哪幾項沒追
+        return url + "#followups"
     if indicator.block in (profiles.SPECIFICITY, profiles.TOPIC_BLOCK):
         url += "&solo=1&brief=1"
     if indicator.block == profiles.TOPIC_BLOCK:
@@ -503,7 +538,8 @@ def person_profile(request, person_id: int, source: SourceParam | None = None,
 
     議題分布只在那個來源有通過的評估、而且側寫已經用它算過時才多一個區塊（見 _topics_block）：
     沒驗過的分類不是事實，連「0 篇」都不該給。立法院同步過院內紀錄的會期再多一個 chamber 區塊
-    （見 _chamber_block）。
+    （見 _chamber_block）。追問區塊永遠在最後（見 _followup_block）：清單不靠模型，比率與要靠
+    判斷的狀態才要等判斷器通過。
 
     source 省略時用他最近一個有統計的會期的來源；session 省略時用這個來源裡他有發言的
     最近一個會期，都沒有發言就用有統計的最近一個。指定了 session 而省略 source，
@@ -546,6 +582,7 @@ def person_profile(request, person_id: int, source: SourceParam | None = None,
         blocks.append(_topics_block(mine, evaluation, name, chosen))
     if any(key in mine for key in chamber.INDICATOR_KEYS):
         blocks.append(_chamber_block(person, mine, chosen))
+    blocks.append(_followup_block(mine, name, chosen))
     return {
         "person": {"id": person.id, "name": person.name},
         "source": source,
@@ -559,7 +596,8 @@ def person_profile(request, person_id: int, source: SourceParam | None = None,
 
 def _topics_current(mine: dict[str, ProfileStat], classifier: str) -> bool:
     """這個會期有議題列，而且全都是現在上線的分類器算的。"""
-    topic_rows = [stat for stat in mine.values() if stat.classifier]
+    topic_rows = [stat for stat in mine.values()
+                  if stat.classifier and profiles.is_topic_stat(stat.indicator)]
     return bool(topic_rows) and all(stat.classifier == classifier for stat in topic_rows)
 
 
@@ -591,6 +629,31 @@ def _topics_block(mine: dict[str, ProfileStat], evaluation: TopicEvaluation, nam
         "classifier": {"name": evaluation.classifier, "accuracy": evaluation.accuracy,
                        "labeled": evaluation.labeled,
                        "evaluated_at": timezone.localtime(evaluation.ran_at)},
+    }
+
+
+def _followup_block(mine: dict[str, ProfileStat], name: str, session: Session) -> dict:
+    """追問區塊。清單不靠模型的部分永遠給；比率與要靠判斷的狀態只在判斷器通過評估時才給。
+
+    追問率還要是現在上線的判斷器算的（ProfileStat.classifier）：評估剛換版本、側寫還沒重算的
+    空窗裡，不把舊版本的數字掛上新版本的名字。
+    """
+    evaluation = followups.passing_evaluation()
+    judge = evaluation.classifier if evaluation else None
+    stat = mine.get(profiles.FOLLOWUP_RATE.key)
+    indicators = []
+    if judge is not None and stat is not None and stat.classifier == judge:
+        indicators.append(_indicator_out(stat, profiles.FOLLOWUP_RATE, name, session))
+    asks, unparsed = followups.profile_asks(name, session, judge, timezone.localdate())
+    return {
+        "key": profiles.FOLLOWUP_BLOCK,
+        "title": profiles.BLOCK_TITLES[profiles.FOLLOWUP_BLOCK],
+        "indicators": indicators,
+        "asks": asks,
+        "unparsed": unparsed,
+        "judge": None if evaluation is None else {
+            "name": evaluation.classifier, "accuracy": evaluation.accuracy,
+            "labeled": evaluation.labeled, "evaluated_at": timezone.localtime(evaluation.ran_at)},
     }
 
 

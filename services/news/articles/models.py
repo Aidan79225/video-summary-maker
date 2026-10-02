@@ -415,3 +415,87 @@ class LyVote(models.Model):
 
     def __str__(self) -> str:
         return f"{self.code} {self.topic[:40]}"
+class FollowUp(models.Model):
+    """摘要卡裡一項帶期限的要求，與「後來有沒有再追問」的判斷（followups.check_followups）。
+
+    鍵是 (文章, asks 的位置)。要求只取基礎文章（已完成、單獨發言、有摘要卡）的：聯合質詢分不出
+    要求是誰提的。文章重產（ingest.save_result）時刪掉它當來源的，也把它從別人的 checked 與
+    followed_by 拿掉（followups.forget_article）。
+    """
+
+    article = models.ForeignKey(Article, related_name="followups", on_delete=models.CASCADE)
+    ask_index = models.PositiveIntegerField()
+    request = models.TextField()
+    deadline_text = models.CharField(max_length=300)
+    # 程式從期限原文換算出來的；換不出來（「儘快」「下次」）是 null，不計入追問率也不進清單
+    due_date = models.DateField(null=True, blank=True, db_index=True)
+    # 判定有追問的那篇（第一篇判定有追問就停）
+    followed_by = models.ForeignKey(Article, null=True, blank=True, on_delete=models.SET_NULL,
+                                    related_name="follow_up_of")
+    # 模型的引用：已通過落地檢查（在 followed_by 的逐字稿裡）
+    quote = models.TextField(blank=True)
+    # 判斷器（模型＋提示詞版本）。這一項的判斷都出自它：換了判斷器就整項重來
+    classifier = models.CharField(max_length=200, blank=True, db_index=True)
+    # 判斷過的候選文章 id：每一對只判斷一次
+    checked = models.JSONField(default=list, blank=True)
+    # 上一次確認「所有候選都判斷過了」的時間；還有候選沒判斷就是 null。未追問要靠觀察期結束
+    # **之後**的確認：還沒看完不能說沒有
+    checked_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["due_date", "id"]
+        constraints = [models.UniqueConstraint(fields=["article", "ask_index"],
+                                               name="unique_followup_per_ask")]
+        verbose_name = verbose_name_plural = "追問（模型）"
+
+    def __str__(self) -> str:
+        return f"{self.article} 第 {self.ask_index + 1} 項：{self.request[:30]}"
+
+
+class FollowUpLabel(models.Model):
+    """人工標註的一對（要求, 後來那篇）：追問判斷器的標註集（sample_followup_labels 抽、admin 標、
+    eval_followups 評）。文章重產時不刪：發言有沒有追問不會因為摘要重寫而改變。
+    """
+
+    article = models.ForeignKey(Article, related_name="followup_labels", on_delete=models.CASCADE)
+    ask_index = models.PositiveIntegerField()
+    # 抽樣當時的要求文字。重產之後同一個位置可能是別的要求，對不上的標註評估時略過，
+    # 不能拿新的要求去比舊的人工答案
+    request = models.TextField(blank=True)
+    candidate = models.ForeignKey(Article, related_name="+", on_delete=models.CASCADE)
+    # null＝還沒標
+    followed = models.BooleanField(null=True, blank=True)
+    note = models.CharField(max_length=300, blank=True)
+    labeled_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["id"]
+        constraints = [models.UniqueConstraint(fields=["article", "ask_index", "candidate"],
+                                               name="unique_followup_label")]
+        verbose_name = verbose_name_plural = "追問標註"
+
+    def __str__(self) -> str:
+        answer = {True: "有追問", False: "沒有追問"}.get(self.followed, "還沒標")
+        return f"{self.article} 第 {self.ask_index + 1} 項 → {self.candidate}：{answer}"
+
+
+class FollowUpEvaluation(models.Model):
+    """一次評估的成績。追問率只用「每個判斷器自己最新的一次評估」裡通過、而且最晚的那一個。"""
+
+    classifier = models.CharField(max_length=200)
+    labeled = models.PositiveIntegerField()
+    correct = models.PositiveIntegerField()
+    # 0～1
+    accuracy = models.FloatField()
+    passed = models.BooleanField(db_index=True)
+    # 判錯的每一筆：[{label, article, ask_index, candidate, speaker, request, human, model,
+    # quote?, ungrounded?, error?}]，model 為 null 是判斷失敗
+    mistakes = models.JSONField(default=list, blank=True)
+    ran_at = models.DateTimeField()
+
+    class Meta:
+        ordering = ["-ran_at", "-id"]
+        verbose_name = verbose_name_plural = "追問判斷評估"
+
+    def __str__(self) -> str:
+        return f"{self.classifier} {self.correct}/{self.labeled}{'（通過）' if self.passed else ''}"

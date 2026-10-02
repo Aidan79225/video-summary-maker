@@ -385,7 +385,8 @@ class ChamberApiTests(TestCase):
     def test_the_block_has_the_documented_shape(self):
         res = self._profile("甲")
         # 這個會期還沒有任何文章：只給院內紀錄，投入量不是 0、是沒有資料
-        self.assertEqual([b["key"] for b in res["blocks"]], ["chamber"])
+        # 追問區塊永遠在最後（清單不靠模型）
+        self.assertEqual([b["key"] for b in res["blocks"]], ["chamber", "followup"])
         block = self._chamber("甲")
         self.assertEqual(block["title"], "院內紀錄")
         self.assertEqual([i["key"] for i in block["indicators"]],
@@ -411,7 +412,7 @@ class ChamberApiTests(TestCase):
                                ivod_url="https://example.invalid/1", status=ArticleStatus.READY)
         compute_profiles()
         self.assertEqual([b["key"] for b in self._profile("甲")["blocks"]],
-                         ["volume", "specificity", "chamber"])
+                         ["volume", "specificity", "chamber", "followup"])
 
     def test_a_session_known_only_from_records_sorts_by_its_records(self):
         """只有院內紀錄的會期沒有起訖（起訖只看文章）：用紀錄的期間排新舊，剛開議的才不會排在最後。"""

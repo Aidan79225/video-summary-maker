@@ -9,6 +9,8 @@ from .entities import (
     Brief,
     Cue,
     Deck,
+    FollowUpPair,
+    FollowUpResult,
     Slide,
     TopicLabel,
     TopicResult,
@@ -113,6 +115,22 @@ class TopicClassifier(Protocol):
         回應解析不出來、或主領域不在 labels 裡時 raise SummarizerOutputInvalid
         ——不猜「最接近的」，那等於替模型做決定；連不上模型時 raise
         SummarizerUnavailable。取消的規則與 Summarizer 相同。
+        """
+        ...
+
+
+class FollowUpJudge(Protocol):
+    def judge(
+        self,
+        pair: FollowUpPair,
+        progress: ProgressCallback,
+        is_cancelled: CancelCheck | None = None,
+    ) -> FollowUpResult:
+        """判斷後來那篇有沒有再提先前那項要求的同一件事，有的話附一句引用。
+
+        回應解析不出來、或判斷不是布林值時 raise SummarizerOutputInvalid——不把
+        "true"、1 解讀成有追問；連不上模型時 raise SummarizerUnavailable。引用
+        有沒有落地不在這裡檢查，那是新聞服務的事。取消的規則與 Summarizer 相同。
         """
         ...
 

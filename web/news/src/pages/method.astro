@@ -10,6 +10,7 @@
  * 院內紀錄的指標名稱與分組來自 lib/records.ts，跟側寫上的卡片同一份。
  */
 import Base from '../layouts/Base.astro';
+import MethodFollowups from '../components/MethodFollowups.astro';
 import {
   COMMITTEE_AREAS,
   TOPIC_AREAS,
@@ -26,6 +27,7 @@ const toc = [
   { id: 'profile-volume', label: '投入量' },
   { id: 'profile-specificity', label: '具體度' },
   { id: 'profile-topics', label: '議題分布' },
+  { id: 'profile-followups', label: '追問率' },
   { id: 'profile-chamber', label: '院內紀錄' },
   { id: 'profile-joint', label: '聯合質詢' },
   { id: 'profile-percentile', label: '百分位' },
@@ -61,7 +63,7 @@ const CHAMBER_FORMULAS: Record<string, string> = {
 
 <Base
   title="方法說明"
-  description="人物側寫的每個指標怎麼算：原則、公式、會期與同儕的定義、議題分類與人工標註、百分位、最小樣本與資料限制。"
+  description="人物側寫的每個指標怎麼算：原則、公式、會期與同儕的定義、議題分類與人工標註、追問的期限換算與判斷、百分位、最小樣本與資料限制。"
   back={true}
 >
   <section class="border-b border-line-soft bg-bg-soft/60">
@@ -79,8 +81,9 @@ const CHAMBER_FORMULAS: Record<string, string> = {
       <h2 id="profile-heading" class="headline text-2xl font-semibold sm:text-[1.7rem]">人物側寫</h2>
       <div class="prose-cn mt-4">
         <p>
-          發言者頁上的「人物側寫」回答三件事：這位民意代表在一個會期裡<strong class={term}>發言了多少</strong>、他的質詢<strong
-            class={term}>講得多具體</strong>，以及他<strong class={term}>問的是哪些議題</strong>。每個數字都跟同一個議會、同一個會期的人放在一起看，讓讀者知道他落在哪一段。
+          發言者頁上的「人物側寫」回答四件事：這位民意代表在一個會期裡<strong class={term}>發言了多少</strong>、他的質詢<strong
+            class={term}>講得多具體</strong>、他<strong class={term}>問的是哪些議題</strong>，以及他提的要求<strong
+            class={term}>有沒有追到底</strong>。每個數字都跟同一個議會、同一個會期的人放在一起看，讓讀者知道他落在哪一段。
         </p>
         <p class="mt-3">立委另外有一塊<strong class={term}>院內紀錄</strong>：出席、提案與記名表決，資料直接來自立法院（見「院內紀錄」）。</p>
         <p class="mt-3">側寫不是評分。這一頁的公式算出來的是計數與比例，不是好壞。</p>
@@ -111,13 +114,13 @@ const CHAMBER_FORMULAS: Record<string, string> = {
           <strong class={term}>只跟同儕比。</strong>立委只跟立委比，臺中市議員只跟臺中市議員比，新北市議員只跟新北市議員比，而且只比同一個會期。各議會的質詢制度不同，放在一起比沒有意義。
         </li>
         <li>
-          <strong class={term}>數字由程式按公式算。</strong>每個指標都是從既有資料直接計數或相除，公式就寫在下面。模型不給數字：具體度用到的摘要卡是語言模型從逐字稿抽取、再由程式逐一檢查過的（見「具體度」）；議題分布用到模型分類，但模型只負責把每篇報導分到一個固定的領域，篇數、占比都是程式數的（見「議題分布」）。
+          <strong class={term}>數字由程式按公式算。</strong>每個指標都是從既有資料直接計數或相除，公式就寫在下面。模型不給數字：具體度用到的摘要卡是語言模型從逐字稿抽取、再由程式逐一檢查過的（見「具體度」）；議題分布用到模型分類，但模型只負責把每篇報導分到一個固定的領域，篇數、占比都是程式數的（見「議題分布」）；追問率用到模型判斷，但模型只判斷後來那次質詢有沒有再提同一件事，到期日與比率都是程式算的（見「追問率」）。
         </li>
         <li>
-          <strong class={term}>模型參與的指標要先過人工標註。</strong>議題分類要先在一份人工標註的報導上達到準確率門檻，那個議會的議題分布才會出現；換模型或改提示詞就要重新評估。
+          <strong class={term}>模型參與的指標要先過人工標註。</strong>議題分類要先在一份人工標註的報導上達到準確率門檻，那個議會的議題分布才會出現；追問的判斷也一樣，沒通過就不顯示追問率。換模型或改提示詞就要重新評估。
         </li>
         <li>
-          <strong class={term}>樣本太少就不比較。</strong>具體度與議題分布的分母不到 5 時只顯示原始的值，不跟別人比（見「最小樣本」）。
+          <strong class={term}>樣本太少就不比較。</strong>具體度、議題分布與追問率的分母不到 5 時只顯示原始的值，不跟別人比（見「最小樣本」）。
         </li>
         <li>
           <strong class={term}>每個數字都能點回去。</strong>指標底下的「看這 12 篇」，列出的就是算出這個數字的那 12 篇報導。
@@ -442,6 +445,8 @@ const CHAMBER_FORMULAS: Record<string, string> = {
         </ul>
       </div>
 
+      <!-- 追問率 -->
+      <MethodFollowups cls={{ h3, h4, th, formula, term, list }} />
       <!-- 院內紀錄（立委） -->
       <h3 id="profile-chamber" class={h3}>院內紀錄（立委）</h3>
       <div class="prose-cn mt-3">
@@ -592,6 +597,9 @@ const CHAMBER_FORMULAS: Record<string, string> = {
           <li>
             <strong class={term}>議題分布：</strong>不分類、不計入任何一個人。一段聯合質詢裡每個人可能問不同的事，整段的領域不能算到每個人頭上。
           </li>
+          <li>
+            <strong class={term}>追問率：</strong>聯合質詢裡的要求不算進任何一個人，聯合質詢也不當成再提的那一篇。分不出要求是誰提的、是誰再提的。
+          </li>
         </ul>
       </div>
 
@@ -599,7 +607,7 @@ const CHAMBER_FORMULAS: Record<string, string> = {
       <h3 id="profile-percentile" class={h3}>百分位</h3>
       <div class="prose-cn mt-3">
         <p>
-          百分位回答「跟同儕比，他落在哪一段」。投入量的同儕是整個母體；具體度與議題分布的同儕是母體中這一項樣本足夠（n 至少 5）的人。
+          百分位回答「跟同儕比，他落在哪一段」。投入量的同儕是整個母體；具體度、議題分布與追問率的同儕是母體中這一項樣本足夠（n 至少 5）的人。
         </p>
       </div>
       <div class={formula}>
@@ -625,7 +633,7 @@ const CHAMBER_FORMULAS: Record<string, string> = {
       <h3 id="profile-sample" class={h3}>最小樣本</h3>
       <div class="prose-cn mt-3">
         <p>
-          具體度的三項指標與議題分布的三項指標（聚焦度、廣度、委員會職掌內的比例），分母（n）不到 <strong class={term}>5</strong> 時，不給百分位、不畫長條，只顯示原始的值與 n，並寫「樣本不足（需至少 5 篇）」；有來源占比的分母是數字個數，寫的是「需至少 5 個數字」。一兩篇算出來的比例起伏太大，拿去跟別人比只會誤導——只有 1 篇的人，聚焦度一定是 100%。
+          具體度的三項指標與議題分布的三項指標（聚焦度、廣度、委員會職掌內的比例），分母（n）不到 <strong class={term}>5</strong> 時，不給百分位、不畫長條，只顯示原始的值與 n，並寫「樣本不足（需至少 5 篇）」；有來源占比的分母是數字個數，寫的是「需至少 5 個數字」；追問率的分母是有結果的要求項數，寫的是「需至少 5 項」。一兩篇算出來的比例起伏太大，拿去跟別人比只會誤導——只有 1 篇的人，聚焦度一定是 100%。
         </p>
         <p class="mt-3">
           投入量是計數、不是比例，沒有分母，所以不套最小樣本：發言 1 次的人一樣有百分位。但同儕不到 5 人時，投入量也不比較。
@@ -662,6 +670,7 @@ const CHAMBER_FORMULAS: Record<string, string> = {
           </li>
           <li>
             <strong class={term}>院內紀錄每週才同步一次。</strong>立法院公布紀錄本來就有延遲，最近幾週的數字會變；見上面「院內紀錄」的限制。
+            <strong class={term}>「有沒有再提」是模型判斷的。</strong>判斷器要過人工標註的門檻，追問率才會顯示，但過了門檻仍會判錯；見上面「追問率」的限制。
           </li>
         </ul>
       </div>
@@ -670,13 +679,12 @@ const CHAMBER_FORMULAS: Record<string, string> = {
       <h3 id="profile-todo" class={h3}>還沒做的指標</h3>
       <div class="prose-cn mt-3">
         <p>
-          側寫目前有投入量、具體度與議題分布三塊，立委另外有院內紀錄；議題分布要等那個議會的分類器通過評估才會出現。下面幾項在規劃中，做好之前不會出現在頁面上：
+          側寫目前有投入量、具體度、議題分布與追問四塊，立委另外有院內紀錄；議題分布要等那個議會的分類器通過評估才會出現，追問率要等判斷器通過評估才會顯示。下面幾項在規劃中，做好之前不會出現在頁面上：
         </p>
         <ul class={list}>
           <li>
             <strong class={term}>市議員的出席率</strong>：各市議會公開的出席資料格式不一、多半不是結構化的，暫不做。立委的出席率已經在「院內紀錄」裡。
           </li>
-          <li><strong class={term}>追問率</strong>：要求的期限過了以後，有沒有再追問同一件事。</li>
           <li>
             <strong class={term}>提案與質詢一致率</strong>（立委）：要先有一份議案名稱的人工標註集，議題分類器在議案名稱上過了門檻才做（見「院內紀錄」的限制）。
           </li>

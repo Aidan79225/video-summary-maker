@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import pytest
 
-from slidebox.domain.entities import TopicLabel
+from slidebox.domain.entities import FollowUpPair, TopicLabel
 from slidebox_api.jobs import JobKind, JobStatus, JobStore
 
 
@@ -206,3 +206,75 @@ def test_many_topic_jobs_do_not_push_out_a_finished_deck_job():
     assert store.get(deck.id) is not None
     assert store.get(topic_ids[0]) is None
     assert store.get(topic_ids[-1]) is not None
+
+
+# --- 追問工作（kind=followup）---
+
+PAIR = FollowUpPair(request="要求一個月內提出長照人力補助方案", response="部長允諾",
+                    card="一句話：追問長照人力補助方案", excerpt="上次要求的方案還沒看到")
+
+
+def _followup(store: JobStore):
+    return store.submit(kind=JobKind.FOLLOWUP, followup=PAIR)
+
+
+def _finished(store: JobStore, job):
+    store.take_next()
+    store.finish(job.id, {"done": True})
+    return job
+
+
+def test_a_followup_job_keeps_the_pair_it_is_asked_to_judge():
+    job = _followup(_store())
+    assert (job.kind, job.url, job.followup) == (JobKind.FOLLOWUP, "", PAIR)
+
+
+def test_other_kinds_carry_no_pair():
+    store = _store()
+    assert store.submit("a").followup is None
+    assert store.submit(kind=JobKind.TOPIC, text="t", labels=LABELS).followup is None
+
+
+def test_followup_jobs_share_the_one_queue_and_the_one_slot():
+    """判斷也要用 Ollama：排在正在跑的摘要與分類後面，不插隊、不並行。"""
+    store = _store()
+    deck = store.submit("a")
+    topic = store.submit(kind=JobKind.TOPIC, text="t", labels=LABELS)
+    followup = _followup(store)
+    assert store.take_next() is deck
+    assert store.take_next() is None
+    store.finish(deck.id, {})
+    assert store.take_next() is topic
+    store.finish(topic.id, {})
+    assert store.take_next() is followup
+
+
+def test_many_followup_jobs_push_out_neither_decks_nor_topics():
+    """攔的 bug：判斷跟分類或摘要共用上限的話，一晚兩百對判斷會把還在等人接回的
+    分類與摘要成品擠掉，新聞服務逾時之後就接不回來、只能重跑。"""
+    store = JobStore(max_jobs=3, max_topic_jobs=3, max_followup_jobs=5)
+    deck = _finished(store, store.submit("https://example.invalid/v"))
+    topic = _finished(store, store.submit(kind=JobKind.TOPIC, text="t", labels=LABELS))
+    followups = [_finished(store, _followup(store)) for _ in range(20)]
+    assert store.get(deck.id) is not None
+    assert store.get(topic.id) is not None
+    assert store.get(followups[0].id) is None
+    assert store.get(followups[-1].id) is not None
+
+
+def test_many_topic_jobs_do_not_push_out_a_finished_followup_job():
+    store = JobStore(max_jobs=3, max_topic_jobs=5, max_followup_jobs=3)
+    followup = _finished(store, _followup(store))
+    for i in range(20):
+        _finished(store, store.submit(kind=JobKind.TOPIC, text=f"t{i}", labels=LABELS))
+    assert store.get(followup.id) is not None
+
+
+@pytest.mark.parametrize("kind", list(JobKind))
+def test_every_kind_of_job_is_capped(kind):
+    """攔的 bug：新增一種工作卻忘了給它上限，那一種就會一路留著、記憶體只會長。"""
+    store = JobStore(max_jobs=2, max_topic_jobs=2, max_followup_jobs=2)
+    first = _finished(store, store.submit("u", kind=kind, followup=PAIR))
+    for _ in range(5):
+        _finished(store, store.submit("u", kind=kind, followup=PAIR))
+    assert store.get(first.id) is None

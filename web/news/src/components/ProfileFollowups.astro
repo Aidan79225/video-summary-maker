@@ -1,0 +1,219 @@
+---
+/**
+ * 側寫的「追問」區塊：一行說明、追問率卡片（沿用指標卡）、依狀態分組的要求清單。
+ *
+ * 圖的選擇：追問率是一個比例，用跟其他指標一樣的卡片（值、n、百分位的位置），不另畫圖。
+ * 四種狀態的項數只寫成字（上面一排計數與每組的標題）：那是清單的目錄，不是要比大小的數列；
+ * 疊成一條長條的話，「觀察中」「待追蹤」這些還沒有結果的，看起來會跟已追問、未追問一樣
+ * 是成績的一部分。狀態也不上紅綠色：側寫只描述、不評價，而且狀態已經寫成字了。
+ *
+ * 判斷器沒通過評估時（judge 是 null）：沒有卡片、只有「待追蹤」一組，並寫明比率要等人工
+ * 驗證——其他三組要靠模型判斷「有沒有再提」，沒驗證過的判斷不上頁面。
+ *
+ * id="followups" 是追問率的證據連結（evidence_url 的 #followups）跳過來的地方。
+ */
+import type { ProfileBlock } from '../lib/types';
+import { formatDateTime, formatPercent } from '../lib/format';
+import {
+  DEADLINE_UNPARSED_EXAMPLES,
+  FOLLOWUP_ANCHOR,
+  FOLLOWUP_MIN_ACCURACY,
+  FOLLOWUP_MIN_LABELS,
+  groupFollowups,
+  judgeLabel,
+  stateDescription,
+} from '../lib/followups';
+import FollowupItem from './FollowupItem.astro';
+import ProfileIndicator from './ProfileIndicator.astro';
+
+interface Props {
+  block: ProfileBlock;
+  /** 最小樣本（API 的 min_sample），交給指標卡 */
+  minSample: number;
+}
+
+const { block, minSample } = Astro.props;
+
+const judge = block.judge ?? null;
+const asks = block.asks ?? [];
+const unparsed = block.unparsed ?? 0;
+const groups = groupFollowups(asks, judge !== null);
+// 一組超過這麼多項就把其餘的收起來：手機上一長串要求會把底下的報導清單推得很遠
+const VISIBLE = 5;
+
+const accuracy = judge ? formatPercent(judge.accuracy * 100) : '';
+// 跟議題分類器一樣換成臺灣時間
+const evaluated = judge ? formatDateTime(judge.evaluated_at) : '';
+const minAccuracy = `${Math.round(FOLLOWUP_MIN_ACCURACY * 100)}%`;
+const unparsedExamples = DEADLINE_UNPARSED_EXAMPLES.slice(0, 2)
+  .map((p) => `「${p}」`)
+  .join('');
+const groupId = (key: string) => `${FOLLOWUP_ANCHOR}-${key.replace('_', '-')}`;
+// 空的組不各自佔一節、重複寫「沒有」：收成最後一行（同議題分布把 0 篇的領域收成一行）
+const filled = groups.filter((g) => g.items.length > 0);
+const empty = groups.filter((g) => g.items.length === 0);
+const titleId = `profile-${block.key}`;
+const link =
+  'whitespace-nowrap text-accent underline decoration-accent/40 underline-offset-4 transition-colors hover:decoration-accent';
+---
+
+<section id={FOLLOWUP_ANCHOR} class="scroll-mt-24" aria-labelledby={titleId}>
+  <h3 id={titleId} class="text-[0.72rem] tracking-[0.2em] text-muted">{block.title}</h3>
+
+  {/* 中文句子不在字與字之間換行：原始碼的換行會變成畫面上的空格，所以長句寫成一行 */}
+  {
+    judge ? (
+      <>
+        <p class="mt-1 text-[0.78rem] leading-relaxed text-muted">
+          他提出、寫了期限的要求，到期前後有沒有在另一次質詢再提同一件事。只算他單獨發言的報導；「有沒有再提」由模型判斷，判斷器在 {judge.labeled} 對人工標註上的準確率 {accuracy}%。
+          <a href="/method#profile-followups" class={link}>
+            期限怎麼換算、怎麼判斷
+          </a>
+        </p>
+        {(judge.name || evaluated) && (
+          <p class="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-[0.72rem] text-muted">
+            {judge.name && (
+              <span class="break-all" title={judge.name}>
+                判斷器 {judgeLabel(judge.name)}
+              </span>
+            )}
+            {judge.name && evaluated && (
+              <span aria-hidden="true" class="hidden text-line sm:inline">
+                ·
+              </span>
+            )}
+            {evaluated && <span class="tabular">評估於 {evaluated}</span>}
+          </p>
+        )}
+      </>
+    ) : (
+      <p class="mt-1 text-[0.78rem] leading-relaxed text-muted">
+        他提出、寫了期限的要求，到期前後有沒有在另一次質詢再提同一件事。「有沒有再提」要由模型判斷，而判斷器還沒通過人工驗證（至少 {FOLLOWUP_MIN_LABELS} 對標註、準確率至少 {minAccuracy}），所以<strong class="font-medium text-ink-2">這裡先不算追問率</strong>，只列出還沒到期的要求。只算他單獨發言的報導。
+        <a href="/method#profile-followups" class={link}>
+          期限怎麼換算
+        </a>
+      </p>
+    )
+  }
+
+  {/*
+    證據連結的字照分母寫：n 只算已追問與未追問，清單上還有觀察中、待追蹤，
+    寫「看這 5 項要求」卻跳到 7 項的清單，讀者會以為數字對不上
+  */}
+  {
+    block.indicators.length > 0 ? (
+      <ul class="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+        {block.indicators.map((ind) => (
+          <ProfileIndicator
+            indicator={ind}
+            minSample={minSample}
+            evidenceLabel={`看這 ${ind.n} 項（已追問、未追問）`}
+            emptyNote="這個會期還沒有已經分出結果的要求"
+          />
+        ))}
+      </ul>
+    ) : (
+      judge && (
+        // 判斷器剛通過或剛換版本、側寫還沒用它重算的空窗：後端不給舊判斷器算的比率，照實說
+        <p class="mt-3 text-[0.75rem] leading-relaxed text-muted">
+          追問率還沒用這個判斷器重算，下一次重算側寫之後才會出現；底下的清單已經是它判斷的結果。
+        </p>
+      )
+    )
+  }
+
+  {/* 四組的項數：清單的目錄。有項目的可以點過去；0 項的沒有地方可去，只寫字 */}
+  {
+    judge && asks.length > 0 && (
+      <ul class="mt-4 flex flex-wrap gap-2" aria-label="各狀態的項數">
+        {groups.map(({ state, items }) => {
+          const chip = 'inline-flex items-baseline gap-1.5 rounded-full border px-3 py-1 text-[0.78rem]';
+          const body = (
+            <>
+              {state.label}
+              <span class="tabular text-muted">{items.length} 項</span>
+            </>
+          );
+          return (
+            <li>
+              {items.length > 0 ? (
+                <a
+                  href={`#${groupId(state.key)}`}
+                  class:list={[chip, 'border-line text-ink-2 transition-colors hover:border-accent hover:text-accent']}
+                >
+                  {body}
+                </a>
+              ) : (
+                <span class:list={[chip, 'border-line-soft text-muted']}>{body}</span>
+              )}
+            </li>
+          );
+        })}
+      </ul>
+    )
+  }
+
+  {
+    unparsed > 0 && (
+      <p class="mt-3 text-[0.75rem] leading-relaxed text-muted">
+        另有 <span class="tabular">{unparsed}</span> 項要求的期限寫法換算不出日期（例如{unparsedExamples}），不列入清單{judge ? '，也不算進追問率' : ''}。
+      </p>
+    )
+  }
+
+  <div class="mt-5 grid max-w-3xl gap-6">
+    {
+      filled.map(({ state, items }) => {
+        const shown = items.slice(0, VISIBLE);
+        const rest = items.slice(VISIBLE);
+        return (
+          <section id={groupId(state.key)} class="scroll-mt-24" aria-labelledby={`${groupId(state.key)}-title`}>
+            <h4 id={`${groupId(state.key)}-title`} class="flex items-baseline gap-2 text-[0.88rem] font-semibold text-ink">
+              {state.label}
+              <span class="tabular text-[0.75rem] font-normal text-muted">{items.length} 項</span>
+            </h4>
+            <p class="mt-0.5 text-[0.72rem] leading-relaxed text-muted">{stateDescription(state, judge !== null)}</p>
+            <ol class="mt-1 divide-y divide-line-soft">
+              {shown.map((ask) => (
+                <FollowupItem ask={ask} />
+              ))}
+            </ol>
+            {rest.length > 0 && (
+              <details class="more">
+                <summary class="mt-1 inline-flex items-center gap-2 text-[0.78rem] text-muted transition-colors hover:text-accent">
+                  <svg
+                    viewBox="0 0 24 24"
+                    class="chev h-3.5 w-3.5"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2"
+                    aria-hidden="true"
+                  >
+                    <path d="M6 9l6 6 6-6" stroke-linecap="round" stroke-linejoin="round" />
+                  </svg>
+                  其餘 {rest.length} 項{state.label}
+                </summary>
+                <ol class="divide-y divide-line-soft border-t border-line-soft">
+                  {rest.map((ask) => (
+                    <FollowupItem ask={ask} />
+                  ))}
+                </ol>
+              </details>
+            )}
+          </section>
+        );
+      })
+    }
+    {
+      empty.length > 0 && (
+        <p class="text-[0.78rem] leading-relaxed text-muted">
+          {asks.length > 0
+            ? `${empty.map((g) => g.state.label).join('、')}：這個會期都沒有。`
+            : judge
+              ? '這個會期沒有期限換算得出日期的要求。'
+              : '這個會期沒有還沒到期的要求。'}
+        </p>
+      )
+    }
+  </div>
+</section>

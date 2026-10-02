@@ -4,8 +4,16 @@ from __future__ import annotations
 import base64
 import json
 
-from slidebox.domain.entities import Ask, Brief, Deck, KeyNumber, Slide, TopicResult
-from slidebox_api.payload import deck_payload, topic_payload
+from slidebox.domain.entities import (
+    Ask,
+    Brief,
+    Deck,
+    FollowUpResult,
+    KeyNumber,
+    Slide,
+    TopicResult,
+)
+from slidebox_api.payload import deck_payload, followup_payload, topic_payload
 
 IMAGE = b"\x00\x01fake-webp\xff"
 
@@ -100,3 +108,20 @@ def test_no_secondary_is_null_not_an_empty_string():
     """空字串會被新聞服務當成一個叫「」的領域。"""
     data = topic_payload(TopicResult("welfare", None, "qwen3.5:9b#topic-v1"))
     assert json.loads(json.dumps(data))["secondary"] is None
+
+
+# --- 追問工作的成品 ---
+
+JUDGE = "qwen3.5:9b#followup-v1#1a2b3c4d"
+
+
+def test_a_followup_result_has_exactly_the_three_fields_the_news_service_reads():
+    data = followup_payload(FollowUpResult(True, "上次要求的方案還沒看到", JUDGE))
+    assert data == {"followed_up": True, "quote": "上次要求的方案還沒看到", "classifier": JUDGE}
+
+
+def test_the_verdict_stays_a_json_boolean():
+    """新聞服務照 schema 讀 true／false；變成 "True" 或 1 的話，那邊的判斷會全部對不上。"""
+    data = json.loads(json.dumps(followup_payload(FollowUpResult(False, "", JUDGE))))
+    assert data["followed_up"] is False
+    assert data["quote"] == ""

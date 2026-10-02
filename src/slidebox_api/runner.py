@@ -11,13 +11,13 @@ from dataclasses import replace
 
 from slidebox.domain.entities import Settings
 from slidebox.domain.errors import OperationCancelled
-from slidebox.domain.ports import TopicClassifier
+from slidebox.domain.ports import FollowUpJudge, TopicClassifier
 from slidebox.usecases.build_deck import BuildDeckUseCase
 from slidebox.usecases.queue import video_key
 from slidebox.usecases.sources import ivod_id, ntpc_id, tccc_id
 
 from .jobs import Job, JobKind, JobStore
-from .payload import deck_payload, topic_payload
+from .payload import deck_payload, followup_payload, topic_payload
 
 ProgressCallback = Callable[[float | None, str], None]
 CancelCheck = Callable[[], bool]
@@ -162,10 +162,33 @@ class TopicExecutor:
         return topic_payload(result)
 
 
+class FollowUpExecutor:
+    """判斷後來的一篇有沒有追問先前的要求。
+
+    預設模型在建構時記下來、不讀共用的 Settings，理由同 TopicExecutor：一次手動
+    指定模型的摘要會讓之後的判斷都換模型，判斷器名稱跟著變，新聞服務會把那些
+    結果全部當成沒評估過的版本。
+    """
+
+    def __init__(self, judge_for: Callable[[str], FollowUpJudge], model: str):
+        # judge_for(模型名稱) → 判斷器；host、num_ctx 由組裝的地方決定
+        self._judge_for = judge_for
+        self._model = model
+
+    def __call__(self, job: Job, progress: ProgressCallback,
+                 is_cancelled: CancelCheck) -> dict:
+        # API 擋掉了沒有內容的追問工作；這裡再擋一次，免得模型拿著空白的提示
+        # 判出一個看起來正常的答案。走 JobWorker 的一般失敗路徑。
+        if job.followup is None:
+            raise ValueError("追問工作沒有帶要判斷的內容")
+        judge = self._judge_for(job.model or self._model)
+        return followup_payload(judge.judge(job.followup, progress, is_cancelled))
+
+
 class ByKindExecutor:
     """依工作種類交給對應的執行函式。
 
-    分派放在執行函式這一層，而不是每種工作各開一條執行緒：兩種工作都要用
+    分派放在執行函式這一層，而不是每種工作各開一條執行緒：每種工作都要用
     Ollama，一次只跑一個才不會互搶顯示卡。JobWorker 因此完全不必知道有幾種
     工作。
     """
