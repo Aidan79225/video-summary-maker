@@ -121,7 +121,7 @@ const stateLabel = (key: string) => FOLLOWUP_STATES.find((s) => s.key === key)?.
   <p class="mt-3">候選報導可能很多，不會每一篇都送給模型。程式先篩一次：</p>
   <ul class={cls.list}>
     <li>
-      把要求的文字，跟候選報導的一句話、各段小標與它自己提出的要求，各自切成<strong class={cls.term}>雙字組</strong>——每兩個相鄰的字算一組，例如「交機時程」切成「交機」「機時」「時程」——數兩邊共有幾組。到處都會出現的常用組合（停用字）不算。
+      把要求的文字，跟候選報導的一句話、各段小標與它自己提出的要求，各自切成<strong class={cls.term}>雙字組</strong>——每兩個相鄰的字算一組，例如「交機時程」切成「交機」「機時」「時程」——數兩邊共有幾組；「TPASS」「ECFA」這種英文縮寫整個算一組，全形半形、大小寫不分。到處都會出現的常用組合（停用字）不算。
     </li>
     <li>
       取共有最多的<strong class={cls.term}>前 {FOLLOWUP_TOP_CANDIDATES} 篇</strong>，而且至少要共有 1 組；一組都沒有共有的報導，不會送去判斷。
@@ -144,7 +144,7 @@ const stateLabel = (key: string) => FOLLOWUP_STATES.find((s) => s.key === key)?.
 <div class="prose-cn">
   <ul class={cls.list}>
     <li>
-      「最相關的一段」由程式挑：逐字稿裡跟要求共有最多雙字組的那一段，最多 {FOLLOWUP_EXCERPT_MAX_CHARS} 字。
+      「最相關的一段」由程式挑：逐字稿裡跟要求共有最多雙字組（跟篩選同一套，英文縮寫也算）的那一段，最多 {FOLLOWUP_EXCERPT_MAX_CHARS} 字。
     </li>
     <li>
       模型只回答兩件事：<strong class={cls.term}>有沒有再提</strong>（是或否），以及<strong class={cls.term}

@@ -311,6 +311,30 @@ class ExcerptTests(SimpleTestCase):
         transcript = "甲乙丙丁" * 1000
         self.assertEqual(excerpt_for(REQUEST, transcript), transcript[:EXCERPT_LIMIT])
 
+    def test_a_latin_word_that_passed_the_prefilter_is_in_the_excerpt(self):
+        """攔的 bug：篩選靠「TPASS」通過的一對，片段只比中文雙字組、而且不做 NFKC 與小寫，
+        找不到它就給逐字稿開頭——模型讀到的是沒講這件事的那一段，只能判成沒有追問。"""
+        filler = "今天天氣很好大家辛苦了。" * 300
+        request = "延長TPASS"
+        for hot in ("部長，ＴＰＡＳＳ月票的補貼到底延不延？", "部長，Tpass月票的補貼到底延不延？"):
+            with self.subTest(hot=hot):
+                transcript = filler + hot + filler
+                # 篩選認得這個詞：兩邊共有的只有它
+                self.assertEqual(bigrams(request) & bigrams(transcript), {"tpass"})
+                excerpt = excerpt_for(request, transcript)
+                self.assertEqual(len(excerpt), EXCERPT_LIMIT)
+                self.assertIn(hot, excerpt)
+
+    def test_positions_stay_on_the_original_text_when_normalizing_changes_lengths(self):
+        """NFKC 把「㍿」變成四個字：位置要對回原文，片段才會落在要求詞上、而且是原文的一段。"""
+        filler = "㍿" * 2000
+        hot = "部長，無人機交機時程清冊到底在哪裡？"
+        transcript = filler + hot + filler
+        excerpt = excerpt_for(REQUEST, transcript)
+        self.assertEqual(len(excerpt), EXCERPT_LIMIT)
+        self.assertIn(hot, excerpt)
+        self.assertIn(excerpt, transcript)
+
 
 class CardTests(TestCase):
     def test_the_card_is_the_one_liner_its_own_asks_and_the_slide_titles(self):

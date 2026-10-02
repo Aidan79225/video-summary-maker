@@ -422,32 +422,63 @@ def card_for(article: Article) -> str:
         (titles or requests).pop()
 
 
+def _token_hits(transcript: str, wanted: frozenset[str]) -> list[tuple[int, int, str]]:
+    """逐字稿裡出現的要求詞：(開頭, 結尾, 詞)，位置是**原文**的，依開頭排好。
+
+    跟程式篩選（bigrams）用同一套詞：NFKC 之後中文連續字裡的雙字組，加上英數字詞（比對時小寫）。
+    篩選靠「TPASS」「ECFA」通過的一對，片段裡也要找得到它，否則送給模型的是逐字稿開頭、根本
+    沒講到這件事的那一段，判斷器只能答「沒有追問」，而這一對之後不會再判。
+
+    逐字正規化再記下每個字來自原文的哪裡：NFKC 會把一個字變成好幾個（「㍿」→「株式会社」），
+    直接在正規化後的字串上切，位置就對不回原文。逐字與整段的 NFKC 只差在組合字元，中文逐字稿碰不到。
+    """
+    chars: list[str] = []
+    origin: list[int] = []
+    for i, ch in enumerate(transcript):
+        for out in unicodedata.normalize("NFKC", ch):
+            chars.append(out)
+            origin.append(i)
+    normalized = "".join(chars)
+    hits = []
+    for run in _CJK_RUN.finditer(normalized):
+        for j in range(run.start(), run.end() - 1):
+            gram = normalized[j:j + 2]
+            if gram in wanted:
+                hits.append((origin[j], origin[j + 1] + 1, gram))
+    for word in _LATIN_WORD.finditer(normalized):
+        token = word.group().lower()
+        if token in wanted:
+            hits.append((origin[word.start()], origin[word.end() - 1] + 1, token))
+    hits.sort()
+    return hits
+
+
 def excerpt_for(request: str, transcript: str) -> str:
-    """逐字稿裡跟要求最相關的一段（≤ 1500 字）：含最多種要求雙字組的視窗。
+    """逐字稿裡跟要求最相關的一段（≤ 1500 字）：含最多種要求詞的視窗。
 
     模型讀不完一整份逐字稿（議會一段一小時），只給一句話又判斷不了「有沒有講同一件事」。
-    視窗用滑動的：要求的雙字組在逐字稿裡出現的位置排好，雙指標找出 1500 字內涵蓋最多種的
-    那一段，再把視窗置中在那些位置上，前後的上下文才完整。一個都沒有就給開頭那一段。
+    視窗用滑動的：要求的詞（跟程式篩選同一套，見 _token_hits）在逐字稿裡出現的位置排好，
+    雙指標找出 1500 字內涵蓋最多種的那一段，再把視窗置中在那些位置上，前後的上下文才完整。
+    一個都沒有就給開頭那一段。
     """
     if len(transcript) <= EXCERPT_LIMIT:
         return transcript
-    wanted = bigrams(request)
-    hits = [(i, transcript[i:i + 2]) for i in range(len(transcript) - 1)
-            if transcript[i:i + 2] in wanted]
+    hits = _token_hits(transcript, bigrams(request))
     if not hits:
         return transcript[:EXCERPT_LIMIT]
     counts: Counter = Counter()
     best, best_span, left = 0, (0, 0), 0
-    for position, gram in hits:
-        counts[gram] += 1
-        # 視窗是 [hits[left], hits[left] + 1500)：雙字組整個要在裡面
-        while position + 2 > hits[left][0] + EXCERPT_LIMIT:
-            counts[hits[left][1]] -= 1
-            if not counts[hits[left][1]]:
-                del counts[hits[left][1]]
+    for right, (_, end, token) in enumerate(hits):
+        counts[token] += 1
+        # 視窗是 [hits[left] 的開頭, + 1500)：詞整個要在裡面。依開頭排好的詞，結尾也是遞增的
+        # （中文雙字組一樣長、英數字詞彼此不重疊，兩種也不會疊在同一個字上）
+        while left < right and end > hits[left][0] + EXCERPT_LIMIT:
+            counts[hits[left][2]] -= 1
+            if not counts[hits[left][2]]:
+                del counts[hits[left][2]]
             left += 1
         if len(counts) > best:
-            best, best_span = len(counts), (hits[left][0], position + 2)
+            best, best_span = len(counts), (hits[left][0], end)
     first, last = best_span
     start = max(0, min(first - (EXCERPT_LIMIT - (last - first)) // 2,
                        len(transcript) - EXCERPT_LIMIT))
