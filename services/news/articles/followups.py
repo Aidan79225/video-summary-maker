@@ -97,6 +97,10 @@ def _to_int(token: str) -> int | None:
     """
     if token.isdigit():
         return int(token) or None
+    if not all(ch in _CN_DIGITS or ch in _CN_UNITS for ch in token):
+        # 阿拉伯數字跟中文數字混著寫（「1十」）不是一個數。「X 月 X 日」「下個月 N 日」的字元類別
+        # 兩種都收，不在這裡擋的話，查表查不到會丟 KeyError，整晚的 sync_followups 就停在這一項
+        return None
     total, digit, last = 0, None, ""
     for ch in token:
         if ch in _CN_DIGITS:
@@ -259,14 +263,15 @@ def _session_end(match: re.Match, text: str, spoken: _Spoken) -> date | None:
 _RULES: tuple[tuple[re.Pattern, Callable[[re.Match, str, _Spoken], date | None]], ...] = (
     (re.compile(rf"([{_NUMERALS}]+)月([{_NUMERALS}]+)[日號]"), _calendar_day),
     (re.compile(rf"([{_NUMERALS}]+)月底"), _calendar_month_end),
+    # 「下個月15日內」要排在「N 天內」前面：不然「15日內」會先被讀成發言後 15 天
+    (re.compile(rf"下個?月([{_NUMERALS}]+)[日號]"), _next_month_day),
     (re.compile(_NUM + r"個?(?:天|日)" + _WITHIN), _days(1)),
     (re.compile(_NUM + r"個?(?:週|周|星期|禮拜)" + _WITHIN), _days(7)),
     (re.compile(_NUM + r"個?月" + _WITHIN), _months(1)),
     (re.compile(r"半年" + _WITHIN), _months(6)),
     (re.compile(_NUM + r"年" + _WITHIN), _years),
-    (re.compile(rf"下個?月([{_NUMERALS}]+)[日號]"), _next_month_day),
-    # 「下個月初」「下個月中（旬）」「下個月上旬」沒有確定的一天，換不出來；後面接著數字的是上一條
-    # （換不出來的「下個月0日」也不能退回月底）
+    # 「下個月初」「下個月中（旬）」「下個月上旬」沒有確定的一天，換不出來；後面接著數字的是前面
+    # 「下個月 N 日」那一條（換不出來的「下個月0日」也不能退回月底）
     (re.compile(rf"下個?月(?![初中上下旬{_NUMERALS}])"), _next_month_end),
     (re.compile(rf"(?:本|這個?)月底|(?<![{_NUMERALS}個上下本這])月底"), _this_month_end),
     (re.compile(rf"今年年?底|今年內|(?<![{_NUMERALS}明後去隔前今年])年底"), _year_end),

@@ -230,6 +230,15 @@ class DeadlineTableTests(SimpleTestCase):
         # 沒寫哪一天的照舊是月底
         self._check([("下個月", "2026-04-30"), ("下月底前", "2026-04-30"), ("下個月內", "2026-04-30")])
 
+    def test_a_day_of_next_month_followed_by_within(self):
+        """攔的 bug：「下個月15日內」的「15日內」先被「N 天內」吃掉，變成發言後 15 天（3 月 25 日）。"""
+        self._check([("下個月15日內", "2026-04-15"), ("下月5日以內", "2026-04-05"),
+                     ("下個月10號之內", "2026-04-10")])
+
+    def test_mixed_arabic_and_chinese_numerals_are_unconvertible_rather_than_an_error(self):
+        """攔的 bug：「1十」查中文數字表查不到而丟 KeyError，整晚的 sync_followups 停在這一項。"""
+        self._check([(text, None) for text in ("下個月1十日", "1十月5日前", "十2月底前", "3月1十日前")])
+
 
 class DeadlineNumeralTests(SimpleTestCase):
     SPOKEN = date(2026, 3, 10)
