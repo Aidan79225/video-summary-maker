@@ -27,7 +27,7 @@ from django.db.models import F
 from django.utils import timezone
 
 from . import topics
-from .gpu_client import GpuApiClient, GpuApiError, JobFailed
+from .gpu_client import GpuApiClient, GpuApiError, JobFailed, RequestRejected
 from .ly_records import name_key
 from .models import ArticleSource, BillTopic, BillTopicEvaluation, BillTopicLabel, LyBill, Membership
 from .topics import TOPIC_BY_KEY, EvaluationAborted, TopicResult
@@ -104,6 +104,7 @@ def classify_bill_topics(client: GpuApiClient, limit: int, reclassify: bool = Fa
     timeout = timeout or settings.GPU_JOB_TIMEOUT_SECONDS
     keys = legislator_keys()
     report = BillClassifyReport()
+    rejected = 0
     # 名稱一樣的議案很多（同一部法的修正案常常一字不差，第 11 屆七千多件只有兩千多種名稱）。分類器
     # 溫度 0、同一段文字答案一樣，所以每種名稱只送一次：這一輪分過的直接沿用；之前分過、而且是
     # 現在這個分類器分的也沿用（重分的時候不沿用之前的，那就是要重來）
@@ -136,9 +137,12 @@ def classify_bill_topics(client: GpuApiClient, limit: int, reclassify: bool = Fa
             break
         except JobFailed as e:
             _record_failure(bill_no, e, report)
-            if report.classified == 0 and report.failed >= _EARLY_FAILURES:
+            # 只算送出時就被拒絕的（422，GPU 端多半還沒更新）；工作跑了但失敗的那件跳過就好，
+            # 否則每次都失敗的議案排在最前面，整個積壓永遠動不了（同 topics.classify_topics）
+            rejected += isinstance(e, RequestRejected)
+            if report.classified == 0 and rejected >= _EARLY_FAILURES:
                 report.stopped = True
-                report.stop_reason = f"開頭 {report.failed} 件都被 GPU 拒絕，GPU 端可能還沒更新"
+                report.stop_reason = f"開頭 {rejected} 件都被 GPU 拒絕，GPU 端可能還沒更新"
                 logger.warning("議案分類：%s", report.stop_reason)
                 break
             continue
@@ -268,6 +272,8 @@ class EvaluationReport:
     evaluation: BillTopicEvaluation | None = None
     # 已標註、但議案名稱已經是空的（LYAPI 改壞了）：沒有輸入可以分類
     skipped: int = 0
+    # 重評現在上線的議案分類器時分類失敗的件數；有的話這次成績不存（見 evaluate）
+    incomplete: int = 0
 
     def __str__(self) -> str:
         lines = []
@@ -283,6 +289,9 @@ class EvaluationReport:
             for m in ev.mistakes:
                 lines.append(f"  判錯：{m['bill_no']} {m['name'][:40]}：人工「{_label(m['human'])}」、"
                              f"模型「{_model_label(m)}」")
+        if self.incomplete:
+            lines.append(f"重評現在上線的議案分類器時有 {self.incomplete} 件分類失敗，這次成績不存、"
+                         "上線的分類器不變；請在 GPU 正常時再跑一次")
         if self.skipped:
             lines.append(f"略過 {self.skipped} 件已標註、但議案名稱是空的")
         return "\n".join(lines)
@@ -339,8 +348,15 @@ def evaluate(client: GpuApiClient, timeout: float | None = None,
         first = next((error for _, _, error in outcomes if error), "")
         raise EvaluationAborted(f"沒有任何一件分類成功，無法評估。第一個錯誤：{first}"
                                 "（GPU 端還沒更新的話，會是 422）")
+    classifier = classifiers.pop()
+    failed = sum(1 for _, result, _ in outcomes if result is None)
+    if failed and classifier == passing_classifier():
+        # 重評現在上線的議案分類器，中途有分類失敗（例如 Ollama 重開）：這次成績不存，不讓一次 GPU 的
+        # 小狀況把驗過的分類器下架（同 topics.evaluate）
+        report.incomplete = failed
+        return report
     with transaction.atomic():
-        report.evaluation = _save_evaluation(classifiers.pop(), outcomes, now or timezone.now())
+        report.evaluation = _save_evaluation(classifier, outcomes, now or timezone.now())
     return report
 
 

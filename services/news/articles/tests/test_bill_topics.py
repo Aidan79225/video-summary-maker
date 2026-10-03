@@ -19,7 +19,7 @@ from django.utils import timezone
 from articles import bill_topics
 from articles.bill_topics import (BILL_TOPIC_MIN_LABELS, bill_input, classify_bill_topics, evaluate,
                                   live_alignment_classifiers, passing_classifier, sample_labels)
-from articles.gpu_client import GpuApiError, JobFailed
+from articles.gpu_client import GpuApiError, JobFailed, RequestRejected
 from articles.ly_records import BillRecord, FetchedRecords, save
 from articles.models import (BillTopic, BillTopicEvaluation, BillTopicLabel, LyBill, Membership, Person,
                              TopicEvaluation)
@@ -171,7 +171,7 @@ class ClassifyTests(TestCase):
         """GPU 端還沒更新時每件都回 422：送三件都被拒就停。"""
         for _ in range(6):
             _bill()
-        gpu = FakeTopicGpu(answer=lambda text: JobFailed("摘要 API 拒絕這個請求（422）"))
+        gpu = FakeTopicGpu(answer=lambda text: RequestRejected("摘要 API 拒絕這個請求（422）"))
         with self.assertLogs(self.LOGGER, "WARNING"):
             report = classify_bill_topics(gpu, limit=10)
         self.assertEqual((report.failed, report.stopped, len(gpu.texts)), (3, True, 3))
@@ -544,3 +544,37 @@ class SameNameTests(TestCase):
         classify_bill_topics(gpu, limit=10, reclassify=True)
         self.assertEqual(len(gpu.texts), 1)
         self.assertEqual(set(BillTopic.objects.values_list("classifier", flat=True)), {"new-model#topic-v2"})
+
+
+
+class BillFailureRuleTests(TestCase):
+    def setUp(self):
+        _legislators("甲")
+
+    def test_bills_that_always_fail_do_not_block_the_rest(self):
+        """攔的 bug（同 topics）：每次都失敗的議案排在最前面，算進開頭三件就停的規則，積壓永遠動不了。"""
+        for i in range(10):
+            _bill(name=f"finance 第{i}件", day="2026-03-01")
+        for i in range(3):
+            _bill(name=f"bad 第{i}件每次都失敗", day="2026-03-09")
+        gpu = FakeTopicGpu(answer=lambda text: JobFailed("壞") if "bad" in text else _code_in(text))
+        report = classify_bill_topics(gpu, limit=200)
+        self.assertFalse(report.stopped)
+        self.assertEqual((report.classified, report.failed), (10, 3))
+
+    def test_failures_while_reevaluating_the_live_classifier_do_not_take_it_offline(self):
+        from articles.bill_topics import passing_classifier
+
+        for i in range(20):
+            BillTopicLabel.objects.create(bill=_bill(name=f"finance 第{i}件"), primary="finance")
+        evaluate(FakeTopicGpu())
+        self.assertEqual(passing_classifier(), CLASSIFIER)
+        calls = {"n": 0}
+
+        def flaky(text):
+            calls["n"] += 1
+            return JobFailed("ConnectError") if calls["n"] > 15 else _code_in(text)
+
+        report = evaluate(FakeTopicGpu(answer=flaky))
+        self.assertEqual((report.incomplete, report.evaluation), (5, None))
+        self.assertEqual(passing_classifier(), CLASSIFIER)
