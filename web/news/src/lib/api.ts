@@ -403,6 +403,8 @@ function normalizeIndicator(raw: unknown): ProfileIndicator | null {
     peers,
     sample_ok: sampleOk,
     evidence_url: str(o.evidence_url),
+    // 「沒有值」的原因（例如沒有委員會資料）：丟掉的話頁面只能寫成樣本不足
+    ...(str(o.reason) ? { reason: str(o.reason) } : {}),
   };
 }
 
