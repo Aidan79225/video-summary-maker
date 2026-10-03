@@ -1,0 +1,299 @@
+---
+/**
+ * 方法頁的「追問率」一節（#profile-followups）。
+ *
+ * 獨立成一個元件，是因為這一節跟議題分布一樣長；方法頁本身只負責把它放在對的位置。
+ * 樣式（小標、公式框、清單）由方法頁傳進來，各節才會長得一樣。
+ *
+ * 內容要跟後端（services/news/articles/followups.py 與側寫的計算）一致：期限換算表、狀態與門檻
+ * 都從 lib/followups.ts 讀，改規則時改那一份；這裡的文字改公式時一起改。
+ * 寫給一般讀者看：不用程式欄位名稱，「雙字組」第一次出現時解釋它是什麼。
+ */
+import {
+  DEADLINE_RULES,
+  DEADLINE_UNPARSED_EXAMPLES,
+  FOLLOWUP_EXCERPT_MAX_CHARS,
+  FOLLOWUP_MIN_ACCURACY,
+  FOLLOWUP_MIN_LABELS,
+  FOLLOWUP_QUOTE_MIN_CHARS,
+  FOLLOWUP_STATES,
+  FOLLOWUP_TOP_CANDIDATES,
+  FOLLOWUP_WATCH_DAYS,
+} from '../lib/followups';
+
+interface Props {
+  /** 方法頁的樣式 class：小標（h3、h4）、表頭格、公式框、粗體名詞、項目清單 */
+  cls: { h3: string; h4: string; th: string; formula: string; term: string; list: string };
+}
+
+const { cls } = Astro.props;
+const minAccuracy = `${Math.round(FOLLOWUP_MIN_ACCURACY * 100)}%`;
+// 門檻寫成「大約每幾對錯一對」，讀者比較有感覺
+const errorEvery = Math.round(1 / (1 - FOLLOWUP_MIN_ACCURACY));
+const pointPerPair = Math.round((100 / FOLLOWUP_MIN_LABELS) * 10) / 10;
+const unparsedExamples = DEADLINE_UNPARSED_EXAMPLES.map((p) => `「${p}」`).join('');
+const stateLabel = (key: string) => FOLLOWUP_STATES.find((s) => s.key === key)?.label ?? key;
+---
+
+<h3 id="profile-followups" class={cls.h3}>追問率</h3>
+<div class="prose-cn mt-3">
+  <p>
+    追問率回答「他提出的要求，期限到了以後，有沒有再追同一件事」。模型只判斷<strong class={cls.term}
+      >後來那次質詢有沒有再提同一件事</strong>，並附一句引用；到期日、狀態與比率都是程式算的。
+  </p>
+  <p class="mt-3">
+    要注意：這一項看的是<strong class={cls.term}>他有沒有再問</strong>，不是官員有沒有做到。官員已經照辦、所以他不必再問，在這裡也會算成「未追問」。
+  </p>
+</div>
+
+<h4 id="profile-followups-asks" class={cls.h4}>哪些要求算</h4>
+<div class="prose-cn mt-2">
+  <ul class={cls.list}>
+    <li>
+      報導最上面的摘要卡裡，「要求與回應」的每一項。摘要卡是語言模型從逐字稿抽取的（見「具體度」）。
+    </li>
+    <li>
+      只算<strong class={cls.term}>寫了期限</strong>的要求，而且只算<strong class={cls.term}
+        >他單獨發言</strong>、已經完成的報導——跟具體度同一批。聯合質詢的摘要卡分不出哪項要求是誰提的。
+    </li>
+    <li>要求歸在提出它的那篇報導所屬的會期；後來在下一個會期才再提，仍然算在提出的那個會期。</li>
+  </ul>
+</div>
+
+<h4 id="profile-followups-deadlines" class={cls.h4}>期限換算</h4>
+<div class="prose-cn mt-2">
+  <p>
+    期限由程式從發言日期換算成到期日，不用模型。數字可以是阿拉伯數字、全形數字或中文數字：「三個月內」「３個月內」「3個月內」都一樣。
+  </p>
+</div>
+<div class="mt-3 overflow-x-auto">
+  <table class="w-full border-collapse text-left text-[0.85rem]">
+    <thead>
+      <tr class="border-b border-line text-[0.75rem] text-muted">
+        <th scope="col" class={cls.th}>寫法</th>
+        <th scope="col" class={cls.th}>到期日</th>
+        <th scope="col" class="py-2 font-medium">例</th>
+      </tr>
+    </thead>
+    <tbody class="text-ink-2">
+      {
+        DEADLINE_RULES.map((r) => (
+          <tr class="border-b border-line-soft align-top">
+            <th scope="row" class="py-2 pr-3 font-normal text-ink">
+              {r.phrase}
+            </th>
+            <td class="py-2 pr-3">{r.due}</td>
+            <td class="py-2 text-[0.8rem] text-muted">{r.example}</td>
+          </tr>
+        ))
+      }
+      <tr class="align-top">
+        <th scope="row" class="py-2 pr-3 font-normal text-ink">
+          {unparsedExamples}……
+        </th>
+        <td class="py-2 pr-3" colspan="2">換算不出日期</td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+<div class="prose-cn">
+  <ul class={cls.list}>
+    <li>
+      講者自己沒定的範圍（「一兩個月內」「1 到 2 個月內」「三至六個月內」「2～3 週內」）、寫的是年份的「115 年內」「2026 年內」、沒有確定哪一天的「下個月初」「下個月中旬」，都換算不出日期：替講者挑一個日子，就等於替他定了期限。
+    </li>
+    <li>
+      換算不出日期的要求<strong class={cls.term}>不算進追問率，也不進待追蹤清單</strong>：沒有到期日，就無從判斷「期限過了沒」。側寫上會另外寫「另有幾項要求的期限寫法換算不出日期」。
+    </li>
+    <li>
+      「本會期」只換算立法院的：立法院的會期有憲法定的結束日（第一次會期到 5 月底、第二次到 12 月底），市議會的定期會各市不同，換算不出來。
+    </li>
+    <li>
+      「本會期」用的是這兩個法定的日子，不看那一次會期實際延長到哪一天；在延長開會的期間（已經過了這兩個日子）講的「本會期」，換算不出日期。
+    </li>
+  </ul>
+</div>
+
+<h4 id="profile-followups-candidates" class={cls.h4}>候選與篩選</h4>
+<div class="prose-cn mt-2">
+  <p>
+    <strong class={cls.term}>候選報導</strong>：同一個人、同一個議會、已經完成、他單獨發言、有摘要卡，而且日期在提出要求的那天之後、到期日後 {FOLLOWUP_WATCH_DAYS} 天（含）之前的報導。期限還沒到就再提，也算追問。
+  </p>
+  <p class="mt-3">候選報導可能很多，不會每一篇都送給模型。程式先篩一次：</p>
+  <ul class={cls.list}>
+    <li>
+      把要求的文字，跟候選報導的一句話、各段小標與它自己提出的要求，各自切成<strong class={cls.term}>雙字組</strong>——每兩個相鄰的字算一組，例如「交機時程」切成「交機」「機時」「時程」——數兩邊共有幾組；「TPASS」「ECFA」這種英文縮寫整個算一組，全形半形、大小寫不分。到處都會出現的常用組合（停用字）不算。
+    </li>
+    <li>
+      取共有最多的<strong class={cls.term}>前 {FOLLOWUP_TOP_CANDIDATES} 篇</strong>，而且至少要共有 1 組；一組都沒有共有的報導，不會送去判斷。
+    </li>
+    <li>依共有多寡，由高到低一篇一篇送給模型判斷，<strong class={cls.term}>第一篇判定有再提就停</strong>。</li>
+    <li>每一對（要求、候選報導）只判斷一次並記下來；之後有新的報導，只判斷新出現的候選。</li>
+    <li>報導重新產生（例如摘要卡更新）之後，跟它有關的判斷會清掉重判：內容變了，之前的判斷就不算數。</li>
+  </ul>
+</div>
+
+<h4 id="profile-followups-judge" class={cls.h4}>判斷與落地檢查</h4>
+<div class="prose-cn mt-2">
+  <p>模型讀的是：</p>
+</div>
+<pre
+  class="my-4 overflow-x-auto rounded-xl border border-line-soft bg-bg-soft/60 px-4 py-3 font-sans text-[0.88rem] leading-relaxed whitespace-pre-wrap text-ink">舊的要求：……
+當時官員的回應：……
+新報導的一句話、要求與各段小標：……
+新報導逐字稿裡跟要求最相關的一段：……</pre>
+<div class="prose-cn">
+  <ul class={cls.list}>
+    <li>
+      「最相關的一段」由程式挑：逐字稿裡跟要求共有最多雙字組（跟篩選同一套，英文縮寫也算）的那一段，最多 {FOLLOWUP_EXCERPT_MAX_CHARS} 字。
+    </li>
+    <li>
+      模型只回答兩件事：<strong class={cls.term}>有沒有再提</strong>（是或否），以及<strong class={cls.term}
+        >一句引用</strong>（那一段裡的原文；沒有再提就留空）。模型的設定盡量讓同樣的輸入得到同樣的答案（溫度 0）。
+    </li>
+    <li>
+      只有<strong class={cls.term}>同一件具體的事</strong>才算——同一個要求、同一個案子。同一個領域的別件事不算：上次要國防部交無人機交機清冊，這次問戰車妥善率，不是追問。
+    </li>
+  </ul>
+</div>
+<div class={cls.formula}>
+  <p>
+    <span class={cls.term}>落地檢查</span>：模型說有再提時，引用去掉空白與標點後，要至少 {FOLLOWUP_QUOTE_MIN_CHARS} 個字，而且<strong
+      class={cls.term}>真的出現在新報導的逐字稿裡</strong>（逐字稿用同樣的方式去掉空白與標點再比）。通不過就當作沒有再提。
+  </p>
+</div>
+<div class="prose-cn">
+  <ul class={cls.list}>
+    <li>這一步擋的是模型編出一句沒講過的話。它證明引用真的講過，不證明模型的判斷一定對。</li>
+    <li>側寫上「已追問」的每一項，都附上那篇報導的連結與這句引用，讀者可以自己點回去看。</li>
+  </ul>
+</div>
+
+<h4 id="profile-followups-states" class={cls.h4}>狀態</h4>
+<div class="prose-cn mt-2">
+  <p>每一項要求的狀態，在每天重算側寫時依日期決定：</p>
+</div>
+<div class="mt-3 overflow-x-auto">
+  <table class="w-full border-collapse text-left text-[0.85rem]">
+    <thead>
+      <tr class="border-b border-line text-[0.75rem] text-muted">
+        <th scope="col" class={cls.th}>狀態</th>
+        <th scope="col" class={cls.th}>意思</th>
+        <th scope="col" class="py-2 font-medium">要靠模型判斷</th>
+      </tr>
+    </thead>
+    <tbody class="text-ink-2">
+      {
+        FOLLOWUP_STATES.map((s, i) => (
+          <tr class:list={['align-top', i < FOLLOWUP_STATES.length - 1 && 'border-b border-line-soft']}>
+            <th scope="row" class="py-2 pr-3 font-normal whitespace-nowrap text-ink">
+              {s.label}
+            </th>
+            <td class="py-2 pr-3">{s.description}</td>
+            <td class="py-2 whitespace-nowrap">{s.judged ? '要' : '不用'}</td>
+          </tr>
+        ))
+      }
+    </tbody>
+  </table>
+</div>
+<div class="prose-cn">
+  <ul class={cls.list}>
+    <li>
+      觀察期是到期日之後的 {FOLLOWUP_WATCH_DAYS} 天：要給議會開會、排到質詢的時間，議會休會時可能好幾個月都沒有質詢。
+    </li>
+    <li>
+      日期的界線：到期日當天還是「{stateLabel('pending')}」，隔天起是「{stateLabel('watching')}」；到期日後第 {FOLLOWUP_WATCH_DAYS} 天是觀察期的最後一天，過了那一天還沒找到再提，就是「{stateLabel('not_followed')}」。觀察期結束後，要等那一晚的判斷把候選報導都看過，才改成「{stateLabel('not_followed')}」，在那之前仍是「{stateLabel('watching')}」。他在觀察期裡還有質詢影片沒做成報導（還在排隊、正在處理，或失敗了但還會重試）的話，也要等那幾篇做完、判斷過才算：做完的那一篇可能就是再提的那一次。
+    </li>
+    <li>找到再提的報導，不管是在期限前、期限後還是觀察期快結束時，都是「{stateLabel('followed')}」。</li>
+    <li>
+      有一篇候選報導連續兩次判斷失敗（例如模型的輸出格式壞掉，或等太久沒有結果），就先跳過它，不讓它每晚卡住其他要求的判斷。少判了一篇，就不能說他沒追：這一項會停在「{stateLabel('watching')}」，直到別篇判出他再提了。
+    </li>
+  </ul>
+</div>
+
+<h4 id="profile-followups-formula" class={cls.h4}>公式</h4>
+<div class={cls.formula}>
+  <p>
+    <span class={cls.term}>追問率</span>（%）＝ 已追問的項數 ÷（已追問的項數 ＋ 未追問的項數）× 100
+  </p>
+  <p class="mt-2 text-[0.85rem] text-muted">
+    例：這個會期他提了 7 項換算得出到期日的要求，3 項已追問、2 項未追問、1 項觀察中、1 項待追蹤。追問率 ＝ 3 ÷（3 ＋ 2）× 100 ＝ 60%，n ＝ 5 項。
+  </p>
+</div>
+<div class="prose-cn">
+  <ul class={cls.list}>
+    <li>
+      「{stateLabel('watching')}」「{stateLabel('pending')}」「{stateLabel('rejudging')}」還沒有結果，不算進分母；所以會期剛結束時，追問率的 n 通常很小，之後才慢慢補齊。
+    </li>
+    <li>
+      n 是分母（已追問 ＋ 未追問的項數）。n 不到 5 時不跟別人比，只顯示原始的值（見「最小樣本」）；同儕是母體中這一項 n 至少 5 的人（見「百分位」）。
+    </li>
+    <li>
+      追問率底下的「看這 n 項（已追問、未追問）」連到側寫裡的追問清單。清單依序分成已追問、未追問、觀察中、待追蹤幾組（換了判斷器之後的一段時間還會有「{stateLabel('rejudging')}」），前兩組加起來就是分母的那 n 項；每一項都有出處報導的連結。
+    </li>
+    <li>追問率高不代表比較好：官員已經照辦的事，本來就不必再問。側寫只描述，不評價。</li>
+  </ul>
+</div>
+
+<h4 id="profile-followups-labels" class={cls.h4}>人工標註與門檻</h4>
+<div class="prose-cn mt-2">
+  <ul class={cls.list}>
+    <li>
+      從通過程式篩選的（要求、候選報導）配對裡抽 {FOLLOWUP_MIN_LABELS} 對（固定的亂數種子，同樣的資料抽出來的會是同樣幾對）：<strong
+        class={cls.term}>一半是共有雙字組最多的那一篇，一半隨機</strong>。共有最多的那一篇是實際上最先送去判斷、也最難判的；只抽隨機的，容易抽到一看就無關的配對，判斷器很容易答對，準確率會顯得比實際高。
+    </li>
+    <li>
+      由人工標「有追問」或「沒有追問」。標註的人看到的是舊的要求、當時官員的回應、新報導的一句話與程式挑出的那段逐字稿，以及兩篇報導的連結，而且<strong
+        class={cls.term}>看不到模型的答案</strong>。
+    </li>
+    <li>評估時，把標過的配對用現在的模型與提示詞重新判斷（含落地檢查），逐對跟人工的答案比對。</li>
+  </ul>
+</div>
+<div class={cls.formula}>
+  <p><span class={cls.term}>準確率</span>（%）＝ 判斷跟人工標註相同的對數 ÷ 人工標註的對數 × 100</p>
+  <p class="mt-2">
+    <span class={cls.term}>通過</span> ＝ 人工標註至少 {FOLLOWUP_MIN_LABELS} 對，而且準確率至少 {minAccuracy}
+  </p>
+</div>
+<div class="prose-cn">
+  <ul class={cls.list}>
+    <li>門檻比議題分類高：判錯會把有追到底的人標成沒追，或反過來。</li>
+    <li>
+      追問率<strong class={cls.term}>只用最近一次通過評估的那個判斷器</strong>（同一個模型、同一版提示詞）判出來的結果；換了模型或改了提示詞，要重新評估通過才算。
+    </li>
+    <li>
+      每個判斷器只看<strong class={cls.term}>它自己最近一次</strong>的評估：以前通過過、但在更多標註上重新評估沒通過，就下架。舊判斷器判過的要求，要用正在用的判斷器重新判斷之後才算數，所以頁面上寫的準確率，永遠是判出這些結果的那個判斷器的準確率。
+    </li>
+    <li>
+      <strong class={cls.term}>換了判斷器之後</strong>：舊判斷器判過的要求列在「{stateLabel('rejudging')}」，每晚在判斷的數量上限內、從最早提出的開始，用現在的判斷器重新判斷。一個人還有「{stateLabel('rejudging')}」的要求時，<strong class={cls.term}>先不顯示他的追問率</strong>：舊判斷器找到的再提不算、新的又還沒判到，只用判完的那幾項算，比率會偏低，而且看不出來。
+    </li>
+    <li>
+      <strong class={cls.term}>還沒通過時</strong>：側寫上不顯示追問率，追問清單只列「{stateLabel('pending')}」——還沒到期的要求不需要模型判斷，讀者可以自己盯——並寫明比率要等人工驗證。期限換算不出來的項數照常列出。
+    </li>
+    <li>通過時，側寫上寫著判斷器在幾對人工標註上的準確率、判斷器的名稱（模型與提示詞的版本）與評估日期。</li>
+  </ul>
+</div>
+
+<h4 id="profile-followups-limits" class={cls.h4}>限制</h4>
+<div class="prose-cn mt-2">
+  <ul class={cls.list}>
+    <li>
+      <strong class={cls.term}>篩選可能漏掉換了說法的追問。</strong>雙字組比的是字面：他後來換了一套說法講同一件事，那篇可能擠不進前 {FOLLOWUP_TOP_CANDIDATES} 篇，就不會送去判斷，這項會被算成未追問。篩選這一步只會讓追問率偏低，不會讓它偏高。
+    </li>
+    <li>
+      <strong class={cls.term}>只算單獨發言。</strong>他在聯合質詢裡提的要求不算，在聯合質詢裡再提也不算。
+    </li>
+    <li>
+      <strong class={cls.term}>只看我們收錄的質詢影片。</strong>書面質詢、公文往返、記者會、社群貼文裡的追問都看不到；同一件事改在別的議會、別的場合追，也不算。
+    </li>
+    <li>
+      <strong class={cls.term}>要求與期限是模型抽的。</strong>摘要卡可能漏掉一項要求、把一句話誤判成要求，或抄錯期限；換算規則是我們訂的，寫在上面那張表。
+    </li>
+    <li>
+      <strong class={cls.term}>模型會判錯。</strong>門檻是 {minAccuracy}：剛好過門檻的判斷器，大約每 {errorEvery} 對就有 1 對判錯。標註集只有 {FOLLOWUP_MIN_LABELS} 對左右，多錯 1 對，準確率就差 {pointPerPair} 個百分點。
+    </li>
+    <li>
+      <strong class={cls.term}>沒有摘要卡的報導不算。</strong>舊報導要重新產生才有摘要卡，在那之前，它提的要求與它裡面的再提都看不到。
+    </li>
+  </ul>
+</div>

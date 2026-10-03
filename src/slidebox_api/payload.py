@@ -1,4 +1,4 @@
-"""把 Deck 轉成新聞服務要的 JSON 材料。
+"""把 Deck、議題分類與追問判斷的結果轉成新聞服務要的 JSON 材料。
 
 圖片以 base64 隨 JSON 走：Pi 上沒有這台機器的檔案系統，而另外開一個圖片
 端點要處理保存期限、清理與授權——一篇 4～10 頁、每頁 20～40 KB，為了省
@@ -10,7 +10,7 @@ import base64
 import os
 from enum import StrEnum
 
-from slidebox.domain.entities import Brief, Deck, Slide
+from slidebox.domain.entities import Brief, Deck, FollowUpResult, Slide, TopicResult
 
 _MEDIA_TYPE = "image/webp"
 
@@ -93,4 +93,41 @@ def deck_payload(deck: Deck, video_id: str) -> dict:
         DeckField.TRANSCRIPT: deck.transcript_text,
         DeckField.SLIDES: [_slide_payload(s) for s in deck.slides],
         DeckField.BRIEF: brief_payload(deck.brief),
+    }
+
+
+class TopicField(StrEnum):
+    """分類工作回給新聞服務的欄位名。同 DeckField：改名等於改 API。"""
+    PRIMARY = "primary"
+    SECONDARY = "secondary"
+    CLASSIFIER = "classifier"
+
+
+def topic_payload(result: TopicResult) -> dict:
+    """領域一律給代碼，不給名稱：新聞服務用代碼存資料庫，名稱只是給模型看的。
+
+    沒有次領域是 None（JSON 的 null），不是空字串：空字串會被當成一個叫
+    「」的領域。
+    """
+    return {
+        TopicField.PRIMARY: result.primary,
+        TopicField.SECONDARY: result.secondary,
+        TopicField.CLASSIFIER: result.classifier,
+    }
+
+
+class FollowUpField(StrEnum):
+    """追問工作回給新聞服務的欄位名。同 DeckField：改名等於改 API。"""
+    FOLLOWED_UP = "followed_up"
+    QUOTE = "quote"
+    CLASSIFIER = "classifier"
+
+
+def followup_payload(result: FollowUpResult) -> dict:
+    """判斷原樣交出去，不在這裡做落地檢查：引用是不是真的在逐字稿裡，要看整份
+    逐字稿，那份在新聞服務手上。"""
+    return {
+        FollowUpField.FOLLOWED_UP: result.followed_up,
+        FollowUpField.QUOTE: result.quote,
+        FollowUpField.CLASSIFIER: result.classifier,
     }

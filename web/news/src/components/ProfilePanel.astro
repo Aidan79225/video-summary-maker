@@ -1,13 +1,19 @@
 ---
 /**
- * 發言者頁的人物側寫：一個會期裡，投入量與具體度各自的幾個指標。
+ * 發言者頁的人物側寫：一個會期裡，投入量、具體度與議題分布各自的幾個指標。
  *
  * 規矩（issue #24 的原則）：不加總、不排名、只跟同一個議會同一個會期的人比。
  * 所以這裡沒有總分、沒有名次，每個指標各自一格；每格都能點回算它用的那幾篇。
+ * 議題分布多一張各領域的長條圖（ProfileTopics），只有後端給了才出現——
+ * 那個來源的分類器沒通過人工標註的評估，就整塊不上線。追問整塊交給 ProfileFollowups：
+ * 它有自己的清單與錨點（#followups），判斷器沒通過時也還有待追蹤清單。
  */
 import type { Profile } from '../lib/types';
 import { formatDate, formatDateTime } from '../lib/format';
 import ProfileIndicator from './ProfileIndicator.astro';
+import ProfileTopics from './ProfileTopics.astro';
+import ProfileFollowups from './ProfileFollowups.astro';
+import { FOLLOWUP_BLOCK } from '../lib/followups';
 
 interface Props {
   profile: Profile;
@@ -18,7 +24,8 @@ interface Props {
 const { profile, basePath } = Astro.props;
 const { session } = profile;
 
-// 區塊的白話說明。API 只給標題；新的區塊沒有說明時就只顯示標題
+// 區塊的白話說明。API 只給標題；新的區塊沒有說明時就只顯示標題。
+// 議題分布的說明要寫出分類器的準確率，由 ProfileTopics 照評估結果寫，不放這裡
 const BLOCK_NOTE: Record<string, string> = {
   volume: '這個會期發言了幾次、講了多久。聯合質詢每人各算一次，時長由講者平分。',
   // 「落地」是逐字稿裡查得到，「有來源」是附了條文原文——兩件事，說明裡不能混成「查得到出處」
@@ -100,15 +107,26 @@ const sessionHref = (id: number) => `${basePath}?source=${profile.source}&sessio
 
   <div class="mt-6 grid gap-7">
     {
-      profile.blocks.map((block) => (
+      profile.blocks.map((block) => block.key === FOLLOWUP_BLOCK ? (
+        <ProfileFollowups block={block} minSample={profile.min_sample} />
+      ) : (
         <section aria-labelledby={`profile-${block.key}`}>
           <h3 id={`profile-${block.key}`} class="text-[0.72rem] tracking-[0.2em] text-muted">
             {block.title}
           </h3>
-          {BLOCK_NOTE[block.key] && (
-            <p class="mt-1 text-[0.78rem] leading-relaxed text-muted">{BLOCK_NOTE[block.key]}</p>
+          {block.classifier && block.distribution ? (
+            <ProfileTopics classifier={block.classifier} distribution={block.distribution} />
+          ) : (
+            BLOCK_NOTE[block.key] && (
+              <p class="mt-1 text-[0.78rem] leading-relaxed text-muted">{BLOCK_NOTE[block.key]}</p>
+            )
           )}
-          <ul class="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+          <ul
+            class:list={[
+              'grid gap-3 sm:grid-cols-2 lg:grid-cols-3',
+              block.distribution ? 'mt-5' : 'mt-3',
+            ]}
+          >
             {block.indicators.map((ind) => (
               <ProfileIndicator indicator={ind} minSample={profile.min_sample} />
             ))}

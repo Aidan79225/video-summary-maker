@@ -62,6 +62,9 @@ class Membership(models.Model):
     # 黨團（國民黨團／民進黨團／無黨團結聯盟／空）。跟政黨不一定相同——新北有 4 人
     # 政黨與黨團不同。文章標的是政黨；黨團只用來判斷「黨團時段」裡誰不屬於該黨團。
     caucus = models.CharField(max_length=64, blank=True)
+    # 所屬委員會（只有立法院）：LYAPI 的原樣字串清單，「第11屆第5會期：財政委員會」，一個會期
+    # 可能有好幾個。存原樣而不拆表：只有議題分布的「委員會職掌」會讀它，每週同步整批覆寫。
+    committees = models.JSONField(default=list, blank=True)
     start_date = models.DateField(null=True, blank=True)
     end_date = models.DateField(null=True, blank=True)
     # 換黨自動切段後日期待補
@@ -214,6 +217,9 @@ class ProfileStat(models.Model):
     percentile = models.FloatField(null=True, blank=True)
     # 同儕人數：頁面寫「在 N 位同儕中」
     peers = models.PositiveIntegerField(default=0)
+    # 議題分布的列是哪個分類器分出來的（其他指標留空）。API 只在它等於現在上線的分類器時才給
+    # 議題區塊：重算失敗、或跟評估同時跑時，不會把 A 版算的數字掛上 B 版的名字
+    classifier = models.CharField(max_length=200, blank=True, default="")
     computed_at = models.DateTimeField()
 
     class Meta:
@@ -223,6 +229,73 @@ class ProfileStat(models.Model):
 
     def __str__(self) -> str:
         return f"{self.person} {self.session} {self.indicator}={self.value}"
+
+
+class Topic(models.Model):
+    """一篇文章的政策領域，由 GPU 的 topic 工作分的（topics.classify_topics）。
+
+    代碼的清單在 topics.TOPICS，這裡刻意不設 choices：topics 要讀這張表，表再回頭 import
+    topics 就是循環；寫入只有 topics.parse_result 一個入口，它會擋掉清單外的代碼。
+    文章重產（ingest.save_result）時刪掉，下一輪重新分類。
+    """
+
+    article = models.OneToOneField(Article, related_name="topic", on_delete=models.CASCADE)
+    primary = models.CharField(max_length=16, db_index=True)
+    # 空字串＝沒有次領域
+    secondary = models.CharField(max_length=16, blank=True)
+    # GPU 回來的那串：模型＋提示詞版本（「qwen3:14b#topic-v1」）。指標只認通過評估的那個版本
+    classifier = models.CharField(max_length=200, db_index=True)
+    labeled_at = models.DateTimeField()
+
+    class Meta:
+        ordering = ["-labeled_at", "-id"]
+        verbose_name = verbose_name_plural = "議題分類（模型）"
+
+    def __str__(self) -> str:
+        return f"{self.article} → {self.primary}"
+
+
+class TopicLabel(models.Model):
+    """人工標註的主領域：議題分類器的標註集（topics.sample_labels 抽、admin 標、eval_topics 評）。
+
+    文章重產時不刪：發言講的是什麼議題，不會因為摘要重寫而改變。
+    """
+
+    article = models.OneToOneField(Article, related_name="topic_label", on_delete=models.CASCADE)
+    # 空字串＝還沒標
+    primary = models.CharField(max_length=16, blank=True, db_index=True)
+    note = models.CharField(max_length=300, blank=True)
+    labeled_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["article__source", "article_id"]
+        verbose_name = verbose_name_plural = "議題標註"
+
+    def __str__(self) -> str:
+        return f"{self.article} 標註：{self.primary or '還沒標'}"
+
+
+class TopicEvaluation(models.Model):
+    """一次評估、一個來源的成績。某來源的議題指標只用最新一筆 passed 的 classifier。"""
+
+    source = models.CharField(max_length=16, choices=ArticleSource.choices, db_index=True)
+    classifier = models.CharField(max_length=200)
+    labeled = models.PositiveIntegerField()
+    correct = models.PositiveIntegerField()
+    # 0～1
+    accuracy = models.FloatField()
+    passed = models.BooleanField(db_index=True)
+    # 判錯的每一筆：[{article, slug, speaker, human, model, error?}]，model 為 null 是分類失敗
+    mistakes = models.JSONField(default=list, blank=True)
+    ran_at = models.DateTimeField()
+
+    class Meta:
+        ordering = ["-ran_at", "-id"]
+        verbose_name = verbose_name_plural = "議題分類評估"
+
+    def __str__(self) -> str:
+        return (f"{self.get_source_display()} {self.classifier} "
+                f"{self.correct}/{self.labeled}{'（通過）' if self.passed else ''}")
 
 
 class Slide(models.Model):
@@ -242,3 +315,92 @@ class Slide(models.Model):
 
     def __str__(self) -> str:
         return f"{self.article.ivod_id}#{self.index}"
+
+
+class FollowUp(models.Model):
+    """摘要卡裡一項帶期限的要求，與「後來有沒有再追問」的判斷（followups.check_followups）。
+
+    鍵是 (文章, asks 的位置)。要求只取基礎文章（已完成、單獨發言、有摘要卡）的：聯合質詢分不出
+    要求是誰提的。文章重產（ingest.save_result）時刪掉它當來源的，也把它從別人的 checked 與
+    followed_by 拿掉（followups.forget_article）。
+    """
+
+    article = models.ForeignKey(Article, related_name="followups", on_delete=models.CASCADE)
+    ask_index = models.PositiveIntegerField()
+    request = models.TextField()
+    deadline_text = models.CharField(max_length=300)
+    # 程式從期限原文換算出來的；換不出來（「儘快」「下次」）是 null，不計入追問率也不進清單
+    due_date = models.DateField(null=True, blank=True, db_index=True)
+    # 判定有追問的那篇（第一篇判定有追問就停）
+    followed_by = models.ForeignKey(Article, null=True, blank=True, on_delete=models.SET_NULL,
+                                    related_name="follow_up_of")
+    # 模型的引用：已通過落地檢查（在 followed_by 的逐字稿裡）
+    quote = models.TextField(blank=True)
+    # 判斷器（模型＋提示詞版本）。這一項的判斷都出自它：換了判斷器就整項重來
+    classifier = models.CharField(max_length=200, blank=True, db_index=True)
+    # 判斷過的候選文章 id：每一對只判斷一次
+    checked = models.JSONField(default=list, blank=True)
+    # 每一對判斷失敗的次數：{"候選文章 id": 次數}。失敗過的排在新的後面，失敗 2 次就跳過，
+    # 一對一直失敗的不會每晚卡住整個佇列；有跳過的對，這一項就不能算未追問（沒看完不能說沒有）
+    failures = models.JSONField(default=dict, blank=True)
+    # 上一次確認「所有候選都判斷過了」的時間；還有候選沒判斷就是 null。未追問要靠觀察期結束
+    # **之後**的確認：還沒看完不能說沒有
+    checked_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["due_date", "id"]
+        constraints = [models.UniqueConstraint(fields=["article", "ask_index"],
+                                               name="unique_followup_per_ask")]
+        verbose_name = verbose_name_plural = "追問（模型）"
+
+    def __str__(self) -> str:
+        return f"{self.article} 第 {self.ask_index + 1} 項：{self.request[:30]}"
+
+
+class FollowUpLabel(models.Model):
+    """人工標註的一對（要求, 後來那篇）：追問判斷器的標註集（sample_followup_labels 抽、admin 標、
+    eval_followups 評）。文章重產時不刪：發言有沒有追問不會因為摘要重寫而改變。
+    """
+
+    article = models.ForeignKey(Article, related_name="followup_labels", on_delete=models.CASCADE)
+    ask_index = models.PositiveIntegerField()
+    # 抽樣當時的要求文字。重產之後同一個位置可能是別的要求，對不上的標註評估時略過，
+    # 不能拿新的要求去比舊的人工答案
+    request = models.TextField(blank=True)
+    candidate = models.ForeignKey(Article, related_name="+", on_delete=models.CASCADE)
+    # null＝還沒標
+    followed = models.BooleanField(null=True, blank=True)
+    note = models.CharField(max_length=300, blank=True)
+    labeled_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["id"]
+        constraints = [models.UniqueConstraint(fields=["article", "ask_index", "candidate"],
+                                               name="unique_followup_label")]
+        verbose_name = verbose_name_plural = "追問標註"
+
+    def __str__(self) -> str:
+        answer = {True: "有追問", False: "沒有追問"}.get(self.followed, "還沒標")
+        return f"{self.article} 第 {self.ask_index + 1} 項 → {self.candidate}：{answer}"
+
+
+class FollowUpEvaluation(models.Model):
+    """一次評估的成績。追問率只用「每個判斷器自己最新的一次評估」裡通過、而且最晚的那一個。"""
+
+    classifier = models.CharField(max_length=200)
+    labeled = models.PositiveIntegerField()
+    correct = models.PositiveIntegerField()
+    # 0～1
+    accuracy = models.FloatField()
+    passed = models.BooleanField(db_index=True)
+    # 判錯的每一筆：[{label, article, ask_index, candidate, speaker, request, human, model,
+    # quote?, ungrounded?, error?}]，model 為 null 是判斷失敗
+    mistakes = models.JSONField(default=list, blank=True)
+    ran_at = models.DateTimeField()
+
+    class Meta:
+        ordering = ["-ran_at", "-id"]
+        verbose_name = verbose_name_plural = "追問判斷評估"
+
+    def __str__(self) -> str:
+        return f"{self.classifier} {self.correct}/{self.labeled}{'（通過）' if self.passed else ''}"

@@ -51,6 +51,8 @@ python -c "import secrets; print(secrets.token_urlsafe(64))"
 | `GPU_JOB_TIMEOUT_SECONDS` | `1800` | 等單一支影片的上限 |
 | `INGEST_DAILY_LIMIT` | `20` | **每次執行**最多處理幾段（一段約 3～5 分鐘）。回補多天只是多查幾天的清單，處理上限不變。 |
 | `INGEST_HOUR` | `4` | 常駐排程每天幾點跑 |
+| `TOPIC_DAILY_LIMIT` | `200` | 每晚最多替幾篇文章分政策領域（議題分布；一篇幾秒） |
+| `FOLLOWUP_DAILY_LIMIT` | `200` | 每晚最多送幾個追問判斷（追問率；一對要求與後來那篇是一個，幾秒） |
 | `NTPC_ENABLED` | `True` | 每天也查新北市議會的質詢片段（`ingest_ivod --source ntpc` 不看這個設定） |
 | `NTPC_INCLUDE_MIXED` | `True` | 新北的多黨混合時段（市長施政報告、總預算報告、專案報告）也收 |
 | `NTPC_VOD_BASE` | `https://vod.ntp.gov.tw` | 新北市議會議事影音系統 |
@@ -103,11 +105,11 @@ uv run python manage.py ingest_ivod --retry-imageless --limit 5
 
 ```bash
 # 一、常駐排程（不想碰 systemd 的話）
-uv run python manage.py run_scheduler                   # 每天 04:10；每次都回補三天的清單，接著重算人物側寫
+uv run python manage.py run_scheduler                   # 每天 04:10；每次都回補三天的清單，接著分政策領域、判斷追問、重算人物側寫
 uv run python manage.py run_scheduler --backfill-days 0 # 不要回補
 
-# 二、系統排程（crontab -e）：匯入之後接著重算側寫；用 ; 而不是 &&，匯入失敗照樣重算
-10 4 * * * cd /home/pi/yt-downloader/services/news && /home/pi/.local/bin/uv run python manage.py ingest_ivod >> /var/log/ly-news-ingest.log 2>&1; /home/pi/.local/bin/uv run python manage.py compute_profiles >> /var/log/ly-news-ingest.log 2>&1
+# 二、系統排程（crontab -e）：匯入 → 分政策領域 → 判斷追問 → 重算側寫；用 ; 而不是 &&，前一步失敗後一步照跑
+10 4 * * * cd /home/pi/yt-downloader/services/news && /home/pi/.local/bin/uv run python manage.py ingest_ivod >> /var/log/ly-news-ingest.log 2>&1; /home/pi/.local/bin/uv run python manage.py classify_topics >> /var/log/ly-news-ingest.log 2>&1; /home/pi/.local/bin/uv run python manage.py check_followups >> /var/log/ly-news-ingest.log 2>&1; /home/pi/.local/bin/uv run python manage.py compute_profiles >> /var/log/ly-news-ingest.log 2>&1
 ```
 
 ## 人物側寫（投入量、具體度）
@@ -142,15 +144,236 @@ uv run python manage.py backfill_meetings   # 逐篇向 LYAPI 查，一秒一個
 
 排程：`run_scheduler` 每晚匯入之後接著跑一次，包在自己的 try 裡，失敗只記 log、不影響匯入。部署這一版之後先手動跑一次，把既有的文章掛上會期。
 
+## 人物側寫：議題分布
+
+設計見 `docs/superpowers/specs/2026-10-03-profile-topics-step2-design.md`。模型只做一件事：把一篇報導分到 12 個固定政策領域的其中一個（主領域，外加可有可無的次領域）；篇數、占比、聚焦度、廣度都是程式算的。**模型參與的指標要有人工標註集，準確率不到門檻就不上線**——所以這一節有三段：每晚分類、標註與評估、上線條件。
+
+### 分類器
+
+- 政策領域寫在 `articles/topics.py`（`TOPICS`），是唯一的來源：代碼用在資料庫與網址，名稱給模型看、給讀者看。GPU 端不寫死，每次送工作時把清單帶過去（`POST /jobs`，`kind="topic"`、`text`、`labels`）。
+- 分類器讀的文字是摘要卡的**一句話＋各段小標**，**不放會議名稱**：「財政委員會」幾乎會直接決定答案，立委的委員會職掌比對就變成自己比自己。admin 的標註頁顯示的是同一段文字（同一個函式產生）。
+- 只分**基礎文章**：已完成、單獨發言、有摘要卡（跟具體度同一批）。聯合質詢分不出每個人講了哪個議題，沒有摘要卡就沒有一句話可讀。
+- 結果存在 `Topic`，連同 GPU 回來的 `classifier`（模型＋提示詞版本，例如 `qwen3:14b#topic-v1`）。文章重產時 `Topic` 會被刪掉，下一輪重分；人工標註不刪。
+- 分類失敗只記 log、不動文章；GPU 連不上就整輪停止（同摘要）。
+
+```bash
+uv run python manage.py classify_topics                # 只分還沒有 Topic 的，上限 TOPIC_DAILY_LIMIT（預設 200）
+uv run python manage.py classify_topics --limit 50
+uv run python manage.py classify_topics --reclassify   # 連已經有的也重分：沒有的先、再來是分得最久的
+```
+
+### 標註與評估
+
+1. **抽樣**：每個來源從基礎文章裡隨機抽，建立空白的標註。已經抽過的不重抽，只補到每個來源 N 篇；同樣的資料、同樣的種子抽到同樣的文章。
+
+   ```bash
+   uv run python manage.py sample_topic_labels                 # 每個來源補到 20 篇，種子 0
+   uv run python manage.py sample_topic_labels --per-source 30 --seed 7
+   ```
+
+2. **標註**：到 admin 的「議題標註」頁（`/admin/articles/topiclabel/`）。清單上直接顯示分類器會讀到的那段文字與文章連結（admin 的文章頁有完整的摘要與逐字稿，旁邊還有原始影片），主領域用下拉選單在清單上直接選，選完按最下面的「儲存」。右邊可以篩「還沒標」。這一頁**刻意不顯示模型的分類**（盲標）：看得到模型的答案，人就會跟著它標。標註只能靠抽樣產生，不能在 admin 手動新增——人手挑的文章會偏向好分的。
+
+3. **評估**：把已標註的文章用現在的模型與提示詞重分一次，逐來源比對主領域。
+
+   ```bash
+   uv run python manage.py eval_topics
+   ```
+
+   - 準確率 = 主領域相同的篇數 ÷ 已標註篇數（分類失敗的那篇算錯）。
+   - 通過 = 已標註至少 20 篇（`TOPIC_MIN_LABELS`），而且準確率 ≥ 80%（`TOPIC_MIN_ACCURACY`）。
+   - 每個有標註的來源存一筆 `TopicEvaluation`，印出各來源的結果與每一筆判錯的（文章、人工、模型）。
+   - 一次評估裡 GPU 回來的分類器必須都一樣，不一樣就中止、什麼都不存（中途換了模型）。GPU 連不上也一樣。
+   - 評估不會改動任何文章的 `Topic`。上線的分類器因此換了的話，會立刻重算一次人物側寫，分布與證據清單才不會兜不攏。
+
+### 上線條件
+
+某來源的議題指標**只用**「該來源最新一筆**通過的**評估」的分類器分出來的 `Topic`。沒有通過的評估，這個來源完全沒有議題指標、API 不給這個區塊。之後試一個新模型沒通過，不會讓已經驗過的舊版本下架；但新分出來的 `Topic` 版本對不上，就不算，直到重新評估通過。
+
+所以**換模型或提示詞**（GPU 端的提示詞改了就要升 `topic-vN`）的順序是：
+
+```bash
+uv run python manage.py eval_topics                                 # 先用新版本評估，不動既有的 Topic
+uv run python manage.py classify_topics --reclassify --limit 100000 # 通過了才把全部重分成新版本
+uv run python manage.py compute_profiles
+```
+
+新版本評估通過的那一刻起，舊版本分的 `Topic` 就不算了（`eval_topics` 會當場重算）：重分跑完之前，側寫上的議題分布是每個領域 0 篇、n＝0。所以重分要一口氣跑完，不要交給每晚 200 篇的排程慢慢補——那樣每晚重算出來的都是只算了一部分的分布。反過來先重分更糟：重分過的那幾篇被蓋成還沒通過的新版本，就不算了，重分到一半時排程重算，出來的是只算了一部分、看起來卻像完整的分布，直到新版本評估通過為止。
+
+在 admin 刪掉通過的評估（例如發現標註有誤）：上線條件因此變了——退回較舊的通過版本，或整個下架——的話，也會當場重算側寫。
+
+### 指標（區塊 `topics`）
+
+基礎文章：該會期、已完成、單獨發言、有摘要卡、而且有「通過版本」的 `Topic`。
+
+| 指標 | 公式 | n |
+|---|---|---|
+| 分布（`topic:<代碼>` 共 12 列） | 各領域的篇數；占比 = 篇數 ÷ 基礎文章數 × 100。不給百分位 | 基礎文章數 |
+| 聚焦度 `topic_focus` | 最大占比 × 100（%） | 基礎文章數 |
+| 廣度 `topic_breadth` | 占比 ≥ 10% 的領域數（個；用整數比較，剛好 10% 的算） | 基礎文章數 |
+| 委員會職掌內的比例 `committee_alignment`（只有立法院） | 主領域落在他「那個會期」所屬委員會職掌的篇數 ÷ 有委員會資料的基礎文章數 × 100（%） | 有委員會資料的基礎文章數 |
+
+最小樣本（n < 5 不給百分位）、同儕不足 5 人誰都不比、mid-rank 百分位，都跟投入量與具體度一樣。
+
+委員會職掌對照（`topics.COMMITTEE_AREAS`，方法頁公開）。委員會資料來自 LYAPI `/legislators` 的「委員會」（「第11屆第5會期：財政委員會」），`sync_members` 每週同步時存進任期的 `committees`；一個會期可能同時在好幾個委員會，職掌取聯集。程序、修憲、經費稽核委員會沒有政策職掌；那個會期沒有委員會資料（或只有這三個）的，不算進分母。
+
+| 委員會 | 領域 |
+|---|---|
+| 內政委員會 | 內政治安 |
+| 外交及國防委員會 | 國防外交 |
+| 經濟委員會 | 財政經濟、農業、環境能源 |
+| 財政委員會 | 財政經濟 |
+| 教育及文化委員會 | 教育文化、數位科技 |
+| 交通委員會 | 交通建設、數位科技 |
+| 司法及法制委員會 | 司法法制 |
+| 社會福利及衛生環境委員會 | 衛生福利、勞動、環境能源 |
+
+### 部署這一版之後
+
+**先更新 GPU 主機**（重建映像、重啟 `serve_api.py`），再部署新聞服務。舊的 GPU 不認得 `topic` 工作，每篇都回 422；分類那一輪開頭連續三篇被拒就會停下來並在 log 說明，不會整晚重複同一個錯誤。
+
+```bash
+uv run python manage.py migrate
+uv run python manage.py sync_members --source ly   # 補上立委的委員會（不然要等週日）
+uv run python manage.py classify_topics            # 積壓很多的話每晚的排程會分批補完
+uv run python manage.py sample_topic_labels
+# 到 admin 標完之後
+uv run python manage.py eval_topics
+```
+
+## 人物側寫：追問率
+
+設計見 `docs/superpowers/specs/2026-10-03-profile-followups-step3-design.md`。模型只判斷一件事：後來那篇有沒有再提**同一件具體的事**，並附一句引用；引用必須在後來那篇的逐字稿裡。到期日、候選、狀態、比率都是程式算的。跟議題分布一樣：**判斷器沒通過人工標註集的門檻，就只給待追蹤清單、不給比率**。
+
+### 哪些要求算、期限怎麼換算
+
+基礎文章（已完成、單獨發言、有摘要卡）摘要卡 `asks` 裡期限非空的每一項，存成 `FollowUp`（鍵是文章＋第幾項）。聯合質詢分不出要求是誰提的，不算。到期日由 `articles/followups.py` 的 `parse_deadline` 從發言日算出來（全形數字、中文數字都讀得懂）：
+
+| 寫法 | 到期日 |
+|---|---|
+| N 天內／N 日內 | 發言日 + N 天 |
+| N 週內／N 周內／N 星期內／N 個禮拜內 | + 7N 天 |
+| N 個月內／N 月內 | + N 個月（同日，月底夾住：1/31 + 1 個月 = 2/28） |
+| 半年內 | + 6 個月 |
+| N 年內 | + N 年（「115年內」「民國115年內」「2026年內」寫的是年份、不是年數，換不出來） |
+| 本月底／月底前 | 發言當月最後一天 |
+| 下個月 N 日（號）前／下月 N 日 | 次月第 N 天（那個月沒有這一天就取月底）；「下個月初」「下個月中（旬）」沒有確定的一天，換不出來 |
+| 下個月 | 次月最後一天 |
+| 年底前／今年底／今年內 | 當年 12 月 31 日 |
+| X 月 X 日前、X 月底前（沒寫年） | 今年那一天；已經過了就是明年 |
+| 本會期／這個會期／會期內／會期結束前（只有立法院） | 單數會期 5 月 31 日、雙數會期 12 月 31 日（會期開議那年：雙數會期上半年講的，是前一年九月開議、拖過年的延會或臨時會，換不出來）；議會不換算 |
+| 儘快、盡速、立即、馬上、下次、預算審查前…… | 無法換算 |
+
+「之內」「以內」跟「內」一樣。換不出來的（包括寫了年份的「明年 3 月底」「115年內」、講者自己沒定的範圍「一兩個月內」「1到2個月內」「三至六個月內」「2~3週內」、算出來比發言還早的「本會期」、算出來超出日期範圍的）到期日是空的：不計入追問率、不進清單，頁面另外列「期限寫法無法換算」的數量。
+
+### 候選、判斷與落地檢查
+
+- **候選**：同一個人（任期對到同一個人；對不到任期的看講者寫法，但對到別人的同名者不算）、同一個來源、日期在（發言日, 到期日 + 90 天］的基礎文章，而且要有逐字稿（沒有就無從落地檢查）。發言之後、期限之前再提也算追問。
+- **程式篩選**：要求的文字跟候選的一句話＋各段小標＋它自己的要求比字元雙字組（停用字除外），取重疊最高的**前 3 篇**、至少要有 1 個重疊。依重疊高到低送判斷，**第一篇判定有追問就停**。
+- **送給 GPU**（`POST /jobs`，`kind="followup"`）：`request`、`response`（當時的回應）、`card`（後來那篇的一句話＋要求＋各段小標）、`excerpt`（後來那篇逐字稿裡含最多種要求詞的 1500 字；詞跟程式篩選同一套：中文雙字組加上「TPASS」這種英數字詞，全形半形、大小寫不分）。GPU 回 `{followed_up, quote, classifier}`。
+- **落地檢查**：模型說有追問時，`quote` 去掉空白與標點後至少 6 個字、而且出現在後來那篇的逐字稿裡，才算數；否則當成沒有追問，報告裡記一筆「引用對不上逐字稿」。
+- **每一對只判斷一次**，記在 `FollowUp.checked`；之後只判斷新出現的候選。一項要求的判斷永遠出自同一個判斷器：GPU 回來的判斷器換了，那一項就整項重來。
+- 文章重產時，它當來源的要求刪掉重建，它當候選的判斷從別的要求裡拿掉，下一輪用新內容重判。
+
+```bash
+uv run python manage.py check_followups              # 建立／更新要求、判斷新的候選對與待重判的要求，上限 FOLLOWUP_DAILY_LIMIT（預設 200）
+uv run python manage.py check_followups --limit 50
+uv run python manage.py check_followups --recheck    # 待重判的要求排在新的候選前面（新版本評估通過之後想一次補完時用）
+uv run python manage.py check_followups --retry-failed   # 失敗 2 次而跳過的對重新排隊（GPU 端修好之後用）
+```
+
+失敗處理同議題分類：失敗只記 log、下一輪再判；GPU 連不上整輪停；開頭連續 3 個被拒（GPU 端還沒更新）也停；等 GPU 的時候兩篇文章任何一篇被重產，結果不存。判不完的會留到下一晚，報告會列出還有候選沒判斷的要求數。
+
+一對一直失敗不能卡住整個佇列，所以失敗記在**那一對**身上（`FollowUp.failures`：`{"候選文章 id": 次數}`）：
+
+- 每一輪先判沒失敗過的對，再判之前失敗過一次的（這一輪才失敗的不在同一輪重送）；失敗 2 次就跳過、不再送。有跳過的對，那一項就判不完，**不會變成未追問**，停在觀察中，直到別的候選判出有追問。報告會列出這種要求的數量。
+- 送出去之後等不到結果（逾時、輪詢一直連不上、GPU 不認得那個工作）也算那一對失敗一次，而且會要求 GPU 取消那個工作（追問判斷不接回舊工作，留著只會在佇列裡占位），這一輪照樣停；送不出去是 GPU 的事，不記在那一對頭上。
+- 「開頭連續 3 個被拒就停」只數沒失敗過的對：之前就失敗過的再失敗，不代表 GPU 端沒更新。
+- 判出結果、那篇被重產、要求的文字改了、或換了判斷器，那一對的失敗次數就清掉。GPU 端或提示詞修好之後，用 `--retry-failed` 讓跳過的對全部重新排隊。
+
+### 狀態
+
+依今天的日期決定（到期日當天還算「還沒到期」，觀察期是到期日之後的 90 天）：
+
+| 狀態 | 條件 |
+|---|---|
+| `pending` 待追蹤 | 還沒到期、也還沒找到追問 |
+| `watching` 觀察中 | 已到期、在觀察期內、還沒找到追問；觀察期過了但還有候選沒判斷完的也是（包括有一對失敗 2 次而跳過的） |
+| `followed` 已追問 | 找到追問（不管在觀察期的哪個時候） |
+| `rejudging` 待重判 | 有通過的判斷器，但這一項是別的判斷器版本判的（換了模型或提示詞）：不管到期了沒有、舊版本說了什麼都不算，等上線的判斷器重判 |
+| `not_followed` 未追問 | 觀察期結束、而且結束之後確認過所有候選都判斷完了，都沒有追問；同一個人在觀察期裡還有沒做完的文章（等待處理、處理中，或失敗但還會重試）時不算，等它們做完 |
+
+「確認過所有候選都判斷完了」記在 `FollowUp.checked_at`：還沒看完不能說沒有。同一個人＝講者欄位正好是他在那個來源的某個名字（任期上的名字，或來源文章的講者寫法）；觀察期結束之後才補匯入他觀察期裡的質詢，已經記下的確認會收回來，等那幾篇做完再判。期限改短、觀察期跟著縮的話，落在新觀察期之外的追問不算了，那一項重新開始找。
+
+### 標註與評估
+
+1. **抽樣**：從「通過程式篩選的候選對」抽，一半取那項要求重疊最高的那一篇、一半在它的候選裡隨機取（只取最高的，抽到的幾乎都是真的追問，量不到模型會不會把同領域的別件事誤判成追問）。已經抽過的要求不重抽，只補到 N 對；同樣的資料、同樣的種子抽到同樣的對。
+
+   ```bash
+   uv run python manage.py sample_followup_labels                  # 補到 30 對，種子 0
+   uv run python manage.py sample_followup_labels --pairs 40 --seed 7
+   ```
+
+2. **標註**：到 admin 的「追問標註」頁（`/admin/articles/followuplabel/`）。清單上直接顯示舊的要求與期限、當時的回應、後來那篇的一句話與挑出來的那段逐字稿（跟送給判斷器的是同一段），還有兩篇文章與原始影片的連結；「有沒有追問」用下拉選單在清單上直接選，選完按最下面的「儲存」。這一頁**刻意不顯示模型的判斷**（盲標），也不能手動新增。只有**同一件具體的事**（同一個要求、同一個案子）才算追問，同一個領域的別件事不算。
+
+3. **評估**：把已標註的對用現在的判斷器重判一次（含落地檢查），跟人工的答案比。
+
+   ```bash
+   uv run python manage.py eval_followups
+   ```
+
+   - 準確率 = 判對的對數 ÷ 已標註對數（判斷失敗的算錯）；通過 = 已標註至少 30 對、而且準確率 ≥ 85%。
+   - 存一筆 `FollowUpEvaluation`，印出判錯的每一對。一次評估裡判斷器必須都一樣，不一樣就中止、什麼都不存；GPU 連不上也一樣。
+   - 摘要重產之後那一項要求的文字變了、或文章已經不是基礎文章的標註，會略過（不能拿新的要求去比舊的人工答案）。
+   - 上線條件同議題分布：每個判斷器只看**它自己最新的一次**評估，最新那次通過的判斷器裡取評估得最晚的。上線的判斷器因此換了，會立刻重算一次人物側寫；在 admin 刪掉通過的評估也一樣。
+
+換模型或提示詞（GPU 端升 `followup-vN`）的順序：
+
+```bash
+uv run python manage.py eval_followups               # 先用新版本評估，不動既有的判斷
+uv run python manage.py check_followups --recheck --limit 100000   # 通過了想一次補完舊版本判的（不跑也會每晚補）
+uv run python manage.py compute_profiles
+```
+
+新版本通過之後，舊版本判的要求都是**待重判**：每晚的 `check_followups` 在上限內重判它們（新的候選先、再來是待重判的、發言早的先；`--recheck` 讓待重判的排最前面），舊的判斷不先清掉——清掉就看不出誰還沒重判完。一項要求重判出第一個結果時整項換成新的判斷器（舊版本的追問、確認都不算了）。GPU 回來的判斷器不是上線的那個時，重判出來的還是別的版本，那一輪就不再重判下去。舊版本判過的候選都不在了（不再是基礎文章）的要求，沒有東西可重判，照「一個候選都沒有」算。
+
+### 指標與清單（區塊 `followup`，標題「追問」）
+
+| 指標 | 公式 | n |
+|---|---|---|
+| 追問率 `followup_rate`（%） | 該會期他當來源的要求（依來源文章的會期）裡，已追問 ÷（已追問＋未追問）× 100 | 已追問＋未追問的項數 |
+
+只算判斷都出自通過的判斷器的要求（一個候選都沒有、從來不必判斷的也算——那是程式篩出來的）；n < 5 不給百分位，同儕是母體中 n ≥ 5 的人，不足 5 人誰都不比。存進 `ProfileStat` 時 `classifier` 欄記下判斷器，API 只在它等於現在上線的判斷器時才給比率。
+
+**他還有待重判的要求時，整個不給比率**（值是空的、n 是 0、不進同儕）：舊版本找到的追問不算、新的判斷器又還沒判到，只用判完的那幾項算，比率會往 0% 掉而且看起來像真的。API 看的是當下的清單，不靠側寫重算過沒有。
+
+API 的 `followup` 區塊永遠在：
+
+- `indicators`：`[followup_rate]`，判斷器沒通過（或側寫還沒用上線的判斷器重算）時是空清單。證據網址指到發言者頁的 `#followups`。他有待重判的要求時照樣有這一項，但 `value` 是 `null`、`n` 是 0、`reason` 是 `"rejudging"`。
+- `asks`：該會期他的要求（來源文章要有頁面），每項 `{article: {slug, title, date}, request, deadline, due_date, state, followed_by, quote}`，依到期日排序；已追問的附上追問的那篇與引用。`state` 是 `pending`／`watching`／`followed`／`not_followed`／`rejudging`。**判斷器沒通過時只有 `pending`**：到期之後是不是追了要靠判斷，不給。
+- `unparsed`：期限寫法無法換算的要求數。
+- `judge`：`{name, accuracy, labeled, evaluated_at}`，沒有通過的判斷器是 `null`。
+
+### 部署這一版之後
+
+**先更新 GPU 主機**（認得 `followup` 工作），再部署新聞服務。舊的 GPU 每個都回 422，判斷那一輪開頭連續三個被拒就會停下來並在 log 說明。
+
+```bash
+uv run python manage.py migrate
+uv run python manage.py check_followups              # 積壓很多的話每晚的排程會分批補完
+uv run python manage.py sample_followup_labels
+# 到 admin 標完之後
+uv run python manage.py eval_followups
+```
+
 ## API
 
 | 端點 | 說明 |
 |---|---|
 | `GET /api/health` | 文章數與最新日期 |
-| `GET /api/articles?date=&speaker=&q=&source=&party=&session=&solo=&has_brief=&page=&page_size=` | 已完成的文章清單。`session`（會期 id）、`solo=1`（只要單獨發言）、`has_brief=1`（只要有摘要卡）是側寫的證據篩選：證據網址查出來的篇數等於指標的 n |
+| `GET /api/articles?date=&speaker=&q=&source=&party=&session=&solo=&has_brief=&topic=&page=&page_size=` | 已完成的文章清單。`session`（會期 id）、`solo=1`（只要單獨發言）、`has_brief=1`（只要有摘要卡）、`topic`（領域代碼，或 `any`＝哪個領域都可以）是側寫的證據篩選：證據網址查出來的篇數等於指標的 n。`topic` 只認各來源通過評估的那個分類器分出來的領域；打錯的代碼回 422 |
 | `GET /api/articles/{slug}` | 單篇，含摘要卡（`brief`：一句話、關鍵數字、要求與回應；GPU 端產不出來時為 `null`）、每段的條列與完整敘述、完整逐字稿 |
 | `GET /api/speakers` | 委員與篇數；`person_id` 是同來源、同名任期所屬的人（查無任期為 `null`） |
-| `GET /api/people/{person_id}/profile?source=&session=` | 人物側寫：一個會期的投入量與具體度，每項附 n、百分位、同儕人數與證據網址（網站的相對路徑）。省略 `source` 用他最近一個有統計的會期的來源；省略 `session` 用他有發言的最近一個會期。沒有統計回 404 |
+| `GET /api/people/{person_id}/profile?source=&session=` | 人物側寫：一個會期的投入量與具體度，每項附 n、百分位、同儕人數與證據網址（網站的相對路徑）。那個來源有通過的議題評估時多一個 `topics` 區塊：`distribution`（12 個領域都列，依篇數由多到少、同數依領域表的順序；`share` 是 0～100）、`classifier`（`name`、`accuracy` 是 0～1、`labeled`、`evaluated_at`）。最後永遠有一個 `followup` 區塊（見「人物側寫：追問率」）。省略 `source` 用他最近一個有統計的會期的來源；省略 `session` 用他有發言的最近一個會期。沒有統計回 404 |
 
 清單裡每張卡片的 `teaser` 優先用摘要卡的一句話，沒有卡片才退回第一段的完整敘述。
 
@@ -206,15 +429,23 @@ WantedBy=multi-user.target
 
 ```
 articles/
-├─ models.py        實體：Article / Slide / Person / Membership / Session / ProfileStat
+├─ models.py        實體：Article / Slide / Person / Membership / Session / ProfileStat / Topic / TopicLabel / TopicEvaluation / FollowUp / FollowUpLabel / FollowUpEvaluation
 ├─ ivod_source.py   adapter：立法院開放資料
 ├─ gpu_client.py    adapter：GPU 主機上的摘要 API
 ├─ ingest.py        use case：發現 → 處理 → 落地（相依都用注入的）
 ├─ profiles.py      use case：會期解析、人物側寫指標的計算與快取
+├─ topics.py        use case：政策領域、分類、標註集與評估、上線條件、委員會職掌
+├─ followups.py     use case：期限換算、追問的候選與判斷、落地檢查、狀態、標註集與評估、上線條件
 ├─ api.py           presentation：django-ninja 端點
 └─ management/commands/
    ├─ ingest_ivod.py    composition root：從 settings 組出 adapter 再注入
    ├─ compute_profiles.py
+   ├─ classify_topics.py
+   ├─ sample_topic_labels.py
+   ├─ eval_topics.py
+   ├─ check_followups.py
+   ├─ sample_followup_labels.py
+   ├─ eval_followups.py
    ├─ backfill_meetings.py
    └─ run_scheduler.py
 ```
