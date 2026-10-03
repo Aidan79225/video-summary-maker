@@ -68,6 +68,14 @@ class JobFailed(Exception):
     """工作跑完了，但失敗。通常是這一支影片的問題，不是服務的問題。"""
 
 
+class RequestRejected(JobFailed):
+    """GPU 那邊在送出的時候就拒絕了這個請求（422）。
+
+    跟「工作跑了、結果失敗」分開：一篇文章每次都分類失敗是那篇的問題，跳過就好；送出就被拒，
+    連續好幾篇都這樣，多半是 GPU 端還沒更新、不認得這種工作——那才值得整輪停下來。
+    """
+
+
 def _http(url: str, method: str, api_key: str, body: dict | None,
           timeout: float) -> dict:
     """裸的 HTTP 傳輸。不翻譯例外——那是 GpuApiClient 的責任。"""
@@ -192,7 +200,7 @@ class GpuApiClient:
             if e.code == 404:
                 raise JobNotFound(f"摘要 API 不認得 {path}") from e
             if e.code in _REQUEST_ERROR_CODES:
-                raise JobFailed(f"摘要 API 拒絕這個請求（{e.code}）：{detail}") from e
+                raise RequestRejected(f"摘要 API 拒絕這個請求（{e.code}）：{detail}") from e
             raise GpuApiError(f"摘要 API 回應 {e.code}：{detail}") from e
         except (OSError, ValueError) as e:
             raise GpuApiError(f"摘要 API 連線失敗：{str(e)[:200]}") from e

@@ -16,7 +16,7 @@ from django.db import OperationalError
 from django.test import SimpleTestCase, TestCase
 from django.utils import timezone
 
-from articles.gpu_client import GpuApiError, JobFailed
+from articles.gpu_client import GpuApiError, JobFailed, RequestRejected
 from articles.ingest import save_result
 from articles.models import (Article, ArticleStatus, Membership, Person, ProfileStat, Slide, Topic,
                              TopicEvaluation, TopicLabel)
@@ -618,7 +618,7 @@ class EarlyFailureTests(TestCase):
         """GPU 端還沒更新時每篇都回 422：送三篇都被拒就停，不要同一個錯誤重複兩百次。"""
         for _ in range(6):
             _article()
-        gpu = FakeTopicGpu(answer=lambda text: JobFailed("摘要 API 拒絕這個請求（422）：url Field required"))
+        gpu = FakeTopicGpu(answer=lambda text: RequestRejected("摘要 API 拒絕這個請求（422）：url Field required"))
         report = classify_topics(gpu, limit=10)
         self.assertEqual((report.failed, report.stopped), (3, True))
         self.assertIn("GPU 端可能還沒更新", str(report))
@@ -638,3 +638,93 @@ class EarlyFailureTests(TestCase):
         with self.assertRaises(EvaluationAborted) as caught:
             evaluate(gpu)
         self.assertIn("422", str(caught.exception))
+
+
+
+class PermanentFailureTests(TestCase):
+    """攔的 bug：每次都分類失敗的文章沒有 Topic、每一輪都排在最前面；把「工作跑了但失敗」也算進
+    開頭三篇就停的規則，整個積壓與 --reclassify 就永遠動不了，log 還怪 GPU 沒更新。"""
+
+    def test_articles_that_always_fail_do_not_block_the_rest(self):
+        for _ in range(50):
+            _article(one_liner="finance 舊的", day="2026-03-01")
+        for _ in range(3):
+            _article(one_liner="bad 這篇每次都失敗", day="2026-03-09")
+        gpu = FakeTopicGpu(answer=lambda text: JobFailed("SummarizerOutputInvalid") if "bad" in text
+                           else _code_in(text))
+        report = classify_topics(gpu, limit=200)
+        self.assertFalse(report.stopped)
+        self.assertEqual((report.classified, report.failed), (50, 3))
+
+    def test_reclassify_is_not_blocked_by_articles_that_always_fail(self):
+        old = [_article(one_liner="finance 舊的", day="2026-03-01") for _ in range(5)]
+        for article in old:
+            Topic.objects.create(article=article, primary="finance", classifier="old#topic-v0",
+                                 labeled_at=timezone.now())
+        for _ in range(3):
+            _article(one_liner="bad 失敗", day="2026-03-09")
+        gpu = FakeTopicGpu(answer=lambda text: JobFailed("壞") if "bad" in text else _code_in(text))
+        classify_topics(gpu, limit=200, reclassify=True)
+        self.assertEqual(set(Topic.objects.values_list("classifier", flat=True)), {CLASSIFIER})
+
+
+class LiveReevaluationTests(TestCase):
+    """攔的 bug：重評現在上線的分類器時 GPU 中途出狀況，失敗算錯讓它掉到門檻以下，整個來源的
+    議題區塊當場消失。"""
+
+    def _labelled(self, n):
+        for i in range(n):
+            TopicLabel.objects.create(article=_article(one_liner=f"finance 第{i}篇"), primary="finance")
+
+    def test_failures_while_reevaluating_the_live_classifier_do_not_take_it_offline(self):
+        self._labelled(20)
+        evaluate(FakeTopicGpu())
+        self.assertEqual(passing_classifiers(), {"ly": CLASSIFIER})
+        calls = {"n": 0}
+
+        def flaky(text):
+            calls["n"] += 1
+            return JobFailed("ConnectError: Connection refused") if calls["n"] > 15 else _code_in(text)
+
+        report = evaluate(FakeTopicGpu(answer=flaky))
+        self.assertEqual(report.incomplete, {"ly": 5})
+        self.assertEqual(passing_classifiers(), {"ly": CLASSIFIER})
+        self.assertIn("這次成績不存", str(report))
+
+    def test_failures_still_count_as_wrong_for_a_classifier_that_is_not_live(self):
+        self._labelled(20)
+        calls = {"n": 0}
+
+        def flaky(text):
+            calls["n"] += 1
+            return JobFailed("壞") if calls["n"] > 15 else _code_in(text)
+
+        report = evaluate(FakeTopicGpu(answer=flaky))
+        [ev] = report.evaluations
+        self.assertEqual((ev.correct, ev.passed), (15, False))
+
+
+class EvalRecomputeTests(TestCase):
+    def test_a_recompute_that_failed_is_retried_on_the_next_eval_run(self):
+        """上一次 eval_topics 換了上線的分類器、但重算失敗（SD 卡上的 SQLite 被鎖住）：側寫的議題列
+        還是舊的。下一次 eval_topics 上線的分類器沒變，也要發現議題列過期、重算。"""
+        person = Person.objects.create(name="甲")
+        Membership.objects.create(person=person, source="ly", name="甲")
+        for i in range(20):
+            TopicLabel.objects.create(article=_article(one_liner=f"finance 第{i}篇"), primary="finance")
+        # 正式環境裡會期在匯入時就建好了
+        from articles.profiles import assign_sessions
+        assign_sessions()
+        gpu = FakeTopicGpu()
+        with mock.patch("articles.management.commands.eval_topics.GpuApiClient", return_value=gpu), \
+                mock.patch("articles.management.commands.eval_topics.compute_profiles",
+                           side_effect=OperationalError("database is locked")):
+            with self.assertRaises(OperationalError):
+                call_command("eval_topics", stdout=io.StringIO())
+        self.assertFalse(ProfileStat.objects.exclude(classifier="").exists())
+        out = io.StringIO()
+        with mock.patch("articles.management.commands.eval_topics.GpuApiClient", return_value=FakeTopicGpu()):
+            call_command("eval_topics", stdout=out)
+        self.assertIn("已經重算人物側寫", out.getvalue())
+        self.assertEqual(set(ProfileStat.objects.exclude(classifier="").values_list("classifier", flat=True)),
+                         {CLASSIFIER})
