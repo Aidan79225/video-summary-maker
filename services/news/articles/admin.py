@@ -1,8 +1,16 @@
 from __future__ import annotations
 
+from django import forms
 from django.contrib import admin, messages
+from django.urls import reverse
+from django.utils import timezone
+from django.utils.html import format_html
 
-from .models import Article, ArticleStatus, Membership, Person, ProfileStat, Session, Slide
+from . import bill_topics, followups, topics
+from .models import (Article, ArticleStatus, BillTopic, BillTopicEvaluation, BillTopicLabel, FollowUp,
+                     FollowUpEvaluation, FollowUpLabel, LyBill, LyMeeting, LyVote, Membership, Person,
+                     ProfileStat, Session, Slide, Topic, TopicEvaluation, TopicLabel)
+from .profiles import compute_profiles
 
 
 class SlideInline(admin.TabularInline):
@@ -132,3 +140,459 @@ class ProfileStatAdmin(admin.ModelAdmin):
 
     def has_change_permission(self, request, obj=None) -> bool:
         return False
+
+
+# --- 議題分布 ---
+
+
+class TopicLabelForm(forms.ModelForm):
+    """主領域用下拉選單選，選項來自 topics.TOPICS（唯一的來源）；空的就是還沒標。"""
+
+    primary = forms.ChoiceField(label="主領域", required=False,
+                                choices=[("", "（還沒標）"), *topics.TOPIC_CHOICES])
+
+    class Meta:
+        model = TopicLabel
+        fields = ("primary", "note")
+
+
+class LabelledFilter(admin.SimpleListFilter):
+    title = "標註狀態"
+    parameter_name = "labelled"
+
+    def lookups(self, request, model_admin):
+        return (("no", "還沒標"), ("yes", "已標"))
+
+    def queryset(self, request, queryset):
+        if self.value() == "no":
+            return queryset.filter(primary="")
+        if self.value() == "yes":
+            return queryset.exclude(primary="")
+        return queryset
+
+
+@admin.register(TopicLabel)
+class TopicLabelAdmin(admin.ModelAdmin):
+    """議題標註：盲標。清單上直接顯示分類器讀到的那段文字，主領域在清單上直接選。
+
+    **不要在這裡（或 ArticleAdmin）加任何 Topic 的欄位、篩選或搜尋**：看得到模型的答案，人就會
+    跟著它標，評估量到的就變成「模型跟自己有多像」。
+
+    不能在這裡新增：標註集要用 sample_topic_labels 隨機抽，人手挑的文章會偏向好分的。
+    """
+
+    form = TopicLabelForm
+    list_display = ("article_link", "source", "classifier_text", "primary", "note", "labeled_at")
+    # 文章欄是連到文章本身的連結，不是這一筆的編輯頁：標註就在清單上做
+    list_display_links = None
+    list_editable = ("primary", "note")
+    list_filter = (LabelledFilter, "article__source")
+    search_fields = ("article__speaker", "article__ivod_id")
+    list_per_page = 20
+    fields = ("article_link", "classifier_text", "primary", "note", "labeled_at")
+    readonly_fields = ("article_link", "classifier_text", "labeled_at")
+
+    def get_queryset(self, request):
+        return (super().get_queryset(request).select_related("article")
+                .prefetch_related("article__slides"))
+
+    def get_changelist_form(self, request, **kwargs):
+        # 清單上的表單預設不用 self.form；不指定的話主領域會變成沒有選項的文字框
+        kwargs.setdefault("form", TopicLabelForm)
+        return super().get_changelist_form(request, **kwargs)
+
+    def has_add_permission(self, request) -> bool:
+        return False
+
+    def save_model(self, request, obj, form, change):
+        if "primary" in form.changed_data:
+            obj.labeled_at = timezone.now() if obj.primary else None
+        super().save_model(request, obj, form, change)
+
+    @admin.display(description="文章")
+    def article_link(self, label: TopicLabel):
+        article = label.article
+        return format_html('<a href="{}">{} {}</a><br><a href="{}" target="_blank" rel="noopener">原始影片</a>',
+                           reverse("admin:articles_article_change", args=[article.pk]),
+                           article.date, article.speaker, article.ivod_url)
+
+    @admin.display(description="來源", ordering="article__source")
+    def source(self, label: TopicLabel) -> str:
+        return label.article.get_source_display()
+
+    @admin.display(description="分類器讀到的文字")
+    def classifier_text(self, label: TopicLabel):
+        # 跟送給 GPU 的是同一個函式：標的人跟模型讀的是同一段文字
+        return format_html('<div style="white-space: pre-line; max-width: 40em">{}</div>',
+                           topics.classifier_input(label.article))
+
+
+class _ReadOnlyAdmin(admin.ModelAdmin):
+    """算出來的資料：手改會跟產生它的流程對不上，只給看（要改就重跑指令）。刪除照常可用。"""
+
+    def has_add_permission(self, request) -> bool:
+        return False
+
+    def has_change_permission(self, request, obj=None) -> bool:
+        return False
+
+
+@admin.register(Topic)
+class TopicAdmin(_ReadOnlyAdmin):
+    """模型分的領域。刪掉一筆，下一輪 classify_topics 會重分那篇。"""
+
+    list_display = ("article", "primary_label", "secondary_label", "classifier", "labeled_at")
+    list_filter = ("classifier", "primary", "article__source")
+    search_fields = ("article__speaker", "article__ivod_id")
+    list_select_related = ("article",)
+
+    @admin.display(description="主領域", ordering="primary")
+    def primary_label(self, topic: Topic) -> str:
+        area = topics.TOPIC_BY_KEY.get(topic.primary)
+        return area.label if area else topic.primary
+
+    @admin.display(description="次領域")
+    def secondary_label(self, topic: Topic) -> str:
+        area = topics.TOPIC_BY_KEY.get(topic.secondary)
+        return area.label if area else (topic.secondary or "—")
+
+
+@admin.register(TopicEvaluation)
+class TopicEvaluationAdmin(_ReadOnlyAdmin):
+    """評估紀錄。刪掉通過的評估會改變上線條件：那個來源退回較舊的通過版本，或整個下架。
+
+    刪完之後上線的分類器變了，就當場重算人物側寫（同 eval_topics）。API 每次都看最新的評估，
+    側寫的數字卻是上一次重算時的分類器算的：不重算的話，區塊上寫的是舊版本的名稱與準確率、
+    數字卻是剛刪掉的那個版本分的，證據清單的篇數也兜不攏，直到明早排程跑完。
+    """
+
+    list_display = ("source", "classifier", "labeled", "correct", "accuracy_percent", "passed",
+                    "ran_at")
+    list_filter = ("source", "passed", "classifier")
+
+    @admin.display(description="準確率", ordering="accuracy")
+    def accuracy_percent(self, evaluation: TopicEvaluation) -> str:
+        return f"{evaluation.accuracy * 100:.1f}%"
+
+    def delete_model(self, request, obj) -> None:
+        before = topics.passing_classifiers()
+        super().delete_model(request, obj)
+        self._recompute_if_the_gate_moved(request, before)
+
+    def delete_queryset(self, request, queryset) -> None:
+        before = topics.passing_classifiers()
+        super().delete_queryset(request, queryset)
+        self._recompute_if_the_gate_moved(request, before)
+
+    def _recompute_if_the_gate_moved(self, request, before: dict[str, str]) -> None:
+        if topics.passing_classifiers() == before:
+            return
+        compute_profiles()
+        self.message_user(request, "上線的分類器變了，已經重算人物側寫", messages.INFO)
+
+
+# --- 追問率 ---
+
+
+class _FollowedSelect(forms.NullBooleanSelect):
+    """有沒有追問：還沒標／有／沒有。預設的「未知／是／否」讀起來像在問別的事。"""
+
+    def __init__(self, attrs=None):
+        super().__init__(attrs)
+        self.choices = [("unknown", "（還沒標）"), ("true", "有追問"), ("false", "沒有追問")]
+
+
+class FollowUpLabelForm(forms.ModelForm):
+    followed = forms.NullBooleanField(label="有沒有追問", required=False, widget=_FollowedSelect)
+
+    class Meta:
+        model = FollowUpLabel
+        fields = ("followed", "note")
+
+
+class FollowUpLabelledFilter(admin.SimpleListFilter):
+    title = "標註狀態"
+    parameter_name = "labelled"
+
+    def lookups(self, request, model_admin):
+        return (("no", "還沒標"), ("yes", "已標"))
+
+    def queryset(self, request, queryset):
+        if self.value() == "no":
+            return queryset.filter(followed__isnull=True)
+        if self.value() == "yes":
+            return queryset.filter(followed__isnull=False)
+        return queryset
+
+
+def _pre(text: str):
+    return format_html('<div style="white-space: pre-line; max-width: 28em">{}</div>', text)
+
+
+@admin.register(FollowUpLabel)
+class FollowUpLabelAdmin(admin.ModelAdmin):
+    """追問標註：盲標。清單上直接顯示舊的要求、當時的回應、後來那篇的一句話與挑出來的那段逐字稿
+    （跟送給判斷器的是同一段），「有沒有追問」在清單上直接選。
+
+    **不要在這裡（或 ArticleAdmin）加任何 FollowUp 的欄位、篩選或搜尋**：看得到模型的答案，人就會
+    跟著它標，評估量到的就變成「模型跟自己有多像」。
+
+    不能在這裡新增：標註集要用 sample_followup_labels 抽，人手挑的對會偏向好判的。
+    """
+
+    form = FollowUpLabelForm
+    list_display = ("pair_links", "old_request", "old_response", "new_one_liner", "new_excerpt",
+                    "followed", "note", "labeled_at")
+    # 文章欄是連到兩篇文章的連結，不是這一筆的編輯頁：標註就在清單上做
+    list_display_links = None
+    list_editable = ("followed", "note")
+    list_filter = (FollowUpLabelledFilter, "article__source")
+    search_fields = ("article__speaker", "article__ivod_id", "candidate__ivod_id")
+    list_per_page = 20
+    fields = ("pair_links", "old_request", "old_response", "new_one_liner", "new_excerpt",
+              "followed", "note", "labeled_at")
+    readonly_fields = ("pair_links", "old_request", "old_response", "new_one_liner", "new_excerpt",
+                       "labeled_at")
+
+    def get_queryset(self, request):
+        return super().get_queryset(request).select_related("article", "candidate")
+
+    def get_changelist_form(self, request, **kwargs):
+        # 清單上的表單預設不用 self.form；不指定的話下拉選單會是預設的「未知／是／否」
+        kwargs.setdefault("form", FollowUpLabelForm)
+        return super().get_changelist_form(request, **kwargs)
+
+    def has_add_permission(self, request) -> bool:
+        return False
+
+    def save_model(self, request, obj, form, change):
+        if "followed" in form.changed_data:
+            obj.labeled_at = timezone.now() if obj.followed is not None else None
+        super().save_model(request, obj, form, change)
+
+    @admin.display(description="兩篇文章")
+    def pair_links(self, label: FollowUpLabel):
+        return format_html(
+            '要求：<a href="{}">{} {}</a>（<a href="{}" target="_blank" rel="noopener">影片</a>）<br>'
+            '後來：<a href="{}">{} {}</a>（<a href="{}" target="_blank" rel="noopener">影片</a>）',
+            reverse("admin:articles_article_change", args=[label.article_id]),
+            label.article.date, label.article.speaker, label.article.ivod_url,
+            reverse("admin:articles_article_change", args=[label.candidate_id]),
+            label.candidate.date, label.candidate.speaker, label.candidate.ivod_url)
+
+    @admin.display(description="舊的要求")
+    def old_request(self, label: FollowUpLabel):
+        ask = followups.ask_at(label.article.brief, label.ask_index)
+        deadline = ask.deadline if ask and ask.request == label.request else ""
+        return _pre(f"{label.request}\n（期限：{deadline or '—'}）")
+
+    @admin.display(description="當時的回應")
+    def old_response(self, label: FollowUpLabel):
+        ask = followups.ask_at(label.article.brief, label.ask_index)
+        return _pre(ask.response if ask and ask.request == label.request and ask.response else "—")
+
+    @admin.display(description="後來那篇的一句話")
+    def new_one_liner(self, label: FollowUpLabel):
+        return _pre(label.candidate.one_liner or "—")
+
+    @admin.display(description="後來那篇的逐字稿（挑出來的那段）")
+    def new_excerpt(self, label: FollowUpLabel):
+        # 跟送給判斷器的是同一個函式：標的人跟模型讀的是同一段
+        return format_html('<div style="white-space: pre-line; max-width: 40em; max-height: 24em; '
+                           'overflow-y: auto">{}</div>',
+                           followups.excerpt_for(label.request, label.candidate.transcript_text or ""))
+
+
+@admin.register(FollowUp)
+class FollowUpAdmin(_ReadOnlyAdmin):
+    """模型的判斷。刪掉一筆，下一輪 check_followups 會重建那一項、重判它的候選。"""
+
+    list_display = ("article", "ask_index", "request", "deadline_text", "due_date", "followed_by",
+                    "classifier", "checked_at")
+    list_filter = ("classifier", "article__source")
+    search_fields = ("article__speaker", "article__ivod_id", "request")
+    list_select_related = ("article", "followed_by")
+
+
+@admin.register(FollowUpEvaluation)
+class FollowUpEvaluationAdmin(_ReadOnlyAdmin):
+    """評估紀錄。刪掉通過的評估會改變上線條件：退回較舊的通過版本，或沒有追問率。
+
+    刪完之後上線的判斷器變了，就當場重算人物側寫（同 TopicEvaluationAdmin）。
+    """
+
+    list_display = ("classifier", "labeled", "correct", "accuracy_percent", "passed", "ran_at")
+    list_filter = ("passed", "classifier")
+
+    @admin.display(description="準確率", ordering="accuracy")
+    def accuracy_percent(self, evaluation: FollowUpEvaluation) -> str:
+        return f"{evaluation.accuracy * 100:.1f}%"
+
+    def delete_model(self, request, obj) -> None:
+        before = followups.passing_judge()
+        super().delete_model(request, obj)
+        self._recompute_if_the_gate_moved(request, before)
+
+    def delete_queryset(self, request, queryset) -> None:
+        before = followups.passing_judge()
+        super().delete_queryset(request, queryset)
+        self._recompute_if_the_gate_moved(request, before)
+
+    def _recompute_if_the_gate_moved(self, request, before: str | None) -> None:
+        if followups.passing_judge() == before:
+            return
+        compute_profiles()
+        self.message_user(request, "上線的判斷器變了，已經重算人物側寫", messages.INFO)
+
+
+# --- 立法院的院內紀錄：sync_ly_records 每週從 LYAPI 整批 upsert，手改會被下一次同步蓋掉 ---
+
+
+@admin.register(LyMeeting)
+class LyMeetingAdmin(_ReadOnlyAdmin):
+    list_display = ("code", "name", "kind", "session_number", "date", "attendance")
+    list_filter = ("kind", "term", "session_number")
+    search_fields = ("code", "name")
+
+    @admin.display(description="出席")
+    def attendance(self, meeting: LyMeeting) -> str:
+        # null 是「LYAPI 還沒有出席紀錄」，跟 0 人不一樣，不計入任何人的分母
+        return "還沒有紀錄" if meeting.attendees is None else f"{len(meeting.attendees)} 人"
+
+
+@admin.register(LyBill)
+class LyBillAdmin(_ReadOnlyAdmin):
+    list_display = ("bill_no", "name", "status", "session_number", "proposed_on")
+    list_filter = ("term", "session_number", "status")
+    search_fields = ("bill_no", "name")
+
+
+@admin.register(LyVote)
+class LyVoteAdmin(_ReadOnlyAdmin):
+    list_display = ("code", "topic", "meeting_code", "date", "session_number")
+    list_filter = ("term", "session_number")
+    search_fields = ("code", "topic", "meeting_code")
+
+
+# --- 議案分類（提案與質詢一致率） ---
+
+
+class BillTopicLabelForm(forms.ModelForm):
+    """主領域用下拉選單選，選項來自 topics.TOPICS（同議題標註）；空的就是還沒標。"""
+
+    primary = forms.ChoiceField(label="主領域", required=False,
+                                choices=[("", "（還沒標）"), *topics.TOPIC_CHOICES])
+
+    class Meta:
+        model = BillTopicLabel
+        fields = ("primary", "note")
+
+
+@admin.register(BillTopicLabel)
+class BillTopicLabelAdmin(admin.ModelAdmin):
+    """議案議題標註：盲標。清單上直接顯示議案名稱（就是分類器讀到的那段文字）與議事網的議案頁，
+    主領域在清單上直接選。
+
+    **不要在這裡（或 LyBillAdmin）加任何 BillTopic 的欄位、篩選或搜尋**：看得到模型的答案，人就會
+    跟著它標，評估量到的就變成「模型跟自己有多像」。
+
+    不能在這裡新增：標註集要用 sample_bill_topic_labels 隨機抽，人手挑的議案會偏向好分的。
+    """
+
+    form = BillTopicLabelForm
+    list_display = ("bill_link", "session_number", "classifier_text", "primary", "note", "labeled_at")
+    # 議案欄是連到議事網的連結，不是這一筆的編輯頁：標註就在清單上做
+    list_display_links = None
+    list_editable = ("primary", "note")
+    # 篩「還沒標」跟議題標註同一個篩選器：兩張表都用 primary 的空字串表示還沒標
+    list_filter = (LabelledFilter, "bill__session_number")
+    search_fields = ("bill__bill_no", "bill__name")
+    list_per_page = 20
+    fields = ("bill_link", "classifier_text", "primary", "note", "labeled_at")
+    readonly_fields = ("bill_link", "classifier_text", "labeled_at")
+
+    def get_queryset(self, request):
+        return super().get_queryset(request).select_related("bill")
+
+    def get_changelist_form(self, request, **kwargs):
+        # 清單上的表單預設不用 self.form；不指定的話主領域會變成沒有選項的文字框
+        kwargs.setdefault("form", BillTopicLabelForm)
+        return super().get_changelist_form(request, **kwargs)
+
+    def has_add_permission(self, request) -> bool:
+        return False
+
+    def save_model(self, request, obj, form, change):
+        if "primary" in form.changed_data:
+            obj.labeled_at = timezone.now() if obj.primary else None
+        super().save_model(request, obj, form, change)
+
+    @admin.display(description="議案")
+    def bill_link(self, label: BillTopicLabel):
+        bill = label.bill
+        if not bill.url:
+            return bill.bill_no
+        return format_html('{}<br><a href="{}" target="_blank" rel="noopener">議事網的議案頁</a>',
+                           bill.bill_no, bill.url)
+
+    @admin.display(description="會期", ordering="bill__session_number")
+    def session_number(self, label: BillTopicLabel) -> str:
+        return f"第{label.bill.term}屆第{label.bill.session_number}會期"
+
+    @admin.display(description="分類器讀到的文字")
+    def classifier_text(self, label: BillTopicLabel):
+        # 跟送給 GPU 的是同一個函式：標的人跟模型讀的是同一段文字
+        return format_html('<div style="white-space: pre-line; max-width: 40em">{}</div>',
+                           bill_topics.bill_input(label.bill.name))
+
+
+@admin.register(BillTopic)
+class BillTopicAdmin(_ReadOnlyAdmin):
+    """模型分的議案領域。刪掉一筆，下一輪 classify_bill_topics 會重分那件。"""
+
+    list_display = ("bill", "primary_label", "secondary_label", "classifier", "labeled_at")
+    list_filter = ("classifier", "primary", "bill__session_number")
+    search_fields = ("bill__bill_no", "bill__name")
+    list_select_related = ("bill",)
+
+    @admin.display(description="主領域", ordering="primary")
+    def primary_label(self, topic: BillTopic) -> str:
+        area = topics.TOPIC_BY_KEY.get(topic.primary)
+        return area.label if area else topic.primary
+
+    @admin.display(description="次領域")
+    def secondary_label(self, topic: BillTopic) -> str:
+        area = topics.TOPIC_BY_KEY.get(topic.secondary)
+        return area.label if area else (topic.secondary or "—")
+
+
+@admin.register(BillTopicEvaluation)
+class BillTopicEvaluationAdmin(_ReadOnlyAdmin):
+    """評估紀錄。刪掉通過的評估會改變上線條件：退回較舊的通過版本，或沒有一致率。
+
+    刪完之後上線的議案分類器變了，就當場重算人物側寫（同 TopicEvaluationAdmin）：API 每次都看最新的
+    評估，側寫裡的一致率卻是上一次重算時的分類器算的，不重算的話卡片要到明早才回來。
+    """
+
+    list_display = ("classifier", "labeled", "correct", "accuracy_percent", "passed", "ran_at")
+    list_filter = ("passed", "classifier")
+
+    @admin.display(description="準確率", ordering="accuracy")
+    def accuracy_percent(self, evaluation: BillTopicEvaluation) -> str:
+        return f"{evaluation.accuracy * 100:.1f}%"
+
+    def delete_model(self, request, obj) -> None:
+        before = bill_topics.passing_classifier()
+        super().delete_model(request, obj)
+        self._recompute_if_the_gate_moved(request, before)
+
+    def delete_queryset(self, request, queryset) -> None:
+        before = bill_topics.passing_classifier()
+        super().delete_queryset(request, queryset)
+        self._recompute_if_the_gate_moved(request, before)
+
+    def _recompute_if_the_gate_moved(self, request, before: str | None) -> None:
+        if bill_topics.passing_classifier() == before:
+            return
+        compute_profiles()
+        self.message_user(request, "上線的議案分類器變了，已經重算人物側寫", messages.INFO)

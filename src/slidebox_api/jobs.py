@@ -1,15 +1,30 @@
-"""摘要工作的佇列與狀態機。
+"""摘要、分類與追問判斷工作的佇列與狀態機。
 
-純資料與規則：不碰 HTTP、不碰 slidebox、不開執行緒。所以整套排隊與狀態
-轉換都能用單元測試釘住，工作執行緒只負責照著它說的做。
+純資料與規則：不碰 HTTP、不跑 slidebox 的 pipeline（只借用它的領域實體）、
+不開執行緒。所以整套排隊與狀態轉換都能用單元測試釘住，工作執行緒只負責
+照著它說的做。
 """
 from __future__ import annotations
 
 import threading
 import time
 import uuid
+from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
 from enum import StrEnum
+
+from slidebox.domain.entities import FollowUpPair, TopicLabel
+
+
+class JobKind(StrEnum):
+    """工作種類。
+
+    每一種都排在同一個佇列、由同一條執行緒跑：都要用 Ollama，而 GPU 主機只有
+    一張卡，分類、判斷跟摘要同時跑會互搶。
+    """
+    DECK = "deck"          # 影片網址 → 摘要材料
+    TOPIC = "topic"        # 一段文字 → 政策領域
+    FOLLOWUP = "followup"  # 舊的要求＋後來的一篇 → 有沒有追問
 
 
 class JobStatus(StrEnum):
@@ -29,12 +44,19 @@ _FINISHED = frozenset({JobStatus.DONE, JobStatus.FAILED, JobStatus.CANCELLED})
 # 預設保留幾筆工作。每筆成品帶著 base64 圖片，這個服務又會連續跑好幾個月，
 # 不設上限記憶體只會一路長。
 _MAX_JOBS = 50
+# 分類工作的成品只有幾個字，可以留很多。跟摘要共用一個上限的話，一晚兩百篇分類會把摘要的
+# 成品擠掉——新聞服務等摘要逾時之後，要靠工作 id 接回還在跑或已經跑完的成品，擠掉了就只能整支重跑。
+_MAX_TOPIC_JOBS = 1000
+# 追問判斷的成品也只有一個布林值加一句引用。另外算而不跟分類共用：兩種輕量工作
+# 同一晚各跑兩百個，共用的話一邊會把另一邊還沒被接回的成品擠掉。
+_MAX_FOLLOWUP_JOBS = 1000
 
 
 @dataclass(eq=False)
 class Job:
-    """一次摘要工作。eq=False：這是 identity 物件，不是值。"""
+    """一次工作。eq=False：這是 identity 物件，不是值。"""
     id: str
+    # 分類工作沒有網址，是空字串
     url: str
     detailed: bool = True
     min_slides: int | None = None
@@ -42,6 +64,12 @@ class Job:
     model: str | None = None
     # 語音辨識的專有名詞提示（講者姓名、機關名）；有逐字稿的來源用不到
     speech_hint: str | None = None
+    kind: JobKind = JobKind.DECK
+    # 只有分類工作用得到：要分類的文字與可選的領域
+    text: str = ""
+    labels: tuple[TopicLabel, ...] = ()
+    # 只有追問工作用得到：要判斷的那一對；其他種類是 None
+    followup: FollowUpPair | None = None
 
     status: JobStatus = JobStatus.QUEUED
     progress_fraction: float | None = None
@@ -64,11 +92,13 @@ class JobStore:
     而 GPU 主機只有一張卡。
     """
 
-    def __init__(self, max_jobs: int = _MAX_JOBS):
+    def __init__(self, max_jobs: int = _MAX_JOBS, max_topic_jobs: int = _MAX_TOPIC_JOBS,
+                 max_followup_jobs: int = _MAX_FOLLOWUP_JOBS):
         self._lock = threading.Lock()
         self._jobs: dict[str, Job] = {}
         self._order: list[str] = []
-        self._max_jobs = max_jobs
+        self._limits = {JobKind.DECK: max_jobs, JobKind.TOPIC: max_topic_jobs,
+                        JobKind.FOLLOWUP: max_followup_jobs}
 
     # --- 查詢 ---
 
@@ -103,12 +133,15 @@ class JobStore:
 
     # --- 轉換 ---
 
-    def submit(self, url: str, detailed: bool = True, min_slides: int | None = None,
+    def submit(self, url: str = "", detailed: bool = True, min_slides: int | None = None,
                max_slides: int | None = None, model: str | None = None,
-               speech_hint: str | None = None) -> Job:
+               speech_hint: str | None = None, kind: JobKind = JobKind.DECK,
+               text: str = "", labels: Sequence[TopicLabel] = (),
+               followup: FollowUpPair | None = None) -> Job:
         job = Job(id=uuid.uuid4().hex, url=url, detailed=detailed,
                   min_slides=min_slides, max_slides=max_slides, model=model,
-                  speech_hint=speech_hint)
+                  speech_hint=speech_hint, kind=kind, text=text,
+                  labels=tuple(labels), followup=followup)
         with self._lock:
             self._jobs[job.id] = job
             self._order.append(job.id)
@@ -184,15 +217,18 @@ class JobStore:
         return None
 
     def _forget_old_unlocked(self) -> None:
-        """超過上限時丟掉最舊的、已經結束的工作。
+        """每一種工作各自超過上限時，丟掉那一種裡最舊的、已經結束的工作。
 
         還在排隊或執行中的絕不丟——丟掉正在跑的那一筆，呼叫端就再也查不到
-        自己的工作，而它其實還在佔著 GPU。
+        自己的工作，而它其實還在佔著 GPU。分開計算：分類或判斷工作再多也擠不掉
+        摘要的成品，彼此也擠不掉。
         """
-        while len(self._order) > self._max_jobs:
-            victim = next(
-                (i for i in self._order if self._jobs[i].status.is_finished), None)
-            if victim is None:
-                return
-            self._order.remove(victim)
-            self._jobs.pop(victim, None)
+        for kind, limit in self._limits.items():
+            ids = [i for i in self._order if self._jobs[i].kind == kind]
+            while len(ids) > limit:
+                victim = next((i for i in ids if self._jobs[i].status.is_finished), None)
+                if victim is None:
+                    break
+                ids.remove(victim)
+                self._order.remove(victim)
+                self._jobs.pop(victim, None)

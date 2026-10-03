@@ -20,11 +20,12 @@ from django.db import transaction
 from django.db.models import Count, F, Q, QuerySet
 from django.utils import timezone
 
+from .followups import forget_article
 from .gpu_client import GpuApiClient, GpuApiError, JobField, JobFailed, JobStatus
 from .ivod_source import IvodClip, SourceUnavailable
 from .law_source import LawSource, LawUnavailable
 from .members_sync import link_article
-from .models import Article, ArticleSource, ArticleStatus, Slide
+from .models import Article, ArticleSource, ArticleStatus, Slide, Topic
 from .profiles import attach_session
 
 logger = logging.getLogger(__name__)
@@ -452,6 +453,11 @@ def save_result(article: Article, payload: dict) -> Article:
     # 或換過 storage 的部署，刪除才會落在正確的地方。
     old_files = [(s.image.storage, s.image.name) for s in article.slides.all() if s.image]
     article.slides.all().delete()
+    # 議題分類讀的是一句話與各段小標，重產之後兩者都換了：舊的領域不再對應這篇的內容，
+    # 刪掉讓下一輪 classify_topics 重新分。人工標註（TopicLabel）不刪：發言的議題沒變。
+    Topic.objects.filter(article=article).delete()
+    # 追問也一樣：它當來源的要求可能換了，它當候選的判斷是對舊內容做的，都要重判
+    forget_article(article)
     folder = f"{article.ivod_id}/{uuid4().hex[:8]}"
 
     # 新北的講者是 Pi 依名冊過濾過的（拿掉議長、副議長與別黨團的召集人）；GPU 那邊沒有

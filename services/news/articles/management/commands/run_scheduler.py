@@ -1,9 +1,11 @@
-"""常駐排程：每天固定時間跑一次匯入，接著重算人物側寫。
+"""常駐排程：每天固定時間跑一次匯入，接著替新文章分政策領域、判斷追問、替委員提案分領域、重算人物側寫。
 
     python manage.py run_scheduler
 
-想用系統排程的人可以不要這個指令，直接用 cron 或 systemd timer 跑
-`manage.py ingest_ivod` 再跑 `manage.py compute_profiles`——兩邊跑的是同一段程式碼。
+想用系統排程的人可以不要這個指令，直接用 cron 或 systemd timer 依序跑
+`manage.py ingest_ivod`、`manage.py classify_topics`、`manage.py check_followups`、
+`manage.py classify_bill_topics`、`manage.py compute_profiles`——兩邊跑的是同一段程式碼。每週日另外依序跑 `sync_members`、
+`sync_ly_records`、`compute_profiles`。
 """
 from __future__ import annotations
 
@@ -39,20 +41,56 @@ def sources_missing_members() -> list[str]:
 
 
 def nightly(days: int) -> None:
-    """每晚的工作：匯入，接著重算人物側寫。
+    """每晚的工作：匯入 → 分政策領域 → 判斷追問 → 議案分類 → 重算人物側寫。
 
-    兩步各包各的：例外若冒出排程，APScheduler 會把這個工作移除，之後就再也不會跑
-    ——而使用者不會發現，只會覺得「新聞停更了」。側寫重算失敗也不能拖垮匯入；
-    匯入失敗時照樣重算，既有的文章仍然值得一份最新的統計。
+    每一步各包各的：例外若冒出排程，APScheduler 會把這個工作移除，之後就再也不會跑
+    ——而使用者不會發現，只會覺得「新聞停更了」。前一步失敗不拖垮後一步：匯入失敗時
+    積壓的文章照樣值得分類，分類失敗時既有的文章仍然值得一份最新的統計。
+
+    分類排在匯入之後：剛做好的文章當晚就分，而且不會跟摘要工作搶 GPU 的佇列。
+    排在重算之前：側寫讀的是分好的 Topic。追問判斷同理：剛做好的文章當晚就能當候選，
+    側寫的追問率讀的是判斷好的 FollowUp。議案分類也排在重算之前：提案與質詢一致率讀的是分好的
+    BillTopic；排在文章的工作之後，是因為議案每週才同步一次，不急著跟當晚的新文章搶 GPU。
     """
     try:
         call_command("ingest_ivod", days=days)
     except Exception:  # noqa: BLE001
         logger.exception("每日匯入失敗，排程繼續")
     try:
+        call_command("classify_topics", limit=settings.TOPIC_DAILY_LIMIT)
+    except Exception:  # noqa: BLE001
+        logger.exception("議題分類失敗，排程繼續")
+    try:
+        call_command("check_followups", limit=settings.FOLLOWUP_DAILY_LIMIT)
+    except Exception:  # noqa: BLE001
+        logger.exception("追問判斷失敗，排程繼續")
+    try:
+        call_command("classify_bill_topics", limit=settings.BILL_TOPIC_DAILY_LIMIT)
+    except Exception:  # noqa: BLE001
+        logger.exception("議案分類失敗，排程繼續")
+    try:
         call_command("compute_profiles")
     except Exception:  # noqa: BLE001
         logger.exception("人物側寫重算失敗，排程繼續")
+
+
+WEEKLY_STEPS = (("sync_members", "議員名單同步失敗"),
+                ("sync_ly_records", "立法院院內紀錄同步失敗"),
+                ("compute_profiles", "人物側寫重算失敗"))
+
+
+def weekly() -> None:
+    """每週日的工作：議員名單 → 立法院的院內紀錄（出席、提案、表決）→ 重算人物側寫。
+
+    院內紀錄排在名單之後：黨團、到職與離職日都是名單給的，遞補的人當週就對得上。重算排在最後，
+    新的院內紀錄當天就上得了網站，不必等到隔天晚上。三步各包各的（同 nightly）：例外冒出排程，
+    APScheduler 會把這個工作移除。
+    """
+    for name, failure in WEEKLY_STEPS:
+        try:
+            call_command(name)
+        except Exception:  # noqa: BLE001
+            logger.exception("%s，排程繼續", failure)
 
 
 class Command(BaseCommand):
@@ -85,8 +123,8 @@ class Command(BaseCommand):
             except Exception:  # noqa: BLE001
                 logger.exception("議員名單同步失敗，排程繼續")
 
-        # 政黨、選區一週看一次就夠；排在匯入之前，當天新文章才標得到
-        scheduler.add_job(sync_members_job, "cron", day_of_week="sun", hour=3, minute=30,
+        # 政黨、選區一週看一次就夠；排在匯入之前，當天新文章才標得到。院內紀錄跟著名單一起跑（weekly）
+        scheduler.add_job(weekly, "cron", day_of_week="sun", hour=3, minute=30,
                           id="sync_members", max_instances=1, coalesce=True,
                           misfire_grace_time=3600)
         def stop(*_) -> None:

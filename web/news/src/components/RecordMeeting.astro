@@ -1,0 +1,48 @@
+---
+/**
+ * 紀錄清單的一場會議：日期、名稱、單位、會議代碼，以及出席名單上有沒有他。
+ *
+ * 「未出席」用強調色的標籤、「出席」用一般的字：讀者來這一頁通常是要核對出席率，
+ * 要找的是缺席的那幾場，一眼掃得到才有用。不用紅綠——缺席不一定是失職（請假、公務），
+ * 這裡只標事實。
+ */
+import type { MeetingRecord } from '../lib/types';
+import { formatDateWithWeekday } from '../lib/format';
+import OfficialLink from './OfficialLink.astro';
+
+interface Props {
+  meeting: MeetingRecord;
+}
+
+const { meeting: m } = Astro.props;
+// 聯席會議的單位是「財政委員會、經濟委員會」：標出來，讀者才知道為什麼不只他的委員會
+const joint = m.unit.includes('、');
+---
+
+<li class="rounded-xl border border-line-soft px-4 py-3">
+  <div class="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
+    <p class="tabular text-[0.75rem] text-muted">{formatDateWithWeekday(m.date) || '日期不詳'}</p>
+    {
+      m.attended ? (
+        <p class="inline-flex items-center gap-1 text-[0.78rem] text-ink-2">
+          <svg viewBox="0 0 24 24" class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+            <path d="M5 12.5l4.2 4.2L19 7" stroke-linecap="round" stroke-linejoin="round" />
+          </svg>
+          出席
+        </p>
+      ) : (
+        <p class="inline-flex items-center rounded-full border border-accent/50 bg-accent-soft px-2.5 py-0.5 text-[0.75rem] font-medium text-accent-ink">
+          未出席
+        </p>
+      )
+    }
+  </div>
+  <p class="mt-1 text-[0.92rem] leading-snug text-ink">{m.name}</p>
+  <div class="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[0.72rem] text-muted">
+    {m.unit && m.unit !== '院會' && <span>{joint ? `聯席：${m.unit}` : m.unit}</span>}
+    {m.code && <span class="font-mono break-all">{m.code}</span>}
+    <span class="ml-auto">
+      <OfficialLink url={m.url} label={m.name} />
+    </span>
+  </div>
+</li>

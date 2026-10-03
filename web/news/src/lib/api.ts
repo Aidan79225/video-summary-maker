@@ -16,8 +16,15 @@ import type {
   ProfileIndicator,
   ProfileQuery,
   ProfileSession,
+  RecordList,
+  RecordQuery,
+  TopicClassifier,
+  TopicShare,
 } from './types';
 import { toSource } from './sources';
+import { dropUnverifiedAlignment, fixtureChamberBlock, fixtureRecords, normalizeRecords } from './records';
+import { ANY_TOPIC, TOPIC_AREAS, TOPIC_MIN_ACCURACY, TOPIC_MIN_LABELS, topicOrder } from './topics';
+import { FOLLOWUP_ANCHOR, FOLLOWUP_BLOCK, normalizeFollowupBlock } from './followups';
 import fixture from '../fixtures/sample.json';
 
 /* ------------------------------------------------------------------
@@ -96,6 +103,18 @@ export function safeInternalPath(path: string | null | undefined): string | null
   if (!path) return null;
   const p = path.trim();
   return p.startsWith('/') && !p.startsWith('//') && !p.includes('\\') ? p : null;
+}
+
+/**
+ * 側寫的證據連結：先過 safeInternalPath，再接上 #articles。
+ *
+ * 側寫區塊在發言者頁的清單上面，不跳到清單的話，點了只會回到頁首、看起來像
+ * 沒反應。後端已經帶了錨點就不再接。指標卡與議題分布的每一列共用這一個。
+ * 院內紀錄的證據是另一頁（/records/），清單就在頁首底下，不接錨點。
+ */
+export function evidenceHref(path: string | null | undefined): string | null {
+  const safe = safeInternalPath(path);
+  return safe && safe.startsWith('/speaker/') && !safe.includes('#') ? `${safe}#articles` : safe;
 }
 
 /* ------------------------------------------------------------------
@@ -196,10 +215,11 @@ async function getJson<T>(path: string): Promise<Result<T>> {
    ------------------------------------------------------------------ */
 
 /**
- * 假資料的文章多一個 session_id：真的 API 不把會期放在文章卡片上（篩選在
- * 後端做），假資料沒有後端，只好把「這篇掛在哪個會期」直接寫在文章上。
+ * 假資料的文章多兩個欄位：session_id（掛在哪個會期）與 topic（評估通過的分類器
+ * 給的主領域）。真的 API 不把這兩樣放在文章卡片上（篩選在後端做），假資料沒有
+ * 後端，只好直接寫在文章上。沒有 topic 的就是沒被分類的（聯合質詢、沒有摘要卡）。
  */
-type FixtureArticle = ArticleDetail & { session_id?: number | null };
+type FixtureArticle = ArticleDetail & { session_id?: number | null; topic?: string | null };
 
 /** 名冊：同來源、同名對到哪個人。對不到的名字就沒有 person_id，跟真的後端一樣 */
 type FixturePerson = { id: number; name: string; source: string };
@@ -217,6 +237,16 @@ type FixtureProfile = {
     key: string;
     title: string;
     indicators: Omit<ProfileIndicator, 'evidence_url'>[];
+    /**
+     * 議題分布只寫有篇數的領域；其餘領域、名稱、占比與連結由 fixtureDistribution
+     * 照後端的規則補齊——手算占比跟手寫網址一樣，一錯就跟篇數對不上
+     */
+    distribution?: { key: string; count: number }[];
+    classifier?: TopicClassifier;
+    /** 追問區塊：asks、unparsed、judge 照 API 的形狀原樣寫（見 lib/followups.ts） */
+    asks?: unknown[];
+    unparsed?: number;
+    judge?: unknown;
   }[];
 };
 
@@ -232,12 +262,13 @@ function fixtureArticles(): FixtureArticle[] {
 }
 
 function toCard(a: FixtureArticle) {
-  const { source_note, transcript_text, slides, brief, session_id, ...card } = a;
+  const { source_note, transcript_text, slides, brief, session_id, topic, ...card } = a;
   void source_note;
   void transcript_text;
   void slides;
   void brief;
   void session_id;
+  void topic;
   return card;
 }
 
@@ -314,6 +345,8 @@ function fixtureList(query: ArticleQuery): ArticleList {
     // 「甲、」這種殘缺的欄位後端算聯合質詢，這裡也要算，假資料的 count 才會等於 n
     if (query.solo && a.speaker.includes('、')) return false;
     if (query.has_brief && a.brief == null) return false;
+    // any：分過類就好（哪個領域都可以）——議題指標的 n 就是這些，不含還沒分類的
+    if (query.topic === ANY_TOPIC ? a.topic == null : query.topic && a.topic !== query.topic) return false;
     if (query.party && !(a.party ?? '').split('、').includes(query.party)) return false;
     if (q) {
       const hay = `${a.title} ${a.teaser} ${a.meeting} ${a.speaker} ${a.transcript_text}`;
@@ -368,6 +401,11 @@ function normalizeIndicator(raw: unknown): ProfileIndicator | null {
   // 樣本不足、同儕不足、沒有值，都不給百分位。後端本來就回 null，這裡再擋一次：
   // 「最小樣本」與「同儕至少幾人」是側寫的底線，不該只靠一邊守。
   const comparable = sampleOk && value !== null && peers >= MIN_PEERS && percentile !== null;
+  // 沒有值的原因要帶過來，頁面才寫得出是哪一種「沒有」（沒有委員會資料、換判斷器待重判），
+  // 而不是一律寫成樣本不足
+  const reason = str(o.reason).trim();
+  // 提案與質詢一致率的質詢篇數（其他指標是 null）：卡片寫「質詢 M 篇」要用後端算一致率時的那個數
+  const speechN = num(o.speech_n);
   return {
     key,
     label,
@@ -379,7 +417,95 @@ function normalizeIndicator(raw: unknown): ProfileIndicator | null {
     peers,
     sample_ok: sampleOk,
     evidence_url: str(o.evidence_url),
+    // 「沒有值」的原因（沒有委員會資料、沒有參加黨團、換了判斷器正在重判）：丟掉的話頁面只能寫成樣本不足
+    ...(reason ? { reason } : {}),
+    ...(speechN !== null ? { speech_n: Math.max(0, Math.round(speechN)) } : {}),
   };
+}
+
+/** share 沒給時是 null，由 normalizeDistribution 用篇數補——不能當成 0，否則有篇數的領域畫成 0% */
+type RawTopicShare = Omit<TopicShare, 'share'> & { share: number | null };
+
+function normalizeTopicShare(raw: unknown): RawTopicShare | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const o = raw as Record<string, unknown>;
+  const key = str(o.key);
+  const label = str(o.label).trim();
+  if (!key || !label) return null;
+  const share = num(o.share);
+  return {
+    key,
+    label,
+    count: Math.max(0, Math.round(num(o.count) ?? 0)),
+    share: share === null ? null : Math.min(100, Math.max(0, share)),
+    evidence_url: str(o.evidence_url),
+  };
+}
+
+/**
+ * 依篇數由多到少、同篇數照領域列舉的順序（spec：「同數依上表順序」）。後端已經排好，
+ * 這裡明確再排一次，不靠後端給的順序剛好對。
+ *
+ * 占比缺了就用篇數 ÷ 各領域篇數的總和補：每篇基礎報導剛好一個主領域，總和就是分母。
+ */
+function normalizeDistribution(raw: unknown): TopicShare[] {
+  const rows = (Array.isArray(raw) ? raw : [])
+    .map(normalizeTopicShare)
+    .filter((t): t is RawTopicShare => t !== null);
+  const total = rows.reduce((sum, t) => sum + t.count, 0);
+  return rows
+    .map((t) => ({ ...t, share: t.share ?? (total > 0 ? (t.count / total) * 100 : 0) }))
+    .sort((a, b) => b.count - a.count || topicOrder(a.key) - topicOrder(b.key));
+}
+
+function normalizeClassifier(raw: unknown): TopicClassifier | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const o = raw as Record<string, unknown>;
+  const accuracy = num(o.accuracy);
+  // 契約是 0～1（TopicEvaluation 存的、門檻寫成 0.8）。超出範圍的不猜它是不是百分比：
+  // 「85」讀成 85% 就讓一個格式錯的回應通過了門檻。讀不懂就當作沒有通過，整塊不上線
+  if (accuracy === null || accuracy < 0 || accuracy > 1) return null;
+  return {
+    name: str(o.name),
+    accuracy,
+    labeled: Math.max(0, Math.round(num(o.labeled) ?? 0)),
+    evaluated_at: str(o.evaluated_at),
+  };
+}
+
+/**
+ * 分類器有沒有過門檻（至少 20 篇人工標註、準確率至少 80%）。
+ * 浮點留一點餘裕：16 ÷ 20 在後端算是剛好 0.8，傳過來不該因為捨入差一點就被擋掉。
+ */
+function classifierPassed(c: TopicClassifier | null): c is TopicClassifier {
+  return c !== null && c.labeled >= TOPIC_MIN_LABELS && c.accuracy >= TOPIC_MIN_ACCURACY - 1e-9;
+}
+
+/**
+ * 一個區塊。議題分布另外帶 distribution 與 classifier；分類器沒過門檻（或沒給）
+ * 時整塊丟掉，不只藏數字——模型參與的指標「沒通過就不上線」，後端擋過，這裡再擋一次。
+ */
+function normalizeBlock(raw: unknown): ProfileBlock | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const b = raw as Record<string, unknown>;
+  const block: ProfileBlock = {
+    key: str(b.key),
+    title: str(b.title).trim(),
+    indicators: (Array.isArray(b.indicators) ? (b.indicators as unknown[]) : [])
+      .map(normalizeIndicator)
+      .filter((i): i is ProfileIndicator => i !== null),
+  };
+  // 追問區塊在判斷器沒通過時沒有指標、只有待追蹤清單，不能套「沒有指標就丟掉」
+  if (block.key === FOLLOWUP_BLOCK) return normalizeFollowupBlock(block, b);
+  if (!block.key || !block.title || block.indicators.length === 0) return null;
+  // 門檻是議題分類器自己的（追問率之後會有另一套），所以只認 topics 這一塊
+  if (block.key === 'topics') {
+    const classifier = normalizeClassifier(b.classifier);
+    if (!classifierPassed(classifier)) return null;
+    block.classifier = classifier;
+    block.distribution = normalizeDistribution(b.distribution);
+  }
+  return block;
 }
 
 /**
@@ -394,16 +520,14 @@ export function normalizeProfile(raw: unknown): Profile | null {
   const session = normalizeSession(o.session);
   if (personId === null || !session) return null;
 
-  const blocks: ProfileBlock[] = (Array.isArray(o.blocks) ? o.blocks : [])
-    .filter((b) => b && typeof b === 'object')
-    .map((b) => ({
-      key: str(b.key),
-      title: str(b.title).trim(),
-      indicators: (Array.isArray(b.indicators) ? (b.indicators as unknown[]) : [])
-        .map(normalizeIndicator)
-        .filter((i): i is ProfileIndicator => i !== null),
-    }))
-    .filter((b) => b.key && b.title && b.indicators.length > 0);
+  // 議題分布被網站的門檻擋掉時，院內紀錄的提案與質詢一致率也要拿掉：它的質詢那一半就是那份分布。
+  // 要先記下後端有沒有給議題分布：沒給（會期還沒有報導）跟給了被擋掉是兩回事
+  const rawBlocks: unknown[] = Array.isArray(o.blocks) ? o.blocks : [];
+  const rawHadTopics = rawBlocks.some((b) => !!b && typeof b === 'object' && (b as Record<string, unknown>).key === 'topics');
+  const blocks = dropUnverifiedAlignment(
+    rawBlocks.map(normalizeBlock).filter((b): b is ProfileBlock => b !== null),
+    rawHadTopics,
+  );
   if (blocks.length === 0) return null;
 
   const sessions = (Array.isArray(o.sessions) ? o.sessions : [])
@@ -464,6 +588,10 @@ function fixtureProfile(personId: number, query: ProfileQuery): Result<unknown> 
   // 證據連結用這個人在該來源的寫法，跟後端一樣
   const name = (fx.people ?? []).find((p) => p.id === personId && p.source === source)?.name ?? '';
   const evidence = `/speaker/${encodeURIComponent(name)}?source=${source}&session=${picked.s.id}`;
+  // 院內紀錄放在 records.json：指標由假紀錄照後端的公式算，n 才會等於證據頁的筆數。
+  // 提案與質詢一致率的質詢那一半是這個會期的議題分布；沒有議題區塊（分類器沒通過）就沒有這張卡
+  const topics = picked.p.blocks.find((b) => b.key === 'topics');
+  const chamber = fixtureChamberBlock(personId, picked.s.id, topics?.distribution ?? null);
   return {
     ok: true,
     data: {
@@ -473,16 +601,43 @@ function fixtureProfile(personId: number, query: ProfileQuery): Result<unknown> 
       sessions: inSource.map((x) => x.s),
       computed_at: picked.p.computed_at,
       min_sample: 5,
-      blocks: picked.p.blocks.map((b) => ({
-        ...b,
-        indicators: b.indicators.map((i) => ({
-          ...i,
-          // 具體度只算單獨發言、有摘要卡的文章，證據清單也要用同一組篩選
-          evidence_url: b.key === 'specificity' ? `${evidence}&solo=1&brief=1` : evidence,
-        })),
-      })),
+      blocks: picked.p.blocks.map((b) => {
+        // 具體度與議題分布只算單獨發言、有摘要卡的文章，證據清單也要用同一組篩選
+        const base = b.key === 'specificity' || b.key === 'topics' ? `${evidence}&solo=1&brief=1` : evidence;
+        // 議題的指標只算分過類的，再多帶 topic=any（跟後端一樣），篇數才等於 n
+        const indicatorUrl = b.key === 'topics' ? `${base}&topic=${ANY_TOPIC}` : base;
+        // 追問率的證據是側寫裡的追問清單，不是文章清單（跟後端一樣指到 #followups）
+        const evidenceUrl = b.key === FOLLOWUP_BLOCK ? `${evidence}#${FOLLOWUP_ANCHOR}` : indicatorUrl;
+        return {
+          ...b,
+          indicators: b.indicators.map((i) => ({ ...i, evidence_url: evidenceUrl })),
+          ...(b.distribution ? { distribution: fixtureDistribution(b.distribution, base) } : {}),
+        };
+      }).concat(chamber ? [chamber] : []),
     },
   };
+}
+
+/**
+ * 假資料的議題分布：照後端的規則補成完整的 12 列。
+ *
+ * 0 篇的領域也列、依篇數由多到少、同篇數照列舉順序（sort 是穩定的）；占比的分母是
+ * 基礎報導篇數，而每篇基礎報導剛好一個主領域，所以就是各領域篇數的總和。連結是
+ * 基礎報導的篩選再加 topic，點進去的篇數才會等於這一列的篇數。
+ */
+function fixtureDistribution(counts: { key: string; count: number }[], base: string): TopicShare[] {
+  const byKey = new Map(counts.map((c) => [c.key, c.count]));
+  const total = counts.reduce((sum, c) => sum + c.count, 0);
+  return TOPIC_AREAS.map((t) => {
+    const count = byKey.get(t.key) ?? 0;
+    return {
+      key: t.key,
+      label: t.label,
+      count,
+      share: total > 0 ? (count / total) * 100 : 0,
+      evidence_url: `${base}&topic=${t.key}`,
+    };
+  }).sort((a, b) => b.count - a.count);
 }
 
 /* ------------------------------------------------------------------
@@ -512,6 +667,7 @@ export async function getArticles(query: ArticleQuery = {}): Promise<Result<Arti
   if (query.session) params.set('session', String(query.session));
   if (query.solo) params.set('solo', 'true');
   if (query.has_brief) params.set('has_brief', 'true');
+  if (query.topic) params.set('topic', query.topic);
   params.set('page', String(Math.max(1, Number(query.page) || 1)));
   params.set('page_size', String(Math.max(1, Number(query.page_size) || 12)));
 
@@ -642,6 +798,32 @@ export async function getProfile(personId: number, query: ProfileQuery = {}): Pr
   const profile = normalizeProfile(res.data);
   if (!profile) return { ok: false, error: { kind: 'parse', message: '側寫資料不完整' } };
   return { ok: true, data: profile };
+}
+
+/**
+ * 院內紀錄清單：側寫「院內紀錄」每個數字的證據（只有立法院）。
+ *
+ * 會期由呼叫端給：證據頁先拿側寫決定是哪個會期（網址沒帶就用側寫的預設），
+ * 標題的人名、會期名稱也從側寫來，這裡只要清單本身。
+ */
+export async function getRecords(personId: number, query: RecordQuery): Promise<Result<RecordList>> {
+  // 跟 getProfile 一樣：會被拼進路徑的 id 不是正整數就不送出去
+  if (!Number.isSafeInteger(personId) || personId <= 0) {
+    return { ok: false, error: { kind: 'notfound', status: 404, message: '沒有這個人' } };
+  }
+
+  let res: Result<unknown>;
+  if (isFixtureMode()) {
+    res = fixtureRecords(personId, query);
+  } else {
+    const params = new URLSearchParams({ session: String(query.session), kind: query.kind });
+    res = await getJson<unknown>(`/api/people/${personId}/records?${params.toString()}`);
+  }
+  if (!res.ok) return res;
+
+  const list = normalizeRecords(query.kind, res.data);
+  if (!list) return { ok: false, error: { kind: 'parse', message: '紀錄資料不完整' } };
+  return { ok: true, data: list };
 }
 
 /**

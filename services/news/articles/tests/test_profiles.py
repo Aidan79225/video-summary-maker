@@ -8,11 +8,12 @@ from unittest import mock
 
 from django.core.management import call_command
 from django.db import connection
-from django.test import SimpleTestCase, TestCase
+from django.test import SimpleTestCase, TestCase, override_settings
 from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 
-from articles.models import Article, ArticleStatus, Membership, Person, ProfileStat, Session
+from articles.models import (Article, ArticleStatus, Membership, Person, ProfileStat, Session, Topic,
+                             TopicEvaluation)
 from articles.profiles import (
     MIN_PEERS,
     MIN_SAMPLE,
@@ -23,6 +24,7 @@ from articles.profiles import (
     parse_session,
     percentile,
 )
+from articles.topics import TOPICS
 
 TCCC_MEETING = "第4屆第8次定期會 市政總質詢"
 NTPC_MEETING = "第4屆第8次定期會 市政總質詢"
@@ -455,8 +457,10 @@ class CommandTests(TestCase):
         self.assertEqual(ProfileStat.objects.filter(indicator="speeches").count(), 1)
 
 
+@override_settings(TOPIC_DAILY_LIMIT=200, FOLLOWUP_DAILY_LIMIT=200, BILL_TOPIC_DAILY_LIMIT=200)
 class NightlyJobTests(SimpleTestCase):
-    """排程：匯入之後接著重算；任何一步失敗都不能冒出排程（APScheduler 會把工作移除）。"""
+    """排程：匯入 → 分政策領域 → 判斷追問 → 議案分類 → 重算；任何一步失敗都不能冒出排程（APScheduler
+    會把工作移除）。"""
 
     LOGGER = "articles.management.commands.run_scheduler"
 
@@ -474,19 +478,56 @@ class NightlyJobTests(SimpleTestCase):
             run_scheduler.nightly(3)
         return calls
 
-    def test_profiles_are_recomputed_right_after_the_ingest(self):
-        self.assertEqual(self._run(), [("ingest_ivod", {"days": 3}), ("compute_profiles", {})])
+    STEPS = ["ingest_ivod", "classify_topics", "check_followups", "classify_bill_topics",
+             "compute_profiles"]
+
+    def test_topics_are_classified_after_the_ingest_and_before_the_recompute(self):
+        self.assertEqual(self._run(), [("ingest_ivod", {"days": 3}),
+                                       ("classify_topics", {"limit": 200}),
+                                       ("check_followups", {"limit": 200}),
+                                       ("classify_bill_topics", {"limit": 200}),
+                                       ("compute_profiles", {})])
+
+    @override_settings(BILL_TOPIC_DAILY_LIMIT=11)
+    def test_the_bill_classification_limit_comes_from_the_settings(self):
+        self.assertEqual(self._run()[3], ("classify_bill_topics", {"limit": 11}))
+
+    def test_a_failing_bill_classification_still_recomputes(self):
+        with self.assertLogs(self.LOGGER, "ERROR") as logs:
+            calls = self._run(fail={"classify_bill_topics"})
+        self.assertEqual([name for name, _ in calls], self.STEPS)
+        self.assertIn("議案分類失敗", logs.output[0])
+
+    @override_settings(FOLLOWUP_DAILY_LIMIT=9)
+    def test_the_followup_limit_comes_from_the_settings(self):
+        self.assertEqual(self._run()[2], ("check_followups", {"limit": 9}))
+
+    def test_a_failing_followup_check_still_recomputes(self):
+        with self.assertLogs(self.LOGGER, "ERROR") as logs:
+            calls = self._run(fail={"check_followups"})
+        self.assertEqual([name for name, _ in calls], self.STEPS)
+        self.assertIn("追問判斷失敗", logs.output[0])
+
+    @override_settings(TOPIC_DAILY_LIMIT=7)
+    def test_the_classification_limit_comes_from_the_settings(self):
+        self.assertEqual(self._run()[1], ("classify_topics", {"limit": 7}))
 
     def test_a_failing_recompute_does_not_break_the_schedule(self):
         with self.assertLogs(self.LOGGER, "ERROR") as logs:
             calls = self._run(fail={"compute_profiles"})
-        self.assertEqual([name for name, _ in calls], ["ingest_ivod", "compute_profiles"])
+        self.assertEqual([name for name, _ in calls], self.STEPS)
         self.assertIn("人物側寫重算失敗", logs.output[0])
 
-    def test_a_failing_ingest_still_recomputes(self):
+    def test_a_failing_ingest_still_classifies_and_recomputes(self):
         with self.assertLogs(self.LOGGER, "ERROR"):
             calls = self._run(fail={"ingest_ivod"})
-        self.assertEqual([name for name, _ in calls], ["ingest_ivod", "compute_profiles"])
+        self.assertEqual([name for name, _ in calls], self.STEPS)
+
+    def test_a_failing_classification_still_recomputes(self):
+        with self.assertLogs(self.LOGGER, "ERROR") as logs:
+            calls = self._run(fail={"classify_topics"})
+        self.assertEqual([name for name, _ in calls], self.STEPS)
+        self.assertIn("議題分類失敗", logs.output[0])
 
 
 class TermRolloverTests(TestCase):
@@ -599,3 +640,359 @@ class BackfillMeetingsTests(TestCase):
         kept.refresh_from_db()
         self.assertEqual(empty.session_id, kept.session_id)
         self.assertEqual(_stats("speeches")["甲"].value, 2)
+
+
+# --- 議題分布 ---
+
+CLASSIFIER = "fake-model#topic-v1"
+
+
+def _pass(source, classifier=CLASSIFIER, passed=True, when=None):
+    """一筆評估。通過了，那個來源的議題分布才會算，而且只算這個分類器分的。"""
+    return TopicEvaluation.objects.create(
+        source=source, classifier=classifier, labeled=20, correct=18 if passed else 10,
+        accuracy=0.9 if passed else 0.5, passed=passed, ran_at=when or timezone.now())
+
+
+def _classified(speaker, primary, source="tccc", classifier=CLASSIFIER, brief="default", **kw):
+    """一篇基礎文章（單獨發言、有摘要卡）＋它的 Topic。"""
+    if brief == "default":
+        brief = _brief(numbers=1)
+    meeting = kw.pop("meeting", LY_MEETING if source == "ly" else TCCC_MEETING)
+    article = _article(speaker, source=source, meeting=meeting, brief=brief, **kw)
+    Topic.objects.create(article=article, primary=primary, classifier=classifier,
+                         labeled_at=timezone.now())
+    return article
+
+
+def _topic_rows(name):
+    return {s.indicator.removeprefix("topic:"): s for s in
+            ProfileStat.objects.filter(person__name=name, indicator__startswith="topic:")}
+
+
+class TopicGateTests(TestCase):
+    def test_without_a_passing_evaluation_nothing_about_topics_is_computed(self):
+        _member("甲")
+        _classified("甲", "finance")
+        _pass("tccc", passed=False)
+        report = compute_profiles()
+        self.assertFalse(ProfileStat.objects.filter(indicator__startswith="topic").exists())
+        self.assertFalse(ProfileStat.objects.filter(indicator="committee_alignment").exists())
+        # 第一步的指標照常
+        self.assertEqual(_stats("speeches")["甲"].value, 1)
+        self.assertIn("議題分布 臺中市議會：沒有通過的評估，不計算", str(report))
+
+    def test_a_passing_evaluation_only_switches_on_its_own_source(self):
+        _member("甲")
+        _member("乙", source="ly")
+        _classified("甲", "finance")
+        _classified("乙", "finance", source="ly")
+        _pass("ly")
+        report = compute_profiles()
+        self.assertEqual(_topic_rows("甲"), {})
+        self.assertEqual(_topic_rows("乙")["finance"].value, 1)
+        self.assertIn(f"議題分布 立法院：用分類器 {CLASSIFIER}（評估通過）", str(report))
+
+    def test_only_topics_from_the_latest_passing_classifier_count(self):
+        _member("甲")
+        _pass("tccc", "old#topic-v1", when=timezone.make_aware(datetime(2026, 9, 1)))
+        _pass("tccc", "new#topic-v1", when=timezone.make_aware(datetime(2026, 9, 20)))
+        _pass("tccc", "newest#topic-v1", passed=False,
+              when=timezone.make_aware(datetime(2026, 9, 30)))
+        _classified("甲", "finance", classifier="old#topic-v1")
+        _classified("甲", "labor", classifier="new#topic-v1")
+        _classified("甲", "welfare", classifier="newest#topic-v1")
+        compute_profiles()
+        rows = _topic_rows("甲")
+        self.assertEqual({k: v.value for k, v in rows.items() if v.value}, {"labor": 1.0})
+        self.assertEqual(rows["labor"].n, 1)
+
+
+class TopicDistributionTests(TestCase):
+    def setUp(self):
+        _member("甲")
+        _member("乙")
+        _pass("tccc")
+
+    def test_only_solo_briefed_articles_classified_by_the_passing_version_count(self):
+        _classified("甲", "finance")
+        _classified("甲", "finance")
+        _classified("甲", "welfare")
+        _classified("甲", "defense", classifier="other#topic-v2")    # 版本不符
+        _classified("甲、乙", "labor")                               # 聯合質詢
+        _classified("甲", "labor", brief=None)                       # 沒有摘要卡
+        _classified("甲", "labor", status=ArticleStatus.PENDING)    # 還沒完成
+        _article("甲", brief=_brief(numbers=1))                     # 還沒分類
+        compute_profiles()
+        rows = _topic_rows("甲")
+        self.assertEqual(set(rows), {area.key for area in TOPICS})
+        self.assertEqual({k: (v.value, v.n) for k, v in rows.items() if v.value},
+                         {"finance": (2.0, 3), "welfare": (1.0, 3)})
+        self.assertEqual({(v.n, v.percentile, v.peers) for v in rows.values()}, {(3, None, 0)})
+        # 沒有發言的人也有 12 列，都是 0
+        quiet = _topic_rows("乙")
+        self.assertEqual({(v.value, v.n) for v in quiet.values()}, {(0.0, 0)})
+        self.assertEqual(len(quiet), 12)
+
+    def test_focus_is_the_largest_share_and_breadth_counts_areas_at_ten_percent_or_more(self):
+        # 甲：10 篇，6 財經、3 衛福、1 勞動——勞動剛好 10%，算一個
+        for primary, count in (("finance", 6), ("welfare", 3), ("labor", 1)):
+            for _ in range(count):
+                _classified("甲", primary)
+        # 乙：11 篇，9 財經、1 衛福、1 勞動——1/11 不到 10%
+        for primary, count in (("finance", 9), ("welfare", 1), ("labor", 1)):
+            for _ in range(count):
+                _classified("乙", primary)
+        compute_profiles()
+        focus, breadth = _stats("topic_focus"), _stats("topic_breadth")
+        self.assertEqual((focus["甲"].value, focus["甲"].n), (60.0, 10))
+        self.assertEqual((breadth["甲"].value, breadth["甲"].n), (3.0, 10))
+        self.assertAlmostEqual(focus["乙"].value, 9 / 11 * 100)
+        self.assertEqual(breadth["乙"].value, 1.0)
+
+    def test_no_classified_articles_means_no_value(self):
+        _article("甲", brief=_brief(numbers=1))
+        compute_profiles()
+        focus = _stats("topic_focus")["甲"]
+        self.assertEqual((focus.value, focus.n), (None, 0))
+        self.assertIsNone(_stats("topic_breadth")["甲"].value)
+
+    def test_councils_have_no_committee_alignment(self):
+        _classified("甲", "finance")
+        compute_profiles()
+        self.assertFalse(ProfileStat.objects.filter(indicator="committee_alignment").exists())
+
+
+class TopicPercentileTests(TestCase):
+    def test_small_samples_are_not_peers_and_the_rest_get_mid_rank(self):
+        names = [f"議員{i}" for i in range(6)]
+        for name in names:
+            _member(name)
+        _pass("tccc")
+        areas = ["finance", "welfare", "labor", "defense", "transport"]
+        # 議員 i 的五篇裡有 i+1 篇是財經：聚焦度 20、40、60、80、100
+        for i, name in enumerate(names[:5]):
+            for j in range(MIN_SAMPLE):
+                _classified(name, "finance" if j <= i else areas[j])
+        # 最後一位只差一篇
+        for _ in range(MIN_SAMPLE - 1):
+            _classified(names[5], "finance")
+        compute_profiles()
+        focus = _stats("topic_focus")
+        self.assertEqual([focus[n].value for n in names[:5]], [20.0, 40.0, 60.0, 80.0, 100.0])
+        self.assertEqual([focus[n].percentile for n in names[:5]], [10.0, 30.0, 50.0, 70.0, 90.0])
+        self.assertEqual((focus[names[5]].n, focus[names[5]].percentile), (MIN_SAMPLE - 1, None))
+        self.assertEqual({r.peers for r in focus.values()}, {5})
+        # 廣度：議員 0 五個領域各一篇（每個都是 20%）＝ 5；議員 4 全是財經＝ 1
+        breadth = _stats("topic_breadth")
+        self.assertEqual([breadth[n].value for n in names[:5]], [5.0, 4.0, 3.0, 2.0, 1.0])
+
+    def test_too_few_peers_means_no_percentile(self):
+        _pass("tccc")
+        for i in range(MIN_PEERS - 1):
+            _member(f"議員{i}")
+            for _ in range(MIN_SAMPLE):
+                _classified(f"議員{i}", "finance")
+        compute_profiles()
+        self.assertEqual({(r.percentile, r.peers) for r in _stats("topic_focus").values()},
+                         {(None, MIN_PEERS - 1)})
+
+
+class CommitteeAlignmentTests(TestCase):
+    """立委的委員會職掌：主領域落在他「那個會期」所屬委員會職掌的篇數 ÷ 有委員會資料的基礎文章數。"""
+
+    def setUp(self):
+        _pass("ly")
+
+    def _legislator(self, name, committees, **kw):
+        member = _member(name, source="ly", **kw)
+        member.committees = committees
+        member.save()
+        return member
+
+    def test_share_of_speeches_inside_the_portfolio(self):
+        # 經濟委員會：財經、農業、環境；程序委員會沒有職掌
+        self._legislator("甲", ["第11屆第5會期：經濟委員會", "第11屆第5會期：程序委員會",
+                               "第11屆第4會期：內政委員會"])
+        for primary in ("finance", "finance", "agriculture", "defense", "interior"):
+            _classified("甲", primary, source="ly")
+        compute_profiles()
+        row = _stats("committee_alignment")["甲"]
+        # 內政是他上一個會期的委員會，這個會期不算
+        self.assertEqual((row.value, row.n), (60.0, 5))
+
+    def test_without_committee_data_for_that_session_nothing_enters_the_denominator(self):
+        self._legislator("乙", ["第11屆第4會期：財政委員會"])                # 會期對不上
+        self._legislator("丙", ["第11屆第5會期：程序委員會"])                # 沒有職掌
+        self._legislator("丁", [])                                           # 沒有資料
+        for name in ("乙", "丙", "丁"):
+            _classified(name, "finance", source="ly")
+        compute_profiles()
+        rows = _stats("committee_alignment")
+        self.assertEqual({name: (r.value, r.n) for name, r in rows.items()},
+                         {"乙": (None, 0), "丙": (None, 0), "丁": (None, 0)})
+        # 其他議題指標照算
+        self.assertEqual(_stats("topic_focus")["乙"].n, 1)
+
+    def test_an_extraordinary_session_uses_the_committees_of_its_session(self):
+        self._legislator("甲", ["第11屆第5會期：財政委員會"])
+        _classified("甲", "finance", source="ly", meeting="第11屆第5會期第1次臨時會第2次會議")
+        compute_profiles()
+        self.assertEqual(_stats("committee_alignment")["甲"].value, 100.0)
+
+    def test_a_party_switch_mid_session_still_sees_the_committees(self):
+        person = Person.objects.create(name="甲")
+        self._legislator("甲", [], person=person, party="台灣民眾黨",
+                         start=date(2024, 2, 1), end=date(2026, 3, 15))
+        self._legislator("甲", ["第11屆第5會期：財政委員會"], person=person, party="無黨籍",
+                         start=date(2026, 3, 16))
+        _classified("甲", "finance", source="ly", day="2026-03-01")
+        _classified("甲", "labor", source="ly", day="2026-04-01")
+        compute_profiles()
+        row = ProfileStat.objects.get(person=person, indicator="committee_alignment")
+        self.assertEqual((row.value, row.n), (50.0, 2))
+
+    def test_the_query_count_does_not_grow_with_the_number_of_articles(self):
+        """議題分布也一樣：Topic 跟文章一起讀、委員會跟任期一起讀，不逐篇查。"""
+        for name in ("甲", "乙", "丙"):
+            self._legislator(name, ["第11屆第5會期：財政委員會"])
+
+        def queries(articles):
+            Article.objects.all().delete()
+            for i in range(articles):
+                _classified(("甲", "乙", "丙")[i % 3], ("finance", "labor")[i % 2], source="ly")
+            with CaptureQueriesContext(connection) as ctx:
+                compute_profiles()
+            return len(ctx.captured_queries)
+
+        queries(1)
+        self.assertEqual(queries(5), queries(40))
+
+
+# --- 追問率 ---
+
+JUDGE = "fake-model#followup-v1#abcd1234"
+# 2026-10-03 中午：狀態依這一天決定
+FOLLOWUP_NOW = timezone.make_aware(datetime(2026, 10, 3, 12, 0))
+
+
+def _judge(classifier=JUDGE, passed=True):
+    from articles.models import FollowUpEvaluation
+
+    return FollowUpEvaluation.objects.create(
+        classifier=classifier, labeled=30, correct=28 if passed else 20,
+        accuracy=28 / 30 if passed else 20 / 30, passed=passed, ran_at=timezone.now())
+
+
+def _requests(speaker, followed=0, not_followed=0, pending=0, watching=0, classifier=JUDGE, **kw):
+    """speaker 當來源的要求，各種狀態幾項（以 FOLLOWUP_NOW 那天看）。每項各自一篇基礎文章。"""
+    from articles.models import FollowUp
+
+    later = _article(speaker, day="2026-09-20", brief=_brief(numbers=1), **kw)
+    # (到期日, 追問的那篇, 觀察期結束後確認過的時間)
+    shapes = ([(date(2026, 10, 20), later, None)] * followed
+              + [(date(2026, 6, 1), None, timezone.make_aware(datetime(2026, 9, 1)))] * not_followed
+              + [(date(2026, 10, 20), None, None)] * pending
+              + [(date(2026, 9, 1), None, None)] * watching)
+    for due, followed_by, checked_at in shapes:
+        article = _article(speaker, day="2026-03-01", brief=_brief(asks=1, deadlines=1), **kw)
+        FollowUp.objects.create(article=article, ask_index=0, request="要求0", deadline_text="一個月內",
+                                due_date=due, followed_by=followed_by, classifier=classifier,
+                                checked=[followed_by.id] if followed_by else [], checked_at=checked_at)
+
+
+class FollowupRateTests(TestCase):
+    def setUp(self):
+        _member("甲")
+        _member("乙")
+
+    def test_without_a_passing_judge_nothing_about_followups_is_computed(self):
+        _requests("甲", followed=3, not_followed=2)
+        _judge(passed=False)
+        report = compute_profiles(now=FOLLOWUP_NOW)
+        self.assertFalse(ProfileStat.objects.filter(indicator="followup_rate").exists())
+        self.assertIn("追問率：沒有通過的評估，不計算", str(report))
+
+    def test_followed_over_followed_plus_not_followed(self):
+        _requests("甲", followed=3, not_followed=2, pending=4, watching=1)
+        _judge()
+        report = compute_profiles(now=FOLLOWUP_NOW)
+        row = _stats("followup_rate")["甲"]
+        self.assertEqual((row.value, row.n, row.classifier), (60.0, 5, JUDGE))
+        # 沒有要求的人也有一列：分母是 0，沒有值
+        quiet = _stats("followup_rate")["乙"]
+        self.assertEqual((quiet.value, quiet.n, quiet.classifier), (None, 0, JUDGE))
+        self.assertIn(f"追問率：用判斷器 {JUDGE}（評估通過）", str(report))
+
+    def test_only_the_passing_judges_verdicts_count(self):
+        _requests("甲", followed=2, not_followed=1)
+        # 一個候選都沒有的：沒有判斷器也算數（程式篩出來的）
+        _requests("甲", not_followed=1, classifier="")
+        _judge()
+        compute_profiles(now=FOLLOWUP_NOW)
+        row = _stats("followup_rate")["甲"]
+        self.assertEqual((row.value, row.n), (50.0, 4))
+
+    def test_a_judge_switch_withholds_the_rate_instead_of_dropping_it(self):
+        """攔的 bug：換了判斷器之後，舊版本找到的追問不算、新的又還沒判到，只用判完的那幾項算，
+        追問率掉到 0%。他還有待重判的要求時不給值，也不進同儕（別人的百分位不被它拉低）。"""
+        names = [f"議員{i}" for i in range(5)]
+        for name in names:
+            _member(name)
+            _requests(name, followed=3, not_followed=2)
+        _requests("甲", followed=4, classifier="old#followup-v0#x")
+        _requests("甲", not_followed=5, classifier="")              # 沒有候選：不必重判
+        _judge()
+        compute_profiles(now=FOLLOWUP_NOW)
+        rows = _stats("followup_rate")
+        self.assertEqual((rows["甲"].value, rows["甲"].n, rows["甲"].percentile), (None, 0, None))
+        self.assertEqual({rows[name].peers for name in names}, {5})
+        self.assertEqual({rows[name].value for name in names}, {60.0})
+
+    def test_the_states_depend_on_the_day_of_the_recompute(self):
+        _requests("甲", followed=1, watching=1)
+        _judge()
+        compute_profiles(now=FOLLOWUP_NOW)
+        self.assertEqual(_stats("followup_rate")["甲"].n, 1)
+        # 觀察中的那項（到期 9/1，觀察期到 11/30）在 12/1 還沒有觀察期結束後的確認：仍不計入
+        compute_profiles(now=timezone.make_aware(datetime(2026, 12, 1, 12, 0)))
+        self.assertEqual(_stats("followup_rate")["甲"].n, 1)
+
+    def test_only_solo_requests_in_that_session_count(self):
+        _requests("甲", followed=1, not_followed=1)
+        _requests("甲", followed=3, meeting="第4屆第7次定期會")         # 別的會期
+        _judge()
+        compute_profiles(now=FOLLOWUP_NOW)
+        rows = {(s.session.name, s.value, s.n) for s in ProfileStat.objects.filter(
+            indicator="followup_rate", person__name="甲").select_related("session")}
+        self.assertEqual(rows, {("第4屆第8次定期會", 50.0, 2), ("第4屆第7次定期會", 100.0, 3)})
+
+    def test_small_samples_are_not_peers_and_the_rest_get_mid_rank(self):
+        names = [f"議員{i}" for i in range(6)]
+        for name in names:
+            _member(name)
+        # 議員 i（0～4）：5 項裡 i 項已追問 → 0、20、40、60、80%；議員 5 只有 4 項
+        for i, name in enumerate(names[:5]):
+            _requests(name, followed=i, not_followed=5 - i)
+        _requests(names[5], followed=4)
+        _judge()
+        compute_profiles(now=FOLLOWUP_NOW)
+        rows = _stats("followup_rate")
+        self.assertEqual([rows[name].percentile for name in names[:5]], [10.0, 30.0, 50.0, 70.0, 90.0])
+        self.assertEqual({rows[name].peers for name in names}, {5})
+        self.assertEqual((rows[names[5]].value, rows[names[5]].n, rows[names[5]].percentile),
+                         (100.0, 4, None))
+
+    def test_followup_rows_are_not_mistaken_for_topic_rows(self):
+        """攔的 bug：ProfileStat.classifier 非空原本只有議題列，追問率列不能讓議題被當成過期。"""
+        from articles.profiles import followup_stats_stale, topic_stats_stale
+
+        _requests("甲", followed=1)
+        _judge()
+        compute_profiles(now=FOLLOWUP_NOW)
+        self.assertFalse(topic_stats_stale())
+        self.assertFalse(followup_stats_stale())
+        _judge("new#followup-v2#y")
+        self.assertTrue(followup_stats_stale())
+        compute_profiles(now=FOLLOWUP_NOW)
+        self.assertFalse(followup_stats_stale())

@@ -1,0 +1,82 @@
+---
+/**
+ * 側寫的「院內紀錄」區塊（只有立委）：出席、提案、記名表決三組指標卡。
+ *
+ * 八、九張卡混在一起排，出席率會跟連署數擠在同一列，讀起來像同一種東西；所以照
+ * CHAMBER_GROUPS 分成三組，每組一個小標、一排卡片。卡片沿用 ProfileIndicator，
+ * 證據連結指到 /records/ 的紀錄清單頁。後端多給了表上沒有的指標也不丟，收在最後。
+ *
+ * 說明裡把「不代表好壞」寫在數字旁邊，不只寫在方法頁：出席率、跟黨團一致率這兩個
+ * 數字特別容易被讀成分數。提案與質詢一致率更容易被讀成「言行一致」的分數，所以有這張卡時
+ * 提案組底下多一句說明。它也是這一塊唯一有模型參與的數字（議案名稱由模型分領域），
+ * 區塊開頭的「由程式計數」要跟著改口。
+ */
+import type { ProfileBlock, ProfileIndicator as Indicator } from '../lib/types';
+import { ALIGNMENT_EMPTY, ALIGNMENT_KEY, CHAMBER_GROUPS, alignmentNote, chamberGroupOf } from '../lib/records';
+import ProfileIndicator from './ProfileIndicator.astro';
+
+interface Props {
+  block: ProfileBlock;
+  /** 最小樣本（API 的 min_sample），傳給指標卡 */
+  minSample: number;
+  /**
+   * 後端沒給一致率的 speech_n 時，質詢那一邊的退路篇數（議題分布各領域篇數的總和，見 records.ts
+   * 的 alignmentSpeeches）；兩個都沒有就是 null，卡片說明只寫提案件數
+   */
+  speeches: number | null;
+}
+
+const { block, minSample, speeches } = Astro.props;
+
+const groups: { key: string; title: string; indicators: Indicator[] }[] = [
+  ...CHAMBER_GROUPS.map((g) => ({
+    key: g.key,
+    title: g.title,
+    indicators: block.indicators.filter((i) => chamberGroupOf(i.key) === g.key),
+  })),
+  { key: 'other', title: '其他', indicators: block.indicators.filter((i) => chamberGroupOf(i.key) === null) },
+].filter((g) => g.indicators.length > 0);
+
+const hasAlignment = block.indicators.some((i) => i.key === ALIGNMENT_KEY);
+const link = 'whitespace-nowrap text-accent underline decoration-accent/40 underline-offset-4 transition-colors hover:decoration-accent';
+---
+
+<section aria-labelledby={`profile-${block.key}`}>
+  <h3 id={`profile-${block.key}`} class="text-[0.72rem] tracking-[0.2em] text-muted">{block.title}</h3>
+  <p class="mt-1 text-[0.78rem] leading-relaxed text-muted">
+    立法院的出席名單、委員提案與記名表決，只算他在任期間，由程式計數{hasAlignment && '（提案與質詢一致率另外用到模型替議案名稱分領域）'}。出席、投票多不代表比較好，跟黨團不一致也不代表好或壞。
+    <a href="/method#profile-chamber" class={link}>資料來源與公式</a>
+  </p>
+
+  <div class="mt-4 grid gap-5">
+    {
+      groups.map((g) => (
+        <div>
+          <h4 id={`profile-${block.key}-${g.key}`} class="text-[0.78rem] font-medium text-ink-2">
+            {g.title}
+          </h4>
+          {g.key === 'bills' && hasAlignment && (
+            <p class="mt-1 text-[0.75rem] leading-relaxed text-muted">
+              提案與質詢一致率比的是他主提案的領域分布與質詢的領域分布重疊多少。方向不同可能是分工，不代表言行不一。
+              <a href="/method#profile-chamber-alignment" class={link}>怎麼算</a>
+            </p>
+          )}
+          <ul class="mt-2 grid gap-3 sm:grid-cols-2 lg:grid-cols-3" aria-labelledby={`profile-${block.key}-${g.key}`}>
+            {g.indicators.map((ind) =>
+              ind.key === ALIGNMENT_KEY ? (
+                <ProfileIndicator
+                  indicator={ind}
+                  minSample={minSample}
+                  note={alignmentNote(ind, speeches)}
+                  emptyNote={ALIGNMENT_EMPTY}
+                />
+              ) : (
+                <ProfileIndicator indicator={ind} minSample={minSample} />
+              ),
+            )}
+          </ul>
+        </div>
+      ))
+    }
+  </div>
+</section>

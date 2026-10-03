@@ -1,0 +1,877 @@
+{
+  "_note": "完全虛構的院內紀錄示範資料（USE_FIXTURE=1 時用）。人名沿用 sample.json 的範例一～範例三，議案名稱都是「示範○○法」，會議代碼、議案編號、表決代碼與時間是編的，網址指向 example.invalid，不對應任何真實的會議、議案或表決。 每一筆是 chamber 底下一個人一個會期：caucus 是他那個會期的黨團（空字串＝沒有參加黨團），records 是五類紀錄；三讀（主提案中議案狀態含「三讀」的）、黨團有多數（kind 是 caucus_votes，跟後端一樣：他有投票、黨團也有多數的，一致率的分母）與跨黨投票（其中他的票跟黨團多數不同的）由 src/lib/records.ts 照後端的定義篩出來，紀錄清單也由它轉成後端 RecordListOut 的形狀，各指標的值與 n 也由它從這些紀錄算，所以證據頁的筆數一定等於指標的 n；只有同儕人數（peers，default 是沒列的指標）與百分位（percentiles）是編的。 範例一（person_id 1）在第11屆第5會期（session 3）有黨團，示範黨團多數、並列與跨黨投票；在第11屆第4會期（session 2）沒有參加黨團，示範「沒有參加黨團」與委員會出席率的「樣本不足」。 提案與質詢一致率：bill_classifier 是假資料的議案分類器與它的評估（照後端只認通過門檻的；拿掉或把 accuracy 改到 0.8 以下，就沒有領域、也沒有一致率的卡片）；主提案的 area 是議案分類器給的領域代碼（沒有 area 的是還沒分類），清單照後端的形狀放在 topic（{key, label}，只有主提案清單標），質詢那一邊的分布是 sample.json 同一個會期的議題分布，一致率的值與 n 也由 src/lib/records.ts 照後端的重疊公式算，只有同儕人數與百分位是編的。第11屆第5會期示範「質詢不到 5 篇」（他只有 1 篇分過議題的質詢；5 件主提案裡 4 件分過領域）；第11屆第4會期示範有值、有百分位的版面，7 件主提案裡 6 件分過領域、1 件還沒分類。",
+  "bill_classifier": {
+    "name": "qwen3.5:9b#topic-v1",
+    "accuracy": 0.85,
+    "labeled": 20,
+    "evaluated_at": "2026-10-01T22:40:00+08:00"
+  },
+  "chamber": [
+    {
+      "person_id": 1,
+      "session_id": 3,
+      "caucus": "民主進步黨黨團",
+      "peers": {
+        "default": 113,
+        "caucus_agreement": 108,
+        "caucus_defections": 108,
+        "proposal_alignment": 61
+      },
+      "percentiles": {
+        "plenary_attendance": 38.1,
+        "committee_attendance": 22.4,
+        "bills_proposed": 41.6,
+        "bills_cosigned": 35.0,
+        "bills_passed": 71.2,
+        "vote_participation": 30.5,
+        "caucus_agreement": 9.8,
+        "caucus_defections": 88.7,
+        "proposal_alignment": 50.0
+      },
+      "records": {
+        "plenary": [
+          {
+            "code": "院會-11-5-1",
+            "date": "2026-02-24",
+            "name": "第11屆第5會期第1次會議",
+            "unit": "院會",
+            "attended": true,
+            "url": "https://ppg.example.invalid/ppg/sittings/950001/details"
+          },
+          {
+            "code": "院會-11-5-2",
+            "date": "2026-03-10",
+            "name": "第11屆第5會期第2次會議",
+            "unit": "院會",
+            "attended": true,
+            "url": "https://ppg.example.invalid/ppg/sittings/950002/details"
+          },
+          {
+            "code": "院會-11-5-3",
+            "date": "2026-03-24",
+            "name": "第11屆第5會期第3次會議",
+            "unit": "院會",
+            "attended": true,
+            "url": "https://ppg.example.invalid/ppg/sittings/950003/details"
+          },
+          {
+            "code": "院會-11-5-4",
+            "date": "2026-04-07",
+            "name": "第11屆第5會期第4次會議",
+            "unit": "院會",
+            "attended": true,
+            "url": "https://ppg.example.invalid/ppg/sittings/950004/details"
+          },
+          {
+            "code": "院會-11-5-5",
+            "date": "2026-04-21",
+            "name": "第11屆第5會期第5次會議",
+            "unit": "院會",
+            "attended": true,
+            "url": "https://ppg.example.invalid/ppg/sittings/950005/details"
+          },
+          {
+            "code": "院會-11-5-6",
+            "date": "2026-05-05",
+            "name": "第11屆第5會期第6次會議",
+            "unit": "院會",
+            "attended": true,
+            "url": "https://ppg.example.invalid/ppg/sittings/950006/details"
+          },
+          {
+            "code": "院會-11-5-7",
+            "date": "2026-05-19",
+            "name": "第11屆第5會期第7次會議",
+            "unit": "院會",
+            "attended": false,
+            "url": "https://ppg.example.invalid/ppg/sittings/950007/details"
+          },
+          {
+            "code": "院會-11-5-8",
+            "date": "2026-06-02",
+            "name": "第11屆第5會期第8次會議",
+            "unit": "院會",
+            "attended": true,
+            "url": "https://ppg.example.invalid/ppg/sittings/950008/details"
+          },
+          {
+            "code": "院會-11-5-9",
+            "date": "2026-06-16",
+            "name": "第11屆第5會期第9次會議",
+            "unit": "院會",
+            "attended": true,
+            "url": "https://ppg.example.invalid/ppg/sittings/950009/details"
+          },
+          {
+            "code": "院會-11-5-10",
+            "date": "2026-06-30",
+            "name": "第11屆第5會期第10次會議",
+            "unit": "院會",
+            "attended": true,
+            "url": "https://ppg.example.invalid/ppg/sittings/950010/details"
+          },
+          {
+            "code": "院會-11-5-11",
+            "date": "2026-07-14",
+            "name": "第11屆第5會期第11次會議",
+            "unit": "院會",
+            "attended": true,
+            "url": "https://ppg.example.invalid/ppg/sittings/950011/details"
+          },
+          {
+            "code": "院會-11-5-12",
+            "date": "2026-07-28",
+            "name": "第11屆第5會期第12次會議",
+            "unit": "院會",
+            "attended": true,
+            "url": "https://ppg.example.invalid/ppg/sittings/950012/details"
+          }
+        ],
+        "committee": [
+          {
+            "code": "委員會-11-5-90-1",
+            "date": "2026-03-02",
+            "name": "第11屆第5會期財政委員會第1次全體委員會議",
+            "unit": "財政委員會",
+            "attended": true,
+            "url": "https://ppg.example.invalid/ppg/sittings/959001/details"
+          },
+          {
+            "code": "委員會-11-5-90-2",
+            "date": "2026-03-11",
+            "name": "第11屆第5會期財政委員會第2次全體委員會議",
+            "unit": "財政委員會",
+            "attended": true,
+            "url": "https://ppg.example.invalid/ppg/sittings/959002/details"
+          },
+          {
+            "code": "委員會-11-5-90-3",
+            "date": "2026-03-20",
+            "name": "第11屆第5會期財政委員會第3次全體委員會議",
+            "unit": "財政委員會",
+            "attended": false,
+            "url": "https://ppg.example.invalid/ppg/sittings/959003/details"
+          },
+          {
+            "code": "委員會-11-5-90-4",
+            "date": "2026-03-29",
+            "name": "第11屆第5會期財政、經濟委員會第1次聯席會議",
+            "unit": "財政委員會、經濟委員會",
+            "attended": true,
+            "url": "https://ppg.example.invalid/ppg/sittings/959004/details"
+          },
+          {
+            "code": "委員會-11-5-90-5",
+            "date": "2026-04-07",
+            "name": "第11屆第5會期財政委員會第5次全體委員會議",
+            "unit": "財政委員會",
+            "attended": true,
+            "url": "https://ppg.example.invalid/ppg/sittings/959005/details"
+          },
+          {
+            "code": "委員會-11-5-90-6",
+            "date": "2026-04-16",
+            "name": "第11屆第5會期財政委員會第6次全體委員會議",
+            "unit": "財政委員會",
+            "attended": false,
+            "url": "https://ppg.example.invalid/ppg/sittings/959006/details"
+          },
+          {
+            "code": "委員會-11-5-90-7",
+            "date": "2026-04-25",
+            "name": "第11屆第5會期財政委員會第7次全體委員會議",
+            "unit": "財政委員會",
+            "attended": true,
+            "url": "https://ppg.example.invalid/ppg/sittings/959007/details"
+          },
+          {
+            "code": "委員會-11-5-90-8",
+            "date": "2026-05-04",
+            "name": "第11屆第5會期財政委員會第8次全體委員會議",
+            "unit": "財政委員會",
+            "attended": true,
+            "url": "https://ppg.example.invalid/ppg/sittings/959008/details"
+          }
+        ],
+        "proposed": [
+          {
+            "bill_no": "202119050001",
+            "name": "「示範所得稅法第十七條條文修正草案」，請審議案。",
+            "status": "三讀",
+            "proposers": [
+              "範例一"
+            ],
+            "area": "finance",
+            "url": "https://ppg.example.invalid/ppg/bills/202119050001/details"
+          },
+          {
+            "bill_no": "202119050002",
+            "name": "「示範預算法第二十條條文修正草案」，請審議案。",
+            "status": "審查完畢",
+            "proposers": [
+              "範例一"
+            ],
+            "area": "finance",
+            "url": "https://ppg.example.invalid/ppg/bills/202119050002/details"
+          },
+          {
+            "bill_no": "202119050003",
+            "name": "「示範稅捐稽徵法第十一條之一條文修正草案」，請審議案。",
+            "status": "排入院會",
+            "proposers": [
+              "範例一",
+              "範例二"
+            ],
+            "area": "finance",
+            "url": "https://ppg.example.invalid/ppg/bills/202119050003/details"
+          },
+          {
+            "bill_no": "202119050004",
+            "name": "「示範公共債務法第五條條文修正草案」，請審議案。",
+            "status": "交付審查",
+            "proposers": [
+              "範例一"
+            ],
+            "area": "finance",
+            "url": "https://ppg.example.invalid/ppg/bills/202119050004/details"
+          },
+          {
+            "bill_no": "202119050005",
+            "name": "「示範地方稅法通則部分條文修正草案」，請審議案。",
+            "status": "交付審查",
+            "proposers": [
+              "範例一"
+            ],
+            "url": "https://ppg.example.invalid/ppg/bills/202119050005/details"
+          }
+        ],
+        "cosigned": [
+          {
+            "bill_no": "202119060001",
+            "name": "「示範交通安全法第十二條條文修正草案」，請審議案。",
+            "status": "三讀",
+            "proposers": [
+              "範例二"
+            ],
+            "url": "https://ppg.example.invalid/ppg/bills/202119060001/details"
+          },
+          {
+            "bill_no": "202119060002",
+            "name": "「示範長照服務法部分條文修正草案」，請審議案。",
+            "status": "審查完畢",
+            "proposers": [
+              "範例三"
+            ],
+            "url": "https://ppg.example.invalid/ppg/bills/202119060002/details"
+          },
+          {
+            "bill_no": "202119060003",
+            "name": "「示範國土計畫法第四十五條條文修正草案」，請審議案。",
+            "status": "三讀",
+            "proposers": [
+              "範例二"
+            ],
+            "url": "https://ppg.example.invalid/ppg/bills/202119060003/details"
+          },
+          {
+            "bill_no": "202119060004",
+            "name": "「示範食品衛生管理法第八條條文修正草案」，請審議案。",
+            "status": "交付審查",
+            "proposers": [
+              "範例三"
+            ],
+            "url": "https://ppg.example.invalid/ppg/bills/202119060004/details"
+          },
+          {
+            "bill_no": "202119060005",
+            "name": "「示範勞動基準法第三十二條條文修正草案」，請審議案。",
+            "status": "三讀",
+            "proposers": [
+              "範例二",
+              "範例三"
+            ],
+            "url": "https://ppg.example.invalid/ppg/bills/202119060005/details"
+          },
+          {
+            "bill_no": "202119060006",
+            "name": "「示範海岸管理法部分條文修正草案」，請審議案。",
+            "status": "交付審查",
+            "proposers": [
+              "範例二"
+            ],
+            "url": "https://ppg.example.invalid/ppg/bills/202119060006/details"
+          },
+          {
+            "bill_no": "202119060007",
+            "name": "「示範資通安全管理法第十八條條文修正草案」，請審議案。",
+            "status": "排入院會",
+            "proposers": [
+              "範例三"
+            ],
+            "url": "https://ppg.example.invalid/ppg/bills/202119060007/details"
+          },
+          {
+            "bill_no": "202119060008",
+            "name": "「示範都市更新條例第六十五條條文修正草案」，請審議案。",
+            "status": "三讀",
+            "proposers": [
+              "範例二"
+            ],
+            "url": "https://ppg.example.invalid/ppg/bills/202119060008/details"
+          },
+          {
+            "bill_no": "202119060009",
+            "name": "「示範教育經費編列與管理法第三條條文修正草案」，請審議案。",
+            "status": "退回程序",
+            "proposers": [
+              "範例三"
+            ],
+            "url": "https://ppg.example.invalid/ppg/bills/202119060009/details"
+          }
+        ],
+        "votes": [
+          {
+            "code": "1150310_00001_107",
+            "meeting_code": "院會-11-5-2",
+            "date": "2026-03-10",
+            "voted_at": "中華民國115年3月10日 下午3時07分13秒",
+            "topic": "討論事項第一案　示範交通安全法第十二條條文修正草案，照審查會意見通過",
+            "tally": {
+              "yes": 61,
+              "no": 48,
+              "abstain": 0
+            },
+            "vote": "yes",
+            "caucus_majority": "yes",
+            "url": "https://ppg.example.invalid/ppg/publications/official-gazettes/1150310/details"
+          },
+          {
+            "code": "1150310_00001_114",
+            "meeting_code": "院會-11-5-2",
+            "date": "2026-03-10",
+            "voted_at": "中華民國115年3月10日 下午4時14分26秒",
+            "topic": "討論事項第二案　示範長照服務法部分條文修正草案，逕付二讀",
+            "tally": {
+              "yes": 59,
+              "no": 50,
+              "abstain": 0
+            },
+            "vote": "yes",
+            "caucus_majority": "yes",
+            "url": "https://ppg.example.invalid/ppg/publications/official-gazettes/1150310/details"
+          },
+          {
+            "code": "1150324_00001_121",
+            "meeting_code": "院會-11-5-3",
+            "date": "2026-03-24",
+            "voted_at": "中華民國115年3月24日 下午5時21分39秒",
+            "topic": "討論事項第三案　示範預算法第二十條條文修正草案，交付財政委員會審查",
+            "tally": {
+              "yes": 60,
+              "no": 49,
+              "abstain": 0
+            },
+            "vote": "no",
+            "caucus_majority": "no",
+            "url": "https://ppg.example.invalid/ppg/publications/official-gazettes/1150324/details"
+          },
+          {
+            "code": "1150407_00001_128",
+            "meeting_code": "院會-11-5-4",
+            "date": "2026-04-07",
+            "voted_at": "中華民國115年4月7日 下午2時28分52秒",
+            "topic": "報告事項第五案　示範能源管理條例修正草案，退回程序委員會",
+            "tally": {
+              "yes": 55,
+              "no": 52,
+              "abstain": 1
+            },
+            "vote": null,
+            "caucus_majority": "yes",
+            "url": "https://ppg.example.invalid/ppg/publications/official-gazettes/1150407/details"
+          },
+          {
+            "code": "1150421_00001_135",
+            "meeting_code": "院會-11-5-5",
+            "date": "2026-04-21",
+            "voted_at": "中華民國115年4月21日 下午3時35分05秒",
+            "topic": "討論事項第一案　示範都市更新條例第六十五條條文修正草案，照協商結論通過",
+            "tally": {
+              "yes": 102,
+              "no": 0,
+              "abstain": 3
+            },
+            "vote": "yes",
+            "caucus_majority": "yes",
+            "url": "https://ppg.example.invalid/ppg/publications/official-gazettes/1150421/details"
+          },
+          {
+            "code": "1150421_00001_142",
+            "meeting_code": "院會-11-5-5",
+            "date": "2026-04-21",
+            "voted_at": "中華民國115年4月21日 下午4時42分18秒",
+            "topic": "討論事項第四案　示範食品衛生管理法修正動議",
+            "tally": {
+              "yes": 57,
+              "no": 51,
+              "abstain": 0
+            },
+            "vote": "no",
+            "caucus_majority": "yes",
+            "url": "https://ppg.example.invalid/ppg/publications/official-gazettes/1150421/details"
+          },
+          {
+            "code": "1150505_00001_149",
+            "meeting_code": "院會-11-5-6",
+            "date": "2026-05-05",
+            "voted_at": "中華民國115年5月5日 下午5時49分31秒",
+            "topic": "討論事項第二案　示範國土計畫法第四十五條條文修正草案，照審查會意見通過",
+            "tally": {
+              "yes": 63,
+              "no": 45,
+              "abstain": 0
+            },
+            "vote": "yes",
+            "caucus_majority": "yes",
+            "url": "https://ppg.example.invalid/ppg/publications/official-gazettes/1150505/details"
+          },
+          {
+            "code": "1150602_00001_156",
+            "meeting_code": "院會-11-5-8",
+            "date": "2026-06-02",
+            "voted_at": "中華民國115年6月2日 下午2時56分44秒",
+            "topic": "臨時提案第一案　示範公共工程品質稽核決議",
+            "tally": {
+              "yes": 58,
+              "no": 50,
+              "abstain": 1
+            },
+            "vote": "yes",
+            "caucus_majority": null,
+            "url": "https://ppg.example.invalid/ppg/publications/official-gazettes/1150602/details"
+          },
+          {
+            "code": "1150602_00001_163",
+            "meeting_code": "院會-11-5-8",
+            "date": "2026-06-02",
+            "voted_at": "中華民國115年6月2日 下午3時03分57秒",
+            "topic": "討論事項第三案　示範所得稅法第十七條條文修正草案，維持原決議",
+            "tally": {
+              "yes": 59,
+              "no": 49,
+              "abstain": 0
+            },
+            "vote": "no",
+            "caucus_majority": "no",
+            "url": "https://ppg.example.invalid/ppg/publications/official-gazettes/1150602/details"
+          },
+          {
+            "code": "1150616_00001_170",
+            "meeting_code": "院會-11-5-9",
+            "date": "2026-06-16",
+            "voted_at": "中華民國115年6月16日 下午4時10分10秒",
+            "topic": "討論事項第一案　示範教育經費編列與管理法修正動議",
+            "tally": {
+              "yes": 50,
+              "no": 58,
+              "abstain": 0
+            },
+            "vote": "yes",
+            "caucus_majority": "no",
+            "url": "https://ppg.example.invalid/ppg/publications/official-gazettes/1150616/details"
+          },
+          {
+            "code": "1150630_00001_177",
+            "meeting_code": "院會-11-5-10",
+            "date": "2026-06-30",
+            "voted_at": "中華民國115年6月30日 下午5時17分23秒",
+            "topic": "討論事項第五案　示範勞動基準法第三十二條條文修正草案，照審查會意見通過",
+            "tally": {
+              "yes": 108,
+              "no": 0,
+              "abstain": 0
+            },
+            "vote": "yes",
+            "caucus_majority": "yes",
+            "url": "https://ppg.example.invalid/ppg/publications/official-gazettes/1150630/details"
+          },
+          {
+            "code": "1150714_00001_184",
+            "meeting_code": "院會-11-5-11",
+            "date": "2026-07-14",
+            "voted_at": "中華民國115年7月14日 下午2時24分36秒",
+            "topic": "討論事項第二案　示範海岸管理法修正草案，交付經濟委員會審查",
+            "tally": {
+              "yes": 61,
+              "no": 47,
+              "abstain": 0
+            },
+            "vote": "no",
+            "caucus_majority": "no",
+            "url": "https://ppg.example.invalid/ppg/publications/official-gazettes/1150714/details"
+          },
+          {
+            "code": "1150728_00001_191",
+            "meeting_code": "院會-11-5-12",
+            "date": "2026-07-28",
+            "voted_at": "中華民國115年7月28日 下午3時31分49秒",
+            "topic": "討論事項第一案　示範資通安全管理法第十八條條文修正草案，照協商結論通過",
+            "tally": {
+              "yes": 99,
+              "no": 4,
+              "abstain": 2
+            },
+            "vote": "yes",
+            "caucus_majority": "yes",
+            "url": "https://ppg.example.invalid/ppg/publications/official-gazettes/1150728/details"
+          },
+          {
+            "code": "1150728_00001_198",
+            "meeting_code": "院會-11-5-12",
+            "date": "2026-07-28",
+            "voted_at": "中華民國115年7月28日 下午4時38分02秒",
+            "topic": "討論事項第三案　示範中央政府總預算案附屬單位預算決議",
+            "tally": {
+              "yes": 64,
+              "no": 44,
+              "abstain": 0
+            },
+            "vote": "yes",
+            "caucus_majority": "yes",
+            "url": "https://ppg.example.invalid/ppg/publications/official-gazettes/1150728/details"
+          }
+        ]
+      }
+    },
+    {
+      "person_id": 1,
+      "session_id": 2,
+      "caucus": "",
+      "peers": {
+        "default": 113,
+        "committee_attendance": 109,
+        "proposal_alignment": 64
+      },
+      "percentiles": {
+        "plenary_attendance": 76.5,
+        "bills_proposed": 22.1,
+        "bills_cosigned": 18.6,
+        "bills_passed": 30.1,
+        "vote_participation": 81.0,
+        "proposal_alignment": 57.3
+      },
+      "records": {
+        "plenary": [
+          {
+            "code": "院會-11-4-1",
+            "date": "2025-09-09",
+            "name": "第11屆第4會期第1次會議",
+            "unit": "院會",
+            "attended": true,
+            "url": "https://ppg.example.invalid/ppg/sittings/940001/details"
+          },
+          {
+            "code": "院會-11-4-2",
+            "date": "2025-09-23",
+            "name": "第11屆第4會期第2次會議",
+            "unit": "院會",
+            "attended": true,
+            "url": "https://ppg.example.invalid/ppg/sittings/940002/details"
+          },
+          {
+            "code": "院會-11-4-3",
+            "date": "2025-10-07",
+            "name": "第11屆第4會期第3次會議",
+            "unit": "院會",
+            "attended": true,
+            "url": "https://ppg.example.invalid/ppg/sittings/940003/details"
+          },
+          {
+            "code": "院會-11-4-4",
+            "date": "2025-10-21",
+            "name": "第11屆第4會期第4次會議",
+            "unit": "院會",
+            "attended": true,
+            "url": "https://ppg.example.invalid/ppg/sittings/940004/details"
+          },
+          {
+            "code": "院會-11-4-5",
+            "date": "2025-11-04",
+            "name": "第11屆第4會期第5次會議",
+            "unit": "院會",
+            "attended": true,
+            "url": "https://ppg.example.invalid/ppg/sittings/940005/details"
+          },
+          {
+            "code": "院會-11-4-6",
+            "date": "2025-11-18",
+            "name": "第11屆第4會期第6次會議",
+            "unit": "院會",
+            "attended": true,
+            "url": "https://ppg.example.invalid/ppg/sittings/940006/details"
+          },
+          {
+            "code": "院會-11-4-7",
+            "date": "2025-12-02",
+            "name": "第11屆第4會期第7次會議",
+            "unit": "院會",
+            "attended": true,
+            "url": "https://ppg.example.invalid/ppg/sittings/940007/details"
+          },
+          {
+            "code": "院會-11-4-8",
+            "date": "2025-12-16",
+            "name": "第11屆第4會期第8次會議",
+            "unit": "院會",
+            "attended": true,
+            "url": "https://ppg.example.invalid/ppg/sittings/940008/details"
+          },
+          {
+            "code": "院會-11-4-9",
+            "date": "2025-12-30",
+            "name": "第11屆第4會期第9次會議",
+            "unit": "院會",
+            "attended": true,
+            "url": "https://ppg.example.invalid/ppg/sittings/940009/details"
+          },
+          {
+            "code": "院會-11-4-10",
+            "date": "2026-01-13",
+            "name": "第11屆第4會期第10次會議",
+            "unit": "院會",
+            "attended": true,
+            "url": "https://ppg.example.invalid/ppg/sittings/940010/details"
+          }
+        ],
+        "committee": [
+          {
+            "code": "委員會-11-4-90-1",
+            "date": "2025-09-15",
+            "name": "第11屆第4會期交通委員會第1次全體委員會議",
+            "unit": "交通委員會",
+            "attended": true,
+            "url": "https://ppg.example.invalid/ppg/sittings/949001/details"
+          },
+          {
+            "code": "委員會-11-4-90-2",
+            "date": "2025-09-24",
+            "name": "第11屆第4會期交通委員會第2次全體委員會議",
+            "unit": "交通委員會",
+            "attended": false,
+            "url": "https://ppg.example.invalid/ppg/sittings/949002/details"
+          },
+          {
+            "code": "委員會-11-4-90-3",
+            "date": "2025-10-03",
+            "name": "第11屆第4會期交通委員會第3次全體委員會議",
+            "unit": "交通委員會",
+            "attended": true,
+            "url": "https://ppg.example.invalid/ppg/sittings/949003/details"
+          }
+        ],
+        "proposed": [
+          {
+            "bill_no": "202119040001",
+            "name": "「示範道路交通管理處罰條例第三十五條條文修正草案」，請審議案。",
+            "status": "交付審查",
+            "proposers": [
+              "範例一"
+            ],
+            "area": "transport",
+            "url": "https://ppg.example.invalid/ppg/bills/202119040001/details"
+          },
+          {
+            "bill_no": "202119040002",
+            "name": "「示範公路法第七十七條條文修正草案」，請審議案。",
+            "status": "交付審查",
+            "proposers": [
+              "範例一"
+            ],
+            "area": "transport",
+            "url": "https://ppg.example.invalid/ppg/bills/202119040002/details"
+          },
+          {
+            "bill_no": "202119040003",
+            "name": "「示範國防法第二十二條條文修正草案」，請審議案。",
+            "status": "交付審查",
+            "proposers": [
+              "範例一"
+            ],
+            "area": "defense",
+            "url": "https://ppg.example.invalid/ppg/bills/202119040003/details"
+          },
+          {
+            "bill_no": "202119040004",
+            "name": "「示範兵役法第四條條文修正草案」，請審議案。",
+            "status": "交付審查",
+            "proposers": [
+              "範例一",
+              "範例二"
+            ],
+            "area": "defense",
+            "url": "https://ppg.example.invalid/ppg/bills/202119040004/details"
+          },
+          {
+            "bill_no": "202119040005",
+            "name": "「示範關稅法第四十九條條文修正草案」，請審議案。",
+            "status": "交付審查",
+            "proposers": [
+              "範例一"
+            ],
+            "area": "finance",
+            "url": "https://ppg.example.invalid/ppg/bills/202119040005/details"
+          },
+          {
+            "bill_no": "202119040006",
+            "name": "「示範長期照顧服務法第十五條條文修正草案」，請審議案。",
+            "status": "交付審查",
+            "proposers": [
+              "範例一"
+            ],
+            "area": "welfare",
+            "url": "https://ppg.example.invalid/ppg/bills/202119040006/details"
+          },
+          {
+            "bill_no": "202119040007",
+            "name": "「示範資通安全管理法第十八條條文修正草案」，請審議案。",
+            "status": "交付審查",
+            "proposers": [
+              "範例一"
+            ],
+            "url": "https://ppg.example.invalid/ppg/bills/202119040007/details"
+          }
+        ],
+        "cosigned": [
+          {
+            "bill_no": "202119030001",
+            "name": "「示範農業保險法部分條文修正草案」，請審議案。",
+            "status": "三讀",
+            "proposers": [
+              "範例二"
+            ],
+            "url": "https://ppg.example.invalid/ppg/bills/202119030001/details"
+          },
+          {
+            "bill_no": "202119030002",
+            "name": "「示範環境教育法第十九條條文修正草案」，請審議案。",
+            "status": "交付審查",
+            "proposers": [
+              "範例三"
+            ],
+            "url": "https://ppg.example.invalid/ppg/bills/202119030002/details"
+          },
+          {
+            "bill_no": "202119030003",
+            "name": "「示範大眾捷運法第十條條文修正草案」，請審議案。",
+            "status": "審查完畢",
+            "proposers": [
+              "範例二"
+            ],
+            "url": "https://ppg.example.invalid/ppg/bills/202119030003/details"
+          },
+          {
+            "bill_no": "202119030004",
+            "name": "「示範鐵路法部分條文修正草案」，請審議案。",
+            "status": "交付審查",
+            "proposers": [
+              "範例三"
+            ],
+            "url": "https://ppg.example.invalid/ppg/bills/202119030004/details"
+          }
+        ],
+        "votes": [
+          {
+            "code": "1140923_00001_107",
+            "meeting_code": "院會-11-4-2",
+            "date": "2025-09-23",
+            "voted_at": "中華民國114年9月23日 下午3時07分13秒",
+            "topic": "討論事項第一案　示範道路交通管理處罰條例第三十五條條文修正草案，照審查會意見通過",
+            "tally": {
+              "yes": 63,
+              "no": 45,
+              "abstain": 0
+            },
+            "vote": "yes",
+            "caucus_majority": null,
+            "url": "https://ppg.example.invalid/ppg/publications/official-gazettes/1140923/details"
+          },
+          {
+            "code": "1141007_00001_114",
+            "meeting_code": "院會-11-4-3",
+            "date": "2025-10-07",
+            "voted_at": "中華民國114年10月7日 下午4時14分26秒",
+            "topic": "討論事項第二案　示範公職人員選舉罷免法修正動議",
+            "tally": {
+              "yes": 58,
+              "no": 50,
+              "abstain": 0
+            },
+            "vote": "no",
+            "caucus_majority": null,
+            "url": "https://ppg.example.invalid/ppg/publications/official-gazettes/1141007/details"
+          },
+          {
+            "code": "1141021_00001_121",
+            "meeting_code": "院會-11-4-4",
+            "date": "2025-10-21",
+            "voted_at": "中華民國114年10月21日 下午5時21分39秒",
+            "topic": "討論事項第三案　示範農業保險法修正草案，逕付二讀",
+            "tally": {
+              "yes": 104,
+              "no": 0,
+              "abstain": 2
+            },
+            "vote": "yes",
+            "caucus_majority": null,
+            "url": "https://ppg.example.invalid/ppg/publications/official-gazettes/1141021/details"
+          },
+          {
+            "code": "1141118_00001_128",
+            "meeting_code": "院會-11-4-6",
+            "date": "2025-11-18",
+            "voted_at": "中華民國114年11月18日 下午2時28分52秒",
+            "topic": "報告事項第七案　示範環境教育法修正草案，退回程序委員會",
+            "tally": {
+              "yes": 51,
+              "no": 57,
+              "abstain": 0
+            },
+            "vote": "no",
+            "caucus_majority": null,
+            "url": "https://ppg.example.invalid/ppg/publications/official-gazettes/1141118/details"
+          },
+          {
+            "code": "1141216_00001_135",
+            "meeting_code": "院會-11-4-8",
+            "date": "2025-12-16",
+            "voted_at": "中華民國114年12月16日 下午3時35分05秒",
+            "topic": "討論事項第一案　示範稅捐稽徵法第十一條條文修正草案，照協商結論通過",
+            "tally": {
+              "yes": 66,
+              "no": 30,
+              "abstain": 9
+            },
+            "vote": "abstain",
+            "caucus_majority": null,
+            "url": "https://ppg.example.invalid/ppg/publications/official-gazettes/1141216/details"
+          },
+          {
+            "code": "1141230_00001_142",
+            "meeting_code": "院會-11-4-9",
+            "date": "2025-12-30",
+            "voted_at": "中華民國114年12月30日 下午4時42分18秒",
+            "topic": "討論事項第四案　示範中央政府總預算案審查報告",
+            "tally": {
+              "yes": 60,
+              "no": 48,
+              "abstain": 0
+            },
+            "vote": "yes",
+            "caucus_majority": null,
+            "url": "https://ppg.example.invalid/ppg/publications/official-gazettes/1141230/details"
+          }
+        ]
+      }
+    }
+  ]
+}

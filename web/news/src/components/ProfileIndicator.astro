@@ -8,26 +8,53 @@
  * 底下有一行字完整寫出來，讀螢幕報讀器或不看顏色的人都拿得到。
  */
 import type { ProfileIndicator } from '../lib/types';
-import { safeInternalPath } from '../lib/api';
+import { evidenceHref } from '../lib/api';
 import { formatMetric } from '../lib/format';
+import { isRecordsPath, reasonText as reasonTextOf, recordEvidenceLabel } from '../lib/records';
 
 interface Props {
   indicator: ProfileIndicator;
   /** 最小樣本（API 的 min_sample），寫進「樣本不足（需至少 5 篇）」 */
   minSample: number;
+  /**
+   * 證據連結的字。預設照 n 的單位寫（「看這 12 篇」）；證據不是文章清單的指標
+   * （追問率指到側寫裡的追問清單）由呼叫端給
+   */
+  evidenceLabel?: string;
+  /** n 是 0 時底下那行字。預設照 n 的單位寫「沒有可計算的報導／數字」 */
+  emptyNote?: string;
+  /**
+   * n 底下多一行說明。提案與質詢一致率拿兩邊比，只寫一個 n 讀者看不出另一邊有多少，
+   * 由呼叫端寫「提案 N 件、質詢 M 篇」
+   */
+  note?: string;
 }
 
-const { indicator: ind, minSample } = Astro.props;
+const { indicator: ind, minSample, evidenceLabel: labelOverride, emptyNote, note } = Astro.props;
 
 const hasValue = ind.value !== null;
+// 值是空的原因（後端給）：委員會職掌或委員會出席率沒有委員會資料、黨團一致率與跨黨投票沒有參加
+// 黨團、追問率換了判斷器正在重判、一致率的質詢不夠——都不是 n 的樣本不足，照實說
+const reasonText = reasonTextOf(ind.reason, minSample);
 const pct = ind.percentile;
 // 頁面四捨五入到整數；長條的位置用原值，兩個同儕在 63.5 與 64.4 時記號不會疊在一起
 const pctLabel = pct !== null ? `第 ${Math.round(pct)} 百分位，在 ${ind.peers} 位同儕中` : '';
-const safeEvidence = ind.n > 0 ? safeInternalPath(ind.evidence_url) : null;
-// 跳到清單：側寫區塊在清單上面，不跳的話點了只會回到頁首
-const evidence = safeEvidence && !safeEvidence.includes('#') ? `${safeEvidence}#articles` : safeEvidence;
-// 證據連結列出的是文章；「有來源的數字占比」的 n 是數字個數，不能寫成「看這 23 篇」
-const evidenceLabel = ind.n_unit === '篇' ? `看這 ${ind.n} 篇` : '看這些數字出自哪幾篇';
+const evidence = ind.n > 0 ? evidenceHref(ind.evidence_url) : null;
+// 證據連結列出的是文章；「有來源的數字占比」的 n 是數字個數，不能寫成「看這 23 篇」。
+// 院內紀錄連到紀錄清單頁，寫法照紀錄的單位（場、件、次表決）；呼叫端另外給的（追問率）優先
+const evidenceLabel =
+  labelOverride ??
+  (isRecordsPath(ind.evidence_url)
+    ? recordEvidenceLabel(ind)
+    : ind.n_unit === '篇'
+      ? `看這 ${ind.n} 篇`
+      : '看這些數字出自哪幾篇');
+// n 是 0 時沒有連結，改寫一句「沒有…」：呼叫端給的優先，院內紀錄照紀錄寫，其他維持「報導／數字」
+const emptyText =
+  emptyNote ??
+  (isRecordsPath(ind.evidence_url)
+    ? '這個會期沒有紀錄可列'
+    : `這個會期沒有可計算的${ind.n_unit === '篇' ? '報導' : '數字'}`);
 // 百分號緊貼數字，其他單位留一點空隙
 const tightUnit = ind.unit === '%';
 ---
@@ -61,6 +88,7 @@ const tightUnit = ind.unit === '%';
     }
   </p>
   <p class="tabular mt-0.5 text-[0.72rem] text-muted">n = {ind.n} {ind.n_unit}</p>
+  {note && <p class="tabular text-[0.72rem] text-muted">{note}</p>}
 
   {/* 桌面版三格並排時，長條與「樣本不足」等高，底下的證據連結才會對齊；手機一格一列就不必留白 */}
   <div class="mt-3 sm:min-h-[3.1rem]">
@@ -100,7 +128,11 @@ const tightUnit = ind.unit === '%';
             <path d="M12 11v5" stroke-linecap="round" />
             <circle cx="12" cy="7.8" r="0.9" fill="currentColor" stroke="none" />
           </svg>
-          {ind.sample_ok ? '同儕不足，不比較' : `樣本不足（需至少 ${minSample} ${ind.n_unit}）`}
+          {reasonText
+            ? reasonText
+            : ind.sample_ok
+              ? '同儕不足，不比較'
+              : `樣本不足（需至少 ${minSample} ${ind.n_unit}）`}
         </p>
       )
     }
@@ -116,7 +148,9 @@ const tightUnit = ind.unit === '%';
           <span aria-hidden="true">→</span>
         </a>
       ) : (
-        <span class="text-muted">{ind.n > 0 ? '' : `這個會期沒有可計算的${ind.n_unit === '篇' ? '報導' : '數字'}`}</span>
+        <span class="text-muted">
+          {ind.n > 0 || reasonText ? '' : emptyText}
+        </span>
       )
     }
   </p>
