@@ -1307,6 +1307,8 @@ class EvaluationReport:
     evaluation: FollowUpEvaluation | None = None
     # 已標註、但已經對不上的（文章不是基礎文章了、或摘要重產之後那一項要求的文字變了）
     skipped: int = 0
+    # 重評現在上線的判斷器時判斷失敗的對數；有的話這次成績不存（見 evaluate）
+    incomplete: int = 0
 
     def __str__(self) -> str:
         lines = []
@@ -1322,6 +1324,9 @@ class EvaluationReport:
             for m in ev.mistakes:
                 lines.append(f"  判錯：{m['article']} 第 {m['ask_index'] + 1} 項 → {m['candidate']}"
                              f"（{m['speaker']}）：人工「{_answer(m['human'])}」、模型「{_model_answer(m)}」")
+        if self.incomplete:
+            lines.append(f"重評現在上線的判斷器時有 {self.incomplete} 對判斷失敗，這次成績不存、上線的判斷器不變；"
+                         "請在 GPU 正常時再跑一次")
         if self.skipped:
             lines.append(f"略過 {self.skipped} 對已標註、但已經對不上的（文章不是基礎文章了，"
                          "或摘要重產之後那一項要求變了）")
@@ -1392,7 +1397,14 @@ def evaluate(client: GpuApiClient, timeout: float | None = None,
         first = next((o.error for o in outcomes if o.error), "")
         raise EvaluationAborted(f"沒有任何一對判斷成功，無法評估。第一個錯誤：{first}"
                                 "（GPU 端還沒更新的話，會是 422）")
-    report.evaluation = _save_evaluation(classifiers.pop(), outcomes, now or timezone.now())
+    classifier = classifiers.pop()
+    failed = sum(1 for o in outcomes if o.error)
+    if failed and classifier == passing_judge():
+        # 重評現在上線的判斷器，中途有判斷失敗（例如 Ollama 重開）：失敗算錯的話，一次 GPU 的小狀況
+        # 就讓已經驗過的判斷器下架、追問率當場消失。這次成績不存（同 topics.evaluate）
+        report.incomplete = failed
+        return report
+    report.evaluation = _save_evaluation(classifier, outcomes, now or timezone.now())
     return report
 
 
