@@ -1,22 +1,41 @@
-"""Summarizer 與 ModelCatalog 的 Ollama 實作。
+"""Summarizer、TopicClassifier、FollowUpJudge 與 ModelCatalog 的 Ollama 實作。
 
 模組刻意分成兩半：本檔上半是純函式（schema 與回應解析），完全可離線
-測試；下半是 HTTP 呼叫，無自動化測試。
+測試；下半是 HTTP 呼叫，無自動化測試。議題分類與追問判斷的純函式在
+usecases/topics.py 與 usecases/followups.py，這裡只有它們的 HTTP 那一半。
 """
 from __future__ import annotations
 
 import json
 import urllib.error
 import urllib.request
+from collections.abc import Sequence
 
-from ..domain.entities import Ask, Brief, KeyNumber, Slide
+from ..domain.entities import (
+    Ask,
+    Brief,
+    FollowUpPair,
+    FollowUpResult,
+    KeyNumber,
+    Slide,
+    TopicLabel,
+    TopicResult,
+)
 from ..domain.errors import (
     OperationCancelled,
     SummarizerOutputInvalid,
     SummarizerUnavailable,
 )
 from ..domain.ports import CancelCheck, ProgressCallback
+from ..usecases import followups
 from ..usecases.brief import slides_digest
+from ..usecases.topics import (
+    classifier_name,
+    parse_topic_response,
+    topic_schema,
+    topic_system_prompt,
+    topic_user_prompt,
+)
 
 # 傳給 Ollama 的 format：文法層級約束，格式錯誤幾乎不可能發生
 
@@ -436,6 +455,93 @@ class OllamaSlideRewriter:
         text = _stream_chat(self._host, body, self._timeout, progress, is_cancelled,
                             f"第 {slide.index} 頁改寫中")
         return parse_rewrite_response(text, slide)
+
+
+class OllamaTopicClassifier:
+    """把一段文字分到呼叫端給的政策領域。輸入只有幾百字，逾時比摘要短得多。
+
+    解析失敗或主領域不在清單裡就讓工作失敗，不重試：schema 已經用 enum
+    把答案鎖在清單裡，溫度又是 0，同一段文字重送只會得到同一個答案。
+
+    分類器名稱的指紋只涵蓋提示與 schema；下面 think、temperature 這類設定改了，
+    要手動升 usecases/topics.py 的 PROMPT_VERSION，否則舊的評估會被當成新設定的。
+    """
+
+    def __init__(self, host: str, model: str, num_ctx: int, timeout: float = 180.0):
+        self._host = host.rstrip("/")
+        self._model = model
+        self._num_ctx = num_ctx
+        self._timeout = timeout
+
+    def classify(self, text: str, labels: Sequence[TopicLabel],
+                 progress: ProgressCallback,
+                 is_cancelled: CancelCheck | None = None) -> TopicResult:
+        body = {
+            "model": self._model,
+            "messages": [
+                {"role": "system", "content": topic_system_prompt(labels)},
+                {"role": "user", "content": topic_user_prompt(text)},
+            ],
+            "format": topic_schema(labels),
+            "stream": True,
+            # 關掉思考：答案只有二十幾個 token，qwen3.5:9b 卻會先想兩三千到五千
+            # 個 token。實測一篇從 2.5 秒變成 46～82 秒，每晚 200 篇就是三個多
+            # 小時佔著唯一的佇列；兩種模式在試跑的文章上主領域相同。分類器準不
+            # 準由人工標註集量，不靠它想得多。
+            "think": False,
+            "options": {
+                # 跟摘要用同一個 num_ctx（呼叫端傳進來的）：Ollama 換 num_ctx 會
+                # 重新載入模型，而分類跟摘要排在同一個佇列裡交錯跑。
+                "num_ctx": self._num_ctx,
+                # 溫度 0：同一段文字每次都要分到同一個領域，人工標註集量到的
+                # 準確率才代表上線之後的行為。
+                "temperature": 0,
+            },
+        }
+        reply = _stream_chat(self._host, body, self._timeout, progress, is_cancelled,
+                             "分類議題中")
+        primary, secondary = parse_topic_response(reply, labels)
+        return TopicResult(primary=primary, secondary=secondary,
+                           classifier=classifier_name(self._model, labels))
+
+
+class OllamaFollowUpJudge:
+    """判斷後來那篇有沒有追問先前的要求。輸入是幾百字的卡片加最多 1500 字的
+    逐字稿片段，逾時同議題分類。
+
+    設定跟議題分類一樣，理由也一樣：關掉思考（答案只有幾十個 token，每晚 200 對
+    排在唯一的佇列裡）、溫度 0（標註集量到的準確率才代表上線後的行為）、num_ctx
+    跟摘要同一個（Ollama 換 num_ctx 會重新載入模型）。解析失敗就讓工作失敗、不重試：
+    溫度 0 重送只會得到同一個答案。
+
+    判斷器名稱的指紋只涵蓋提示與 schema；下面 think、temperature 這類設定改了，
+    要手動升 usecases/followups.py 的 PROMPT_VERSION。
+    """
+
+    def __init__(self, host: str, model: str, num_ctx: int, timeout: float = 180.0):
+        self._host = host.rstrip("/")
+        self._model = model
+        self._num_ctx = num_ctx
+        self._timeout = timeout
+
+    def judge(self, pair: FollowUpPair, progress: ProgressCallback,
+              is_cancelled: CancelCheck | None = None) -> FollowUpResult:
+        body = {
+            "model": self._model,
+            "messages": [
+                {"role": "system", "content": followups.followup_system_prompt()},
+                {"role": "user", "content": followups.followup_user_prompt(pair)},
+            ],
+            "format": followups.followup_schema(),
+            "stream": True,
+            "think": False,
+            "options": {"num_ctx": self._num_ctx, "temperature": 0},
+        }
+        reply = _stream_chat(self._host, body, self._timeout, progress, is_cancelled,
+                             "判斷追問中")
+        followed_up, quote = followups.parse_followup_response(reply)
+        return FollowUpResult(followed_up=followed_up, quote=quote,
+                              classifier=followups.classifier_name(self._model))
 
 
 class OllamaModelCatalog:

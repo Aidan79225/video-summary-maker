@@ -1,0 +1,62 @@
+---
+/**
+ * 側寫的「院內紀錄」區塊（只有立委）：出席、提案、記名表決三組指標卡。
+ *
+ * 八張卡混在一起排，出席率會跟連署數擠在同一列，讀起來像同一種東西；所以照
+ * CHAMBER_GROUPS 分成三組，每組一個小標、一排卡片。卡片沿用 ProfileIndicator，
+ * 證據連結指到 /records/ 的紀錄清單頁。後端多給了表上沒有的指標也不丟，收在最後。
+ *
+ * 說明裡把「不代表好壞」寫在數字旁邊，不只寫在方法頁：出席率、跟黨團一致率這兩個
+ * 數字特別容易被讀成分數。
+ */
+import type { ProfileBlock, ProfileIndicator as Indicator } from '../lib/types';
+import { CHAMBER_GROUPS, chamberGroupOf } from '../lib/records';
+import ProfileIndicator from './ProfileIndicator.astro';
+
+interface Props {
+  block: ProfileBlock;
+  /** 最小樣本（API 的 min_sample），傳給指標卡 */
+  minSample: number;
+}
+
+const { block, minSample } = Astro.props;
+
+const groups: { key: string; title: string; indicators: Indicator[] }[] = [
+  ...CHAMBER_GROUPS.map((g) => ({
+    key: g.key,
+    title: g.title,
+    indicators: block.indicators.filter((i) => chamberGroupOf(i.key) === g.key),
+  })),
+  { key: 'other', title: '其他', indicators: block.indicators.filter((i) => chamberGroupOf(i.key) === null) },
+].filter((g) => g.indicators.length > 0);
+---
+
+<section aria-labelledby={`profile-${block.key}`}>
+  <h3 id={`profile-${block.key}`} class="text-[0.72rem] tracking-[0.2em] text-muted">{block.title}</h3>
+  <p class="mt-1 text-[0.78rem] leading-relaxed text-muted">
+    立法院的出席名單、委員提案與記名表決，只算他在任期間，由程式計數。出席、投票多不代表比較好，跟黨團不一致也不代表好或壞。
+    <a
+      href="/method#profile-chamber"
+      class="whitespace-nowrap text-accent underline decoration-accent/40 underline-offset-4 transition-colors hover:decoration-accent"
+    >
+      資料來源與公式
+    </a>
+  </p>
+
+  <div class="mt-4 grid gap-5">
+    {
+      groups.map((g) => (
+        <div>
+          <h4 id={`profile-${block.key}-${g.key}`} class="text-[0.78rem] font-medium text-ink-2">
+            {g.title}
+          </h4>
+          <ul class="mt-2 grid gap-3 sm:grid-cols-2 lg:grid-cols-3" aria-labelledby={`profile-${block.key}-${g.key}`}>
+            {g.indicators.map((ind) => (
+              <ProfileIndicator indicator={ind} minSample={minSample} />
+            ))}
+          </ul>
+        </div>
+      ))
+    }
+  </div>
+</section>

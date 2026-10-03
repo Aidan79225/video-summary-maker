@@ -1,0 +1,273 @@
+---
+/**
+ * 院內紀錄清單：側寫「院內紀錄」每個數字的證據（只有立委）。
+ *
+ * /records/{person_id}?session={會期 id}&kind={類別}。標題寫是誰、哪個會期、哪一類，
+ * 底下是那一類的每一筆紀錄與官方連結，可以切換類別，也能回到發言者頁。
+ *
+ * 人名、會期與指標的數字都從側寫 API 拿：會期以側寫為準（網址沒帶就用側寫的預設），
+ * 這一頁顯示的數字才會跟發言者頁上的卡片是同一份。清單本身另外向紀錄 API 要。
+ * 數字一律照後端給的寫，網站不重算；清單的筆數另外寫出來，讀者可以自己對。
+ */
+import Base from '../../layouts/Base.astro';
+import Notice from '../../components/Notice.astro';
+import RecordBill from '../../components/RecordBill.astro';
+import RecordMeeting from '../../components/RecordMeeting.astro';
+import RecordVote from '../../components/RecordVote.astro';
+import { getProfile, getRecords, safeInternalPath, statusFor } from '../../lib/api';
+import { formatMetric } from '../../lib/format';
+import { RECORD_KINDS, isRecordKind, reasonText, recordKindInfo } from '../../lib/records';
+import type { ApiError, Profile, ProfileIndicator, RecordKind } from '../../lib/types';
+
+const url = Astro.url;
+const rawId = String(Astro.params.id ?? '');
+// 跟發言者頁的 ?session= 一樣只認正整數：亂打的當成沒有這個人，不把後端的 422 傳成整頁錯誤
+const personId = /^\d{1,9}$/.test(rawId) && Number(rawId) > 0 ? Number(rawId) : 0;
+const rawSession = url.searchParams.get('session')?.trim() ?? '';
+const sessionParam = /^\d{1,9}$/.test(rawSession) && Number(rawSession) > 0 ? Number(rawSession) : 0;
+// 類別不認得就從院會出席開始，跟其他篩選一樣當成沒指定
+const rawKind = url.searchParams.get('kind')?.trim() ?? '';
+const kind: RecordKind = isRecordKind(rawKind) ? rawKind : 'plenary';
+const info = recordKindInfo(kind);
+
+const notFound: ApiError = { kind: 'notfound', status: 404, message: '沒有這個人' };
+const profileRes = personId
+  ? await getProfile(personId, { source: 'ly', session: sessionParam || undefined })
+  : ({ ok: false, error: notFound } as const);
+const profile: Profile | null = profileRes.ok ? profileRes.data : null;
+// 沒有同步過紀錄的會期，側寫就沒有這一塊（後端的規則），清單也就無從核對
+const chamber = profile?.blocks.find((b) => b.key === 'chamber') ?? null;
+const recordsRes = profile && chamber ? await getRecords(personId, { session: profile.session.id, kind }) : null;
+
+if (!profileRes.ok) Astro.response.status = statusFor(profileRes.error.kind);
+else if (!chamber) Astro.response.status = 404;
+else if (recordsRes && !recordsRes.ok) Astro.response.status = statusFor(recordsRes.error.kind);
+
+const name = profile?.person.name ?? '';
+const session = profile?.session ?? null;
+
+/**
+ * 回發言者頁的連結。發言者頁的網址是任期上的寫法（文章的講者欄位），不一定等於
+ * person.name；側寫其他區塊的證據連結就是那個網址，所以從那裡拿路徑，拿不到才用 person.name。
+ */
+function speakerPath(p: Profile): string {
+  const fromEvidence = p.blocks
+    .flatMap((b) => b.indicators)
+    .map((i) => safeInternalPath(i.evidence_url))
+    .find((path) => path?.startsWith('/speaker/'));
+  return fromEvidence ? fromEvidence.split(/[?#]/)[0] : `/speaker/${encodeURIComponent(p.person.name)}`;
+}
+const backHref = profile ? `${speakerPath(profile)}?source=ly&session=${profile.session.id}#profile` : '/';
+
+const indicatorOf = (key: string): ProfileIndicator | null =>
+  chamber?.indicators.find((i) => i.key === key) ?? null;
+// 這一頁對應的指標：每一類剛好一個（一致率有自己的「黨團有多數」清單），筆數等於它的 n
+const shownIndicator = indicatorOf(info.indicator);
+
+/** 切換列每一類的筆數：就是那一類對應指標的 n；沒有那個指標（或沒有黨團）就不寫數字 */
+function kindCount(k: RecordKind): number | null {
+  const ind = indicatorOf(recordKindInfo(k).indicator);
+  return ind && !ind.reason ? ind.n : null;
+}
+const kindHref = (k: RecordKind) => `/records/${personId}?session=${session?.id ?? ''}&kind=${k}`;
+
+function indicatorValue(ind: ProfileIndicator): string {
+  if (ind.value === null) return reasonText(ind.reason) || '—';
+  return `${formatMetric(ind.value)}${ind.unit === '%' ? '%' : ` ${ind.unit}`}`;
+}
+
+const list = recordsRes?.ok ? recordsRes.data : null;
+const itemCount = list?.items.length ?? 0;
+const dropped = list?.dropped ?? 0;
+// 三種形狀分開拿出來，底下各畫各的；同一時間只會有一種不是空的
+const meetings = list && (list.kind === 'plenary' || list.kind === 'committee') ? list.items : [];
+const votes = list && (list.kind === 'votes' || list.kind === 'caucus_votes' || list.kind === 'defections') ? list.items : [];
+const bills = list && (list.kind === 'proposed' || list.kind === 'cosigned' || list.kind === 'passed') ? list.items : [];
+const noCaucus = indicatorOf('caucus_agreement')?.reason === 'no_caucus';
+// 沒有參加黨團時，黨團的兩類清單是空的；寫原因，不寫成「他從不跨黨」
+const emptyText =
+  noCaucus && (kind === 'caucus_votes' || kind === 'defections')
+    ? `他這個會期沒有參加黨團，不算${kind === 'caucus_votes' ? '與黨團一致率' : '跨黨投票'}。`
+    : info.empty;
+const retryHref = `${url.pathname}${url.search}`;
+const inlineLink = 'text-accent underline decoration-accent/40 underline-offset-4 hover:decoration-accent';
+
+const pageTitle = profile && session ? `${name}・${info.title}・${session.name}` : '院內紀錄';
+---
+
+<Base
+  title={pageTitle}
+  description={profile && session
+    ? `${name}委員在立法院${session.name}的院內紀錄（${info.title}），每一筆都附官方連結。`
+    : '立委的院內紀錄：出席、提案與記名表決。'}
+  back={true}
+>
+  <section class="border-b border-line-soft bg-bg-soft/60">
+    <div class="mx-auto max-w-3xl px-4 py-10 sm:px-6 sm:py-12">
+      <p class="text-[0.7rem] tracking-[0.3em] text-accent uppercase">Chamber Records · 立法院</p>
+      {
+        profile && session ? (
+          <h1 class="headline mt-3 text-3xl font-semibold sm:text-4xl">
+            {name}
+            <span class="mt-2 block text-lg font-medium text-ink-2 sm:text-xl">
+              {session.name}・{info.title}
+            </span>
+          </h1>
+        ) : (
+          <h1 class="headline mt-3 text-3xl font-semibold sm:text-4xl">院內紀錄</h1>
+        )
+      }
+      {
+        profile && (
+          <p class="mt-4 text-sm">
+            <a
+              href={backHref}
+              class="group inline-flex items-center gap-1 text-accent"
+            >
+              <span aria-hidden="true">←</span>
+              <span class="underline decoration-accent/40 underline-offset-4 transition-colors group-hover:decoration-accent">
+                回到{name}的發言與側寫
+              </span>
+            </a>
+          </p>
+        )
+      }
+    </div>
+  </section>
+
+  <div class="mx-auto max-w-3xl px-4 py-8 sm:px-6 sm:py-10">
+    {
+      !profileRes.ok &&
+        (profileRes.error.kind === 'notfound' ? (
+          <Notice
+            title="找不到這位委員的院內紀錄"
+            body="這個連結指向的人或會期沒有側寫資料，可能是網址有誤。可以從發言者頁的「院內紀錄」點進來。"
+          />
+        ) : (
+          <Notice error={profileRes.error} retryHref={retryHref} />
+        ))
+    }
+
+    {
+      profile && !chamber && (
+        <Notice
+          title="這個會期還沒有院內紀錄"
+          body="院內紀錄每週從立法院開放資料同步一次；這個會期可能還沒有同步，或不在同步的範圍內。"
+        />
+      )
+    }
+
+    {
+      profile && chamber && (
+        <>
+          <nav aria-label="切換紀錄類別">
+            <ul class="flex flex-wrap gap-2">
+              {RECORD_KINDS.map((k) => {
+                const n = kindCount(k.key);
+                const chip = 'inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-[0.8rem]';
+                return (
+                  <li>
+                    {k.key === kind ? (
+                      <span
+                        class:list={[chip, 'border-accent/50 bg-accent-soft font-medium text-accent-ink']}
+                        aria-current="page"
+                      >
+                        {k.label}
+                        {n !== null && <span class="tabular text-[0.72rem]">{n}</span>}
+                      </span>
+                    ) : (
+                      <a
+                        href={kindHref(k.key)}
+                        class:list={[chip, 'border-line text-ink-2 transition-colors hover:border-accent hover:text-accent']}
+                      >
+                        {k.label}
+                        {n !== null && <span class="tabular text-[0.72rem] text-muted">{n}</span>}
+                      </a>
+                    )}
+                  </li>
+                );
+              })}
+            </ul>
+          </nav>
+
+          <section class="mt-8" aria-labelledby="records-heading">
+            <h2 id="records-heading" class="headline text-xl font-semibold sm:text-[1.35rem]">
+              {info.title}
+            </h2>
+            <p class="mt-2 text-[0.85rem] leading-relaxed text-muted">{info.description}</p>
+
+            {
+              shownIndicator && (
+                <dl class="mt-4 flex flex-wrap gap-x-8 gap-y-3 rounded-xl border border-line-soft bg-surface px-4 py-3">
+                  <div>
+                    <dt class="text-[0.72rem] text-muted">{shownIndicator.label}</dt>
+                    <dd class="tabular mt-0.5 text-[0.95rem] text-ink">
+                      <span class="font-semibold">{indicatorValue(shownIndicator)}</span>
+                      <span class="ml-2 text-[0.72rem] text-muted">
+                        n = {shownIndicator.n} {shownIndicator.n_unit}
+                      </span>
+                    </dd>
+                  </div>
+                </dl>
+              )
+            }
+
+            {
+              recordsRes && !recordsRes.ok && (
+                <div class="mt-6">
+                  {/* 404 是後端說這個會期沒有紀錄；Notice 預設的「找不到這篇報導」講的是文章，不能用 */}
+                  {recordsRes.error.kind === 'notfound' ? (
+                    <Notice title="這個會期還沒有這一類紀錄" body="院內紀錄每週從立法院開放資料同步一次，可能還沒有同步到。" />
+                  ) : (
+                    <Notice error={recordsRes.error} retryHref={retryHref} />
+                  )}
+                </div>
+              )
+            }
+
+            {
+              list && (
+                <>
+                  <p class="tabular mt-6 text-[0.75rem] text-muted">
+                    共 {itemCount} {info.unit}
+                    {/* 中文的連結前後不留空白，所以寫成一行 */}
+                    {kind === 'votes' && !noCaucus && (
+                      <>：與所屬黨團一致率只算他有投票、黨團也有多數的那幾次，見<a href={kindHref('caucus_votes')} class={inlineLink}>黨團有多數</a>。</>
+                    )}
+                  </p>
+                  {/* 讀不懂的筆沒有畫出來：清單會比指標的 n 少，照實說，不讓讀者以為數字算錯了 */}
+                  {dropped > 0 && (
+                    <p class="mt-1 text-[0.75rem] text-muted">
+                      另有 {dropped} 筆紀錄的資料不完整，沒有列出；以上方的指標與官方紀錄為準。
+                    </p>
+                  )}
+                  {itemCount === 0 ? (
+                    <p class="mt-3 rounded-xl border border-line-soft px-4 py-6 text-center text-[0.85rem] text-muted">
+                      {emptyText}
+                    </p>
+                  ) : (
+                    <ol class="mt-3 grid gap-2.5" aria-labelledby="records-heading">
+                      {meetings.map((m) => <RecordMeeting meeting={m} />)}
+                      {bills.map((b) => <RecordBill bill={b} />)}
+                      {votes.map((v) => <RecordVote vote={v} />)}
+                    </ol>
+                  )}
+                </>
+              )
+            }
+          </section>
+
+          <p class="mt-10 border-t border-line-soft pt-5 text-[0.75rem] leading-relaxed text-muted">
+            資料來自立法院開放資料（經 LYAPI 整理），每週同步一次，可能比官方網站晚幾天；正式引用請以立法院議事暨公報資訊網為準。出席、投票多不代表比較好，跟黨團不一致也不代表好或壞。
+            <a
+              href="/method#profile-chamber"
+              class="whitespace-nowrap text-accent underline decoration-accent/40 underline-offset-4 hover:decoration-accent"
+            >
+              公式與資料限制
+            </a>
+          </p>
+        </>
+      )
+    }
+  </div>
+</Base>

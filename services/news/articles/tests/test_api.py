@@ -6,13 +6,15 @@ import base64
 import itertools
 import shutil
 import tempfile
-from datetime import date
+from datetime import date, datetime
 from urllib.parse import parse_qsl, unquote, urlsplit
 
 from django.test import TestCase, override_settings
+from django.utils import timezone
 
 from articles.ingest import save_result
-from articles.models import Article, ArticleStatus, Membership, Person, ProfileStat, Session
+from articles.models import (Article, ArticleStatus, FollowUp, Membership, Person, ProfileStat, Session,
+                             Topic, TopicEvaluation)
 from articles.profiles import assign_sessions, compute_profiles
 
 MEDIA = tempfile.mkdtemp(prefix="news_api_media_")
@@ -450,7 +452,9 @@ class ProfileApiTests(TestCase):
                           for b in res["blocks"]],
                          [("volume", "投入量", ["speeches", "speaking_minutes"]),
                           ("specificity", "具體度", ["numbers_per_speech", "deadline_asks_per_speech",
-                                                    "sourced_number_share"])])
+                                                    "sourced_number_share"]),
+                          # 追問區塊永遠在（清單不靠模型）；判斷器沒通過就沒有比率
+                          ("followup", "追問", [])])
         got = self._indicators(res)
         speeches = got["speeches"]
         # 單獨 5 + 臨時會 1 + 沒有卡 1 + 聯合 1；處理中的與沒有會期的不算
@@ -599,3 +603,382 @@ class SpeakerPersonTests(TestCase):
         _article("1", speaker="甲")
         items = self.client.get("/api/speakers").json()["items"]
         self.assertEqual([i["person_id"] for i in items], [new.id])
+
+
+# --- 議題分布 ---
+
+CLASSIFIER = "fake-model#topic-v1"
+
+
+def _pass(source, classifier=CLASSIFIER, accuracy=0.9, labeled=20):
+    return TopicEvaluation.objects.create(
+        source=source, classifier=classifier, labeled=labeled, correct=round(labeled * accuracy),
+        accuracy=accuracy, passed=True, ran_at=timezone.make_aware(datetime(2026, 10, 3, 9, 30)))
+
+
+def _topic(article, primary, classifier=CLASSIFIER):
+    Topic.objects.create(article=article, primary=primary, classifier=classifier,
+                         labeled_at=timezone.now())
+    return article
+
+
+def _topic_speech(speaker, primary, classifier=CLASSIFIER, **kw):
+    """一篇基礎文章（單獨發言、有摘要卡）加上它的領域。"""
+    kw.setdefault("brief", BRIEF)
+    return _topic(_speech(speaker, **kw), primary, classifier)
+
+
+@override_settings(MEDIA_ROOT=MEDIA)
+class TopicProfileApiTests(TestCase):
+    """立法院第 11 屆第 5 會期，六位立委，分類器已通過評估。"""
+
+    def setUp(self):
+        self.m = _members("ly", "王立", "甲", "乙", "丙", "丁", "戊")
+        Membership.objects.filter(name="王立").update(
+            committees=["第11屆第5會期：財政委員會", "第11屆第5會期：程序委員會"])
+        Membership.objects.exclude(name="王立").update(committees=["第11屆第5會期：內政委員會"])
+        # 王立：財經 3、衛福 2、勞動 1，基礎文章 6 篇
+        for i, primary in enumerate(("finance", "welfare", "finance", "labor", "welfare", "finance")):
+            _topic_speech("王立", primary, day=f"2026-03-0{i + 1}")
+        _topic(_speech("王立、甲", day="2026-04-01", brief=BRIEF), "defense")    # 聯合質詢
+        _topic(_speech("王立", day="2026-04-02"), "defense")                     # 沒有摘要卡
+        _speech("王立", day="2026-04-03", brief=BRIEF)                           # 還沒分類
+        _topic_speech("王立", "defense", classifier="new-model#topic-v2", day="2026-04-04")
+        _topic_speech("王立", "justice", meeting=S4, day="2025-10-01")                # 上一個會期
+        for name, primaries in (("甲", ["interior"] * 4 + ["finance"]),
+                                ("乙", ["interior", "education", "transport", "labor", "local"]),
+                                ("丙", ["environment"] * 5), ("丁", ["interior", "defense"])):
+            for primary in primaries:
+                _topic_speech(name, primary)
+        self.evaluation = _pass("ly")
+        compute_profiles()
+        self.s5 = Session.objects.get(name="第11屆第5會期")
+
+    def _profile(self, name, **params):
+        return self.client.get(f"/api/people/{self.m[name].person_id}/profile", params).json()
+
+    def _topics(self, res):
+        blocks = {b["key"]: b for b in res["blocks"]}
+        return blocks.get("topics")
+
+    def test_the_topics_block_has_the_documented_shape(self):
+        res = self._profile("王立")
+        self.assertEqual([b["key"] for b in res["blocks"]],
+                         ["volume", "specificity", "topics", "followup"])
+        block = self._topics(res)
+        self.assertEqual(block["title"], "議題分布")
+        self.assertEqual([i["key"] for i in block["indicators"]],
+                         ["topic_focus", "topic_breadth", "committee_alignment"])
+        self.assertEqual(block["classifier"], {"name": CLASSIFIER, "accuracy": 0.9, "labeled": 20,
+                                               "evaluated_at": "2026-10-03T09:30:00+08:00"})
+        # 其他區塊沒有這兩個欄位
+        self.assertNotIn("distribution", res["blocks"][0])
+
+    def test_the_distribution_lists_all_twelve_by_count_then_in_table_order(self):
+        rows = self._topics(self._profile("王立"))["distribution"]
+        self.assertEqual([(r["key"], r["label"], r["count"]) for r in rows[:3]],
+                         [("finance", "財政經濟", 3), ("welfare", "衛生福利", 2), ("labor", "勞動", 1)])
+        self.assertEqual([r["key"] for r in rows[3:]],
+                         ["defense", "interior", "education", "transport", "environment",
+                          "justice", "agriculture", "digital", "local"])
+        self.assertEqual({r["count"] for r in rows[3:]}, {0})
+        self.assertEqual([r["share"] for r in rows[:4]], [50.0, 2 / 6 * 100, 1 / 6 * 100, 0.0])
+        self.assertEqual(rows[0]["evidence_url"],
+                         f"/speaker/%E7%8E%8B%E7%AB%8B?source=ly&session={self.s5.id}"
+                         "&solo=1&brief=1&topic=finance")
+
+    def test_the_indicators(self):
+        got = {i["key"]: i for i in self._topics(self._profile("王立"))["indicators"]}
+        focus, breadth, aligned = got["topic_focus"], got["topic_breadth"], got["committee_alignment"]
+        self.assertEqual((focus["value"], focus["n"], focus["unit"], focus["n_unit"]),
+                         (50.0, 6, "%", "篇"))
+        self.assertEqual((breadth["value"], breadth["unit"]), (3, "個"))
+        self.assertIsInstance(breadth["value"], int)
+        # 財政委員會的職掌只有財經：6 篇裡 3 篇
+        self.assertEqual((aligned["value"], aligned["n"]), (50.0, 6))
+        # 同儕：基礎文章至少 5 篇的王立、甲、乙、丙（丁只有 2 篇）——不到 5 人，不比
+        self.assertEqual((focus["peers"], focus["percentile"], focus["sample_ok"]), (4, None, True))
+        self.assertEqual(focus["evidence_url"],
+                         f"/speaker/%E7%8E%8B%E7%AB%8B?source=ly&session={self.s5.id}"
+                         "&solo=1&brief=1&topic=any")
+
+    def test_every_count_can_be_clicked_back_to_exactly_that_many_articles(self):
+        """證據一致性：分布每一列的證據網址查出來的篇數等於它的篇數；每個指標等於它的 n。"""
+        checked = 0
+        for name in self.m:
+            res = self._profile(name, session=self.s5.id)
+            for row in self._topics(res)["distribution"]:
+                self.assertEqual(_evidence_count(self.client, row["evidence_url"]), row["count"],
+                                 (name, row["key"]))
+                checked += 1
+            for block in res["blocks"]:
+                for indicator in block["indicators"]:
+                    if indicator["n_unit"] == "篇":
+                        self.assertEqual(_evidence_count(self.client, indicator["evidence_url"]),
+                                         indicator["n"], (name, indicator["key"]))
+                        checked += 1
+        self.assertGreater(checked, 6 * 12)
+
+    def test_without_a_passing_evaluation_there_is_no_block_and_no_evidence(self):
+        TopicEvaluation.objects.all().delete()
+        res = self._profile("王立")
+        self.assertEqual([b["key"] for b in res["blocks"]], ["volume", "specificity", "followup"])
+        for topic in ("finance", "any"):
+            self.assertEqual(self.client.get("/api/articles", {"topic": topic}).json()["count"], 0)
+
+    def test_an_evaluation_that_passed_after_the_last_recompute_shows_nothing_yet(self):
+        """評估剛通過、側寫還沒重算：沒有分布列，不能給一排 0 篇。"""
+        tccc = _members("tccc", "楊啓邦")
+        _topic_speech("楊啓邦", "transport", meeting="第4屆第8次定期會 市政總質詢",
+                      day="2026-09-01", source="tccc")
+        compute_profiles()
+        _pass("tccc")
+        res = self.client.get(f"/api/people/{tccc['楊啓邦'].person_id}/profile").json()
+        self.assertEqual([b["key"] for b in res["blocks"]], ["volume", "specificity", "followup"])
+        compute_profiles()
+        res = self.client.get(f"/api/people/{tccc['楊啓邦'].person_id}/profile").json()
+        block = self._topics(res)
+        # 市議員沒有委員會職掌
+        self.assertEqual([i["key"] for i in block["indicators"]], ["topic_focus", "topic_breadth"])
+        self.assertEqual(block["distribution"][0]["key"], "transport")
+
+
+@override_settings(MEDIA_ROOT=MEDIA)
+class TopicFilterTests(TestCase):
+    """/api/articles?topic=：主領域是它，而且是那篇文章的來源通過評估的分類器分的。"""
+
+    def setUp(self):
+        self.ly_ok = _topic(_article("1", speaker="王立", brief=BRIEF, slides=1, with_image=False),
+                            "finance")
+        self.ly_other = _topic(_article("2", speaker="王立", brief=BRIEF, slides=1, with_image=False),
+                               "finance", classifier="tccc-model#topic-v1")
+        self.ly_labor = _topic(_article("3", speaker="王立", brief=BRIEF, slides=1, with_image=False),
+                               "labor")
+        _article("4", speaker="王立", brief=BRIEF, slides=1, with_image=False)   # 還沒分類
+        self.tccc = _topic(_article("tccc-5", speaker="楊啓邦", source="tccc", brief=BRIEF, slides=1,
+                                    with_image=False, meeting="第4屆第8次定期會"),
+                           "finance", classifier="tccc-model#topic-v1")
+        _pass("ly")
+
+    def _ids(self, **params):
+        return sorted(i["ivod_id"] for i in self.client.get("/api/articles", params).json()["items"])
+
+    def test_only_the_passing_classifier_of_each_articles_source_counts(self):
+        self.assertEqual(self._ids(topic="finance"), ["1"])
+        # 臺中通過的是另一個分類器：那個分類器分的立法院文章仍然不算
+        _pass("tccc", classifier="tccc-model#topic-v1")
+        self.assertEqual(self._ids(topic="finance"), ["1", "tccc-5"])
+
+    def test_any_means_classified_by_the_passing_version_in_any_area(self):
+        self.assertEqual(self._ids(topic="any"), ["1", "3"])
+        self.assertEqual(self._ids(topic="labor", speaker="王立", solo=1, has_brief=1), ["3"])
+
+    def test_junk_is_refused(self):
+        self.assertEqual(self.client.get("/api/articles?topic=space").status_code, 422)
+        self.assertEqual(self.client.get("/api/articles?topic=財政經濟").status_code, 422)
+
+
+@override_settings(MEDIA_ROOT=MEDIA)
+class TopicStatsVersionTests(TestCase):
+    """攔的 bug：側寫的議題列沒記是哪個分類器算的。上線的分類器換了、重算又失敗時，頁面把
+    A 版算的數字掛上 B 版的名字，證據篩選（用 B 版）點進去是 0 篇。"""
+
+    setUp = TopicProfileApiTests.setUp
+    _profile = TopicProfileApiTests._profile
+    _topics = TopicProfileApiTests._topics
+
+    def test_topic_rows_record_their_classifier(self):
+        rows = ProfileStat.objects.exclude(classifier="")
+        self.assertTrue(rows.exists())
+        self.assertEqual(set(rows.values_list("classifier", flat=True)), {CLASSIFIER})
+        self.assertFalse(ProfileStat.objects.filter(indicator="speeches").exclude(classifier="").exists())
+
+    def test_no_block_when_the_rows_came_from_another_classifier(self):
+        from articles.profiles import topic_stats_stale
+
+        self.assertFalse(topic_stats_stale())
+        # B 版通過評估，但還沒重算（例如重算時資料庫被鎖住）
+        _pass("ly", classifier="new-model#topic-v2")
+        self.assertTrue(topic_stats_stale())
+        self.assertIsNone(self._topics(self._profile("王立")))
+        compute_profiles()
+        self.assertFalse(topic_stats_stale())
+        block = self._topics(self._profile("王立"))
+        self.assertEqual(block["classifier"]["name"], "new-model#topic-v2")
+
+    def test_committee_alignment_says_why_it_has_no_value(self):
+        Membership.objects.filter(name="王立").update(committees=[])
+        compute_profiles()
+        got = {i["key"]: i for i in self._topics(self._profile("王立"))["indicators"]}
+        self.assertEqual((got["committee_alignment"]["n"], got["committee_alignment"]["reason"]),
+                         (0, "no_committee_data"))
+        self.assertEqual(got["topic_focus"]["reason"], "")
+
+
+# --- 追問 ---
+
+JUDGE = "fake-model#followup-v1#abcd1234"
+
+
+def _judge(classifier=JUDGE, passed=True):
+    from articles.models import FollowUpEvaluation
+
+    return FollowUpEvaluation.objects.create(
+        classifier=classifier, labeled=30, correct=27 if passed else 20,
+        accuracy=0.9 if passed else 20 / 30, passed=passed,
+        ran_at=timezone.make_aware(datetime(2026, 10, 3, 9, 30)))
+
+
+def _ask_brief(request, deadline="一個月內", response=""):
+    return {**BRIEF, "asks": [{"request": request, "deadline": deadline, "response": response}]}
+
+
+@override_settings(MEDIA_ROOT=MEDIA)
+class FollowupProfileApiTests(TestCase):
+    """王立在第 11 屆第 5 會期的要求，各種狀態都有（日期以今天往前後推，API 用的是今天）。"""
+
+    def setUp(self):
+        from datetime import timedelta
+
+        from articles.models import FollowUp
+
+        self.m = _members("ly", "王立", "甲")
+        today = timezone.localdate()
+        self.later = _speech("王立", day="2026-03-20", brief=BRIEF)
+
+        def request(name, due, followed_by=None, checked_at=None, classifier=JUDGE, day="2026-03-02",
+                    meeting=S5, deadline="一個月內", status=None):
+            article = _speech("王立", meeting=meeting, day=day, brief=_ask_brief(name, deadline), status=status)
+            return FollowUp.objects.create(
+                article=article, ask_index=0, request=name, deadline_text=deadline, due_date=due,
+                followed_by=followed_by, quote="清冊還沒給" if followed_by else "", classifier=classifier,
+                checked=[followed_by.id] if followed_by else [], checked_at=checked_at)
+
+        day = timedelta(days=1)
+        self.followed = request("已追問的要求", today + 5 * day, followed_by=self.later)
+        self.not_followed = request("未追問的要求", today - 100 * day, checked_at=timezone.now())
+        self.watching = request("觀察中的要求", today - 3 * day)
+        self.pending = request("待追蹤的要求", today + 2 * day)
+        self.pending_today = request("今天到期的要求", today)
+        request("期限換不出來的要求", None, deadline="儘快")
+        request("別的會期", today + 9 * day, meeting=S4, day="2025-10-01")
+        joint = _speech("王立、甲", day="2026-03-03", brief=_ask_brief("聯合質詢的要求"))
+        FollowUp.objects.create(article=joint, ask_index=0, request="聯合質詢的要求", deadline_text="一個月內",
+                                due_date=today + day)
+        assign_sessions()
+        self.s5 = Session.objects.get(name="第11屆第5會期")
+
+    def _block(self, name="王立", **params):
+        res = self.client.get(f"/api/people/{self.m[name].person_id}/profile",
+                              {"session": self.s5.id, **params}).json()
+        blocks = {b["key"]: b for b in res["blocks"]}
+        self.assertEqual(list(blocks)[-1], "followup")
+        return blocks["followup"]
+
+    def test_without_a_passing_judge_only_pending_requests_and_no_rate(self):
+        compute_profiles()
+        block = self._block()
+        self.assertEqual((block["title"], block["indicators"], block["judge"], block["unparsed"]),
+                         ("追問", [], None, 1))
+        # 已追問的那項還沒到期：判斷不算數，就是待追蹤；其他要靠判斷的狀態都不給
+        self.assertEqual([(a["request"], a["state"], a["followed_by"], a["quote"]) for a in block["asks"]],
+                         [("今天到期的要求", "pending", None, ""), ("待追蹤的要求", "pending", None, ""),
+                          ("已追問的要求", "pending", None, "")])
+
+    def test_the_block_never_exposes_judged_states_without_a_passing_judge(self):
+        _judge(passed=False)
+        _judge("other#followup-v0#x")       # 通過的是別的判斷器：這些要求的判斷都不算數
+        compute_profiles()
+        block = self._block()
+        # 都等上線的判斷器重判（待重判），不從清單上消失；舊版本判的已追問、未追問都不給
+        self.assertEqual([(a["request"], a["state"]) for a in block["asks"]],
+                         [("未追問的要求", "rejudging"), ("觀察中的要求", "rejudging"),
+                          ("今天到期的要求", "rejudging"), ("待追蹤的要求", "rejudging"),
+                          ("已追問的要求", "rejudging")])
+        self.assertEqual({(a["followed_by"], a["quote"]) for a in block["asks"]}, {(None, "")})
+        rate, = block["indicators"]
+        self.assertEqual((rate["value"], rate["n"], rate["reason"]), (None, 0, "rejudging"))
+        self.assertEqual(block["judge"]["name"], "other#followup-v0#x")
+        self.assertNotIn("清冊還沒給", str(block))
+
+    def test_with_a_passing_judge_every_state_the_rate_and_the_judge(self):
+        _judge()
+        compute_profiles()
+        block = self._block()
+        self.assertEqual(block["judge"], {"name": JUDGE, "accuracy": 0.9, "labeled": 30,
+                                          "evaluated_at": "2026-10-03T09:30:00+08:00"})
+        # 依到期日排序
+        self.assertEqual([(a["request"], a["state"]) for a in block["asks"]],
+                         [("未追問的要求", "not_followed"), ("觀察中的要求", "watching"),
+                          ("今天到期的要求", "pending"), ("待追蹤的要求", "pending"),
+                          ("已追問的要求", "followed")])
+        followed = block["asks"][-1]
+        self.assertEqual(followed["article"], {"slug": self.followed.article.slug,
+                                               "title": self.followed.article.title, "date": "2026-03-02"})
+        self.assertEqual((followed["deadline"], followed["due_date"]),
+                         ("一個月內", self.followed.due_date.isoformat()))
+        self.assertEqual(followed["followed_by"], {"slug": self.later.slug, "title": self.later.title,
+                                                   "date": "2026-03-20"})
+        self.assertEqual(followed["quote"], "清冊還沒給")
+        self.assertEqual((block["asks"][0]["followed_by"], block["asks"][0]["quote"]), (None, ""))
+        rate, = block["indicators"]
+        self.assertEqual((rate["key"], rate["label"], rate["unit"], rate["value"], rate["n"], rate["n_unit"],
+                          rate["sample_ok"], rate["percentile"]),
+                         ("followup_rate", "追問率", "%", 50.0, 2, "項", False, None))
+        self.assertEqual(rate["evidence_url"],
+                         f"/speaker/%E7%8E%8B%E7%AB%8B?source=ly&session={self.s5.id}#followups")
+
+    def test_the_rate_waits_for_a_recompute_with_the_live_judge(self):
+        """評估剛換版本、側寫還沒重算：舊版本的數字不掛新版本的名字。"""
+        _judge()
+        compute_profiles()
+        FollowUp.objects.update(classifier="")      # 都是程式篩出來的（不必重判），只差側寫還沒重算
+        _judge("new#followup-v2#y")
+        block = self._block()
+        self.assertEqual(block["indicators"], [])
+        self.assertEqual(block["judge"]["name"], "new#followup-v2#y")
+
+    def test_after_a_judge_switch_the_rate_is_withheld_until_his_requests_are_rejudged(self):
+        """攔的 bug：新的判斷器通過、側寫重算之後，比率只用新判斷器判完的那幾項算——舊版本找到的
+        追問都變成「觀察中」、不在分子裡，追問率掉到 0%，看起來像真的。"""
+        _judge()
+        FollowUp.objects.filter(pk=self.not_followed.pk).update(classifier="")   # 沒有候選：不必重判
+        _judge("new#followup-v2#y")
+        compute_profiles()
+        block = self._block()
+        rate, = block["indicators"]
+        self.assertEqual((rate["key"], rate["value"], rate["n"], rate["percentile"], rate["reason"]),
+                         ("followup_rate", None, 0, None, "rejudging"))
+        self.assertEqual(rate["evidence_url"],
+                         f"/speaker/%E7%8E%8B%E7%AB%8B?source=ly&session={self.s5.id}#followups")
+        states = {a["request"]: a["state"] for a in block["asks"]}
+        self.assertEqual(states["已追問的要求"], "rejudging")
+        self.assertEqual(states["未追問的要求"], "not_followed")
+        self.assertNotIn("清冊還沒給", str(block))
+        stat = ProfileStat.objects.get(person_id=self.m["王立"].person_id, session=self.s5,
+                                       indicator="followup_rate")
+        self.assertEqual((stat.value, stat.n, stat.percentile), (None, 0, None))
+        # 重判完（都出自新的判斷器）就照常給
+        FollowUp.objects.exclude(classifier="").update(classifier="new#followup-v2#y")
+        compute_profiles()
+        rate, = self._block()["indicators"]
+        self.assertEqual((rate["value"], rate["n"], rate.get("reason", "")), (50.0, 2, ""))
+
+    def test_only_requests_whose_articles_have_a_page(self):
+        _judge()
+        compute_profiles()
+        Article.objects.filter(pk=self.pending.article_id).update(status=ArticleStatus.FAILED)
+        Article.objects.filter(pk=self.later.pk).update(status=ArticleStatus.PROCESSING)
+        block = self._block()
+        requests = {a["request"]: a for a in block["asks"]}
+        self.assertNotIn("待追蹤的要求", requests)
+        self.assertEqual((requests["已追問的要求"]["state"], requests["已追問的要求"]["followed_by"]),
+                         ("followed", None))
+
+    def test_someone_without_requests_still_gets_the_block(self):
+        _judge()
+        compute_profiles()
+        block = self._block("甲")
+        self.assertEqual((block["asks"], block["unparsed"]), ([], 0))
+        rate, = block["indicators"]
+        self.assertEqual((rate["value"], rate["n"]), (None, 0))

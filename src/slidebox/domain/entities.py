@@ -113,6 +113,60 @@ class Deck:
 
 
 @dataclass(frozen=True)
+class TopicLabel:
+    """一個可選的政策領域。
+
+    清單由呼叫端（新聞服務）每次帶來，這邊不寫死：領域只有新聞服務那一份，
+    兩邊各寫一份遲早會對不上。key 給資料庫與網址用；label 是名稱，給模型
+    看——「衛生福利」本身就帶著意思，welfare 只是多一層要模型猜的對照。
+    description 補充這個名稱涵蓋哪些事。
+    """
+    key: str
+    label: str
+    description: str = ""
+
+
+@dataclass(frozen=True)
+class TopicResult:
+    """一段文字的分類結果。primary／secondary 是 key，不是名稱。"""
+    primary: str
+    # 沒有占相當篇幅的第二個領域就是 None
+    secondary: str | None
+    # 「模型#提示詞版本#提示指紋」：新聞服務只採用評估通過的那個版本分出來的
+    # 結果，所以每一筆都要帶著自己是誰分的。
+    classifier: str
+
+
+@dataclass(frozen=True)
+class FollowUpPair:
+    """要判斷的一對：先前的一項要求，與同一個人後來的一篇發言。
+
+    內容全由呼叫端（新聞服務）挑好帶來：哪篇算候選、逐字稿取哪一段，都要看
+    新聞服務的資料庫，GPU 端只負責判斷這一對。
+    """
+    # 先前摘要卡 asks 裡的那一項要求
+    request: str
+    # 官員當時的回應；當場沒有回應就是空字串
+    response: str
+    # 後來那篇的摘要卡：一句話、它自己的要求、各段小標
+    card: str
+    # 後來那篇逐字稿裡跟要求最相關的一段；引用只能從這裡抄
+    excerpt: str
+
+
+@dataclass(frozen=True)
+class FollowUpResult:
+    """一對的判斷結果。"""
+    followed_up: bool
+    # 從 excerpt 抄出來的證據；沒有追問就是空字串。是不是真的在逐字稿裡由
+    # 新聞服務檢查（落地檢查），這邊不改判。
+    quote: str
+    # 「模型#提示詞版本#提示指紋」：同 TopicResult，新聞服務只採用評估通過的
+    # 那個判斷器判出來的結果。
+    classifier: str
+
+
+@dataclass(frozen=True)
 class DeckResult:
     """use case 的回傳：成品與它的落點。UI 需要路徑才能提供「開啟」。"""
     deck: Deck

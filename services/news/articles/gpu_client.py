@@ -49,6 +49,13 @@ class JobField(StrEnum):
     CREATED_AT = "created_at"
 
 
+class JobKind(StrEnum):
+    """POST /jobs 的 kind。省略就是 deck（摘要）：舊的請求不必改。協定的一部分，兩邊各留一份。"""
+    DECK = "deck"
+    TOPIC = "topic"
+    FOLLOWUP = "followup"
+
+
 class GpuApiError(Exception):
     """摘要 API 這次不能用。暫時性問題，下次排程會再試。"""
 
@@ -59,6 +66,14 @@ class JobNotFound(GpuApiError):
 
 class JobFailed(Exception):
     """工作跑完了，但失敗。通常是這一支影片的問題，不是服務的問題。"""
+
+
+class RequestRejected(JobFailed):
+    """GPU 那邊在送出的時候就拒絕了這個請求（422）。
+
+    跟「工作跑了、結果失敗」分開：一篇文章每次都分類失敗是那篇的問題，跳過就好；送出就被拒，
+    連續好幾篇都這樣，多半是 GPU 端還沒更新、不認得這種工作——那才值得整輪停下來。
+    """
 
 
 def _http(url: str, method: str, api_key: str, body: dict | None,
@@ -110,6 +125,26 @@ class GpuApiClient:
             body["max_slides"] = max_slides
         if speech_hint:
             body["speech_hint"] = speech_hint
+        return self._submit(body)
+
+    def submit_topic(self, text: str, labels: list[dict]) -> str:
+        """送一個議題分類工作：把一段文字分到 labels 裡的政策領域（`[{key, label, description}]`）。
+
+        跟摘要工作排同一個佇列，所以等待、錯誤分類都照舊用 wait() 與 _call()。領域清單每次都
+        帶過去：GPU 端不寫死，改清單只要改 Pi 這邊（topics.TOPICS）。
+        """
+        return self._submit({"kind": JobKind.TOPIC, "text": text, "labels": labels})
+
+    def submit_followup(self, request: str, response: str, card: str, excerpt: str) -> str:
+        """送一個追問判斷工作：後來那篇（card＋excerpt）有沒有再提舊的要求（request、response）。
+
+        跟摘要、分類工作排同一個佇列，等待與錯誤分類照舊。excerpt 由新聞服務挑好
+        （followups.excerpt_for）：GPU 端不讀整份逐字稿。
+        """
+        return self._submit({"kind": JobKind.FOLLOWUP, "request": request, "response": response,
+                             "card": card, "excerpt": excerpt})
+
+    def _submit(self, body: dict) -> str:
         job = self._call("/jobs", "POST", body=body, timeout=_SUBMIT_TIMEOUT)
         job_id = job.get(JobField.ID)
         if not job_id:
@@ -165,7 +200,7 @@ class GpuApiClient:
             if e.code == 404:
                 raise JobNotFound(f"摘要 API 不認得 {path}") from e
             if e.code in _REQUEST_ERROR_CODES:
-                raise JobFailed(f"摘要 API 拒絕這個請求（{e.code}）：{detail}") from e
+                raise RequestRejected(f"摘要 API 拒絕這個請求（{e.code}）：{detail}") from e
             raise GpuApiError(f"摘要 API 回應 {e.code}：{detail}") from e
         except (OSError, ValueError) as e:
             raise GpuApiError(f"摘要 API 連線失敗：{str(e)[:200]}") from e
