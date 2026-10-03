@@ -1212,6 +1212,24 @@ class EvaluateTests(TestCase):
                                                      candidate=candidate, followed=human))
         return made
 
+    def test_failures_while_reevaluating_the_live_judge_do_not_take_it_offline(self):
+        """攔的 bug（同 topics）：重評現在上線的判斷器時 GPU 中途出狀況，失敗算錯讓它掉到門檻以下。"""
+        from articles.followups import passing_judge
+
+        self._labelled(30)
+        evaluate(FakeFollowupGpu(), now=self.WHEN)
+        self.assertEqual(passing_judge(), CLASSIFIER)
+        calls = {"n": 0}
+
+        def flaky(pair):
+            calls["n"] += 1
+            return JobFailed("ConnectError: Connection refused") if calls["n"] > 25 else _says_followed(pair)
+
+        report = evaluate(FakeFollowupGpu(answer=flaky), now=self.WHEN)
+        self.assertEqual((report.incomplete, report.evaluation), (5, None))
+        self.assertEqual(passing_judge(), CLASSIFIER)
+        self.assertIn("這次成績不存", str(report))
+
     def test_accuracy_is_matches_over_labels_and_26_of_30_passes(self):
         self._labelled(20)
         self._labelled(6, human=False, model=False)

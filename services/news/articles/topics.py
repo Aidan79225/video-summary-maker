@@ -29,7 +29,7 @@ from django.db import transaction
 from django.db.models import F, QuerySet
 from django.utils import timezone
 
-from .gpu_client import GpuApiClient, GpuApiError, JobFailed
+from .gpu_client import GpuApiClient, GpuApiError, JobFailed, RequestRejected
 from .members_sync import SPEAKER_SEPARATOR
 from .models import Article, ArticleSource, ArticleStatus, Topic, TopicEvaluation, TopicLabel
 
@@ -205,6 +205,7 @@ def classify_topics(client: GpuApiClient, limit: int, reclassify: bool = False,
     queryset = (queryset.order_by(F("topic__labeled_at").asc(nulls_first=True), "-date", "id")
                 .prefetch_related("slides")[:max(0, limit)])
     report = ClassifyReport()
+    rejected = 0
     for article in list(queryset):
         try:
             text = classifier_input(article)
@@ -227,11 +228,13 @@ def classify_topics(client: GpuApiClient, limit: int, reclassify: bool = False,
             break
         except JobFailed as e:
             _record_failure(article, e, report)
-            if report.classified == 0 and report.failed >= _EARLY_FAILURES:
-                # 開頭連續幾篇都被拒絕，多半是 GPU 端還沒更新（舊版不認得 topic 工作，每篇都回 422）：
-                # 照樣送完整批只是同一個錯誤重複兩百次
+            rejected += isinstance(e, RequestRejected)
+            if report.classified == 0 and rejected >= _EARLY_FAILURES:
+                # 開頭連續幾篇都在送出時就被拒絕（422），多半是 GPU 端還沒更新、不認得 topic 工作：
+                # 照樣送完整批只是同一個錯誤重複兩百次。工作跑了但失敗的不算——那是那篇文章的問題，
+                # 而且它們沒有 Topic、每一輪都排在最前面，算進來的話整個積壓永遠動不了
                 report.stopped = True
-                report.stop_reason = f"開頭 {report.failed} 篇都被 GPU 拒絕，GPU 端可能還沒更新"
+                report.stop_reason = f"開頭 {rejected} 篇都被 GPU 拒絕，GPU 端可能還沒更新"
                 logger.warning("議題分類：%s", report.stop_reason)
                 break
             continue
@@ -307,6 +310,8 @@ class EvaluationReport:
     evaluations: list[TopicEvaluation] = field(default_factory=list)
     # 已標註、但文章已經不是基礎文章（例如重產之後沒有摘要卡）：沒有輸入可以分類
     skipped: int = 0
+    # 來源 → 分類失敗的篇數：重評現在上線的分類器時有分類失敗，這個來源的成績不存（見 evaluate）
+    incomplete: dict[str, int] = field(default_factory=dict)
 
     def __str__(self) -> str:
         lines = []
@@ -324,6 +329,9 @@ class EvaluationReport:
                          else f"分類失敗：{m.get('error') or '未知'}")
                 human = TOPIC_BY_KEY[m["human"]].label if m["human"] in TOPIC_BY_KEY else m["human"]
                 lines.append(f"  判錯：{m['slug']} {m['speaker']}：人工「{human}」、模型「{model}」")
+        for source, failed in self.incomplete.items():
+            lines.append(f"{ArticleSource(source).label}：重評現在上線的分類器時有 {failed} 篇分類失敗，"
+                         "這次成績不存、上線的分類器不變；請在 GPU 正常時再跑一次")
         if self.skipped:
             lines.append(f"略過 {self.skipped} 篇已標註、但已經不是基礎文章的（沒有摘要卡或不是單獨發言）")
         return "\n".join(lines)
@@ -375,8 +383,16 @@ def evaluate(client: GpuApiClient, timeout: float | None = None,
     for outcome in outcomes:
         by_source[outcome[0].article.source].append(outcome)
     ran_at = now or timezone.now()
+    live = passing_classifiers()
     with transaction.atomic():
         for source, items in by_source.items():
+            failed = sum(1 for _, result, _ in items if result is None)
+            if failed and live.get(source) == classifier:
+                # 重評現在上線的分類器，中途有分類失敗（例如 Ollama 重開）：失敗算錯的話，一次 GPU 的
+                # 小狀況就會讓已經驗過的分類器下架、整個來源的議題區塊消失。這次成績不存。
+                # 還沒上線的分類器照舊把失敗算錯（保守：答不出來不能讓準確率變高）
+                report.incomplete[source] = failed
+                continue
             report.evaluations.append(_save_evaluation(source, classifier, items, ran_at))
     return report
 
