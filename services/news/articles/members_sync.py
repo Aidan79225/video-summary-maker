@@ -49,6 +49,9 @@ class MemberRecord:
     # 只有新北填：議長／副議長／空、國民黨團／民進黨團／無黨團結聯盟／空
     role: str = ""
     caucus: str = ""
+    # 只有立法院填：LYAPI 的「委員會」原樣（「第11屆第5會期：財政委員會」），議題分布的
+    # 委員會職掌比對用
+    committees: tuple[str, ...] = ()
 
 
 @dataclass
@@ -155,7 +158,15 @@ class LyMemberSource:
             photo_url=str(row.get("照片位址") or "").strip(),
             start_date=_parse_date(row.get("到職日")),
             end_date=_parse_date(row.get("離職日期")) if left else None,
+            committees=_committees(row.get("委員會")),
         )
+
+
+def _committees(value: object) -> tuple[str, ...]:
+    """LYAPI 的「委員會」：字串清單，偶爾夾著空字串。原樣保留（去空白），解析交給 topics。"""
+    if not isinstance(value, list):
+        return ()
+    return tuple(text for text in (str(v).strip() for v in value if isinstance(v, str)) if text)
 
 
 # --- 臺中市議會 ---
@@ -482,6 +493,9 @@ def sync(records: Iterable[MemberRecord], today: date | None = None) -> SyncRepo
         # 會把他當主持人拿掉。來源抓不到的人根本不會出現在 records 裡，不會被寫空。
         membership.role = record.role
         membership.caucus = record.caucus
+        # 同樣直接覆寫：LYAPI 的清單是這一屆累計的，最新的一份就是全部。只有立法院給這欄，
+        # 其他來源永遠是空的。換屆、換黨時舊的那一段在上面已經存檔，保留它當時的清單。
+        membership.committees = list(record.committees)
         if record.end_date:
             membership.end_date = record.end_date
         membership.synced_at = now

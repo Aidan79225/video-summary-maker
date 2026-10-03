@@ -12,14 +12,17 @@ from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from ninja import NinjaAPI, Query, Schema
 
-from . import profiles
-from .models import Article, ArticleStatus, Membership, Person, ProfileStat, Session
+from . import profiles, topics
+from .models import Article, ArticleStatus, Membership, Person, ProfileStat, Session, TopicEvaluation
 
 api = NinjaAPI(title="議會質詢摘要 API", version="1.0", urls_namespace="news")
 
 # 來源代碼（Article.source）。宣告成 Literal，ninja 會把非法值擋成 422，
 # 而不是讓一個打錯的 ?source= 變成空清單或 500。
 SourceParam = Literal["ly", "tccc", "ntpc"]
+# 政策領域代碼，或 any（有通過版本的分類、哪個領域都可以）。同樣宣告成 Literal，打錯的回 422。
+# 清單從 topics.TOPICS 來，不在這裡再抄一份
+TopicParam = Literal[(*topics.TOPIC_KEYS, topics.ANY_TOPIC)]
 
 _MAX_PAGE_SIZE = 50
 # 頁碼上限：SQLite 的 OFFSET 綁定超過 int64 會直接 500，而前端會把訪客
@@ -142,12 +145,42 @@ class IndicatorOut(Schema):
     sample_ok: bool
     # 網站的相對路徑：點進去就是算出這個數字的那幾篇
     evidence_url: str
+    # 沒有值時的原因（目前只有委員會職掌：「no_committee_data」＝有分類過的報導、但沒有他這個
+    # 會期的委員會資料）。頁面用它說清楚是哪一種「沒有」，而不是一律寫樣本不足
+    reason: str = ""
 
 
 class BlockOut(Schema):
     key: str
     title: str
     indicators: list[IndicatorOut]
+
+
+class TopicShareOut(Schema):
+    key: str
+    label: str
+    count: int
+    # 篇數 ÷ 基礎文章數 × 100（0～100）；基礎文章是 0 篇時是 0
+    share: float
+    # 網站的相對路徑：點進去就是這個領域的那幾篇，篇數等於 count
+    evidence_url: str
+
+
+class ClassifierOut(Schema):
+    # 模型＋提示詞版本（「qwen3:14b#topic-v1」）
+    name: str
+    # 這個來源人工標註集上的主領域準確率，0～1（跟 TopicEvaluation 存的一樣）
+    accuracy: float
+    labeled: int
+    evaluated_at: datetime
+
+
+class TopicsBlockOut(BlockOut):
+    """議題分布：只有那個來源有通過的評估時才出現。"""
+
+    # 12 個領域都列（篇數 0 的也列），依篇數由多到少、同數照 topics.TOPICS 的順序
+    distribution: list[TopicShareOut]
+    classifier: ClassifierOut
 
 
 class ProfileOut(Schema):
@@ -158,7 +191,8 @@ class ProfileOut(Schema):
     sessions: list[SessionOut]
     computed_at: datetime
     min_sample: int
-    blocks: list[BlockOut]
+    # 議題分布的區塊多了 distribution 與 classifier；其他區塊沒有這兩個欄位
+    blocks: list[TopicsBlockOut | BlockOut]
 
 
 class PartyOut(Schema):
@@ -216,7 +250,7 @@ def health(request) -> dict:
 def list_articles(request, date: date_type | None = None, speaker: str | None = None,
                   q: str | None = None, source: SourceParam | None = None,
                   party: str | None = None, session: int | None = None,
-                  solo: bool = False, has_brief: bool = False,
+                  solo: bool = False, has_brief: bool = False, topic: TopicParam | None = None,
                   page: int = Query(1, ge=1, le=_MAX_PAGE),
                   page_size: int = 20) -> dict:
     """只回已完成的文章——處理中或失敗的是內部狀態，不是新聞。
@@ -225,9 +259,10 @@ def list_articles(request, date: date_type | None = None, speaker: str | None = 
     過來，字串會被直接丟進 filter() 而讓任何爬蟲或打錯的連結變成 500。
     交給 ninja 驗證就會回 422。
 
-    session、solo、has_brief 是人物側寫的證據篩選：側寫上每個數字的 evidence_url
+    session、solo、has_brief、topic 是人物側寫的證據篩選：側寫上每個數字的 evidence_url
     帶的就是這幾個條件，查出來的篇數必須等於那個數字的 n（profiles 用同一套定義）。
-    solo、has_brief 是 false 時不篩——「只要聯合質詢」沒有人要。
+    solo、has_brief 是 false 時不篩——「只要聯合質詢」沒有人要。topic 只認各來源通過評估的
+    那個分類器分出來的領域（見 _topic_q）。
     """
     # page 由 Query 擋住（超過 int64 的 OFFSET 會讓 SQLite 直接 500），
     # page_size 則夾住就好——一個看起來合理的 ?page_size=100 不值得回錯誤。
@@ -249,6 +284,8 @@ def list_articles(request, date: date_type | None = None, speaker: str | None = 
         queryset = queryset.exclude(speaker__contains=_SEP)
     if has_brief:
         queryset = queryset.filter(brief__isnull=False)
+    if topic:
+        queryset = queryset.filter(_topic_q(topic))
     if q:
         queryset = queryset.filter(
             Q(title__icontains=q)
@@ -306,6 +343,22 @@ def _speaker_q(name: str) -> Q:
     return _joined_q("speaker", name)
 
 
+def _topic_q(code: str) -> Q:
+    """主領域是 code（any：任何一個領域），而且是**該文章來源**通過評估的分類器分出來的。
+
+    跟 profiles 算分布用的是同一個上線條件：換了模型之後新分的 Topic 版本對不上，在側寫上
+    不算，在證據清單上也不能出現。沒有任何來源通過評估時什麼都不給——沒驗過的分類不是證據。
+    """
+    gates = topics.passing_classifiers()
+    if not gates:
+        return Q(pk__in=[])
+    areas = topics.TOPIC_KEYS if code == topics.ANY_TOPIC else (code,)
+    by_source = Q()
+    for source, classifier in gates.items():
+        by_source |= Q(source=source, topic__classifier=classifier)
+    return by_source & Q(topic__primary__in=areas)
+
+
 @api.get("/speakers", response=SpeakerListOut)
 def speakers(request, source: SourceParam | None = None) -> dict:
     queryset = Article.objects.filter(status=ArticleStatus.READY)
@@ -358,19 +411,29 @@ def _evidence_url(name: str, session: Session, indicator: profiles.Indicator) ->
     """發言者頁的相對路徑，帶上算出這個數字的篩選條件。
 
     具體度只算單獨發言而且有摘要卡的文章，所以多帶 solo 與 brief（網站轉成
-    /api/articles 的 solo、has_brief）。名字整個 URL 編碼：原住民族名有「．」。
+    /api/articles 的 solo、has_brief）。議題分布的指標再多帶 topic=any：n 只算有通過版本
+    分類的那幾篇，還沒分類的不能混進來。名字整個 URL 編碼：原住民族名有「．」。
+
+    委員會職掌的 n 用同一個網址：委員會資料是一個人一個會期一份，所以 n 不是等於這些基礎
+    文章的篇數、就是 0（那個會期沒有他的委員會資料，值是 null、頁面顯示樣本不足）。
     """
-    url = f"/speaker/{quote(name, safe='')}?source={session.source}&session={session.id}"
-    if indicator.block == profiles.SPECIFICITY:
+    url = _speaker_url(name, session)
+    if indicator.block in (profiles.SPECIFICITY, profiles.TOPIC_BLOCK):
         url += "&solo=1&brief=1"
+    if indicator.block == profiles.TOPIC_BLOCK:
+        url += f"&topic={topics.ANY_TOPIC}"
     return url
+
+
+def _speaker_url(name: str, session: Session) -> str:
+    return f"/speaker/{quote(name, safe='')}?source={session.source}&session={session.id}"
 
 
 def _indicator_out(stat: ProfileStat | None, indicator: profiles.Indicator, name: str,
                    session: Session) -> dict:
     value = stat.value if stat else None
     n = stat.n if stat else 0
-    if value is not None and indicator is profiles.SPEECHES:
+    if value is not None and indicator.integer:
         value = int(value)
     return {
         "key": indicator.key,
@@ -392,6 +455,9 @@ def _indicator_out(stat: ProfileStat | None, indicator: profiles.Indicator, name
 def person_profile(request, person_id: int, source: SourceParam | None = None,
                    session: int | None = None) -> dict:
     """一個人在一個會期的側寫：投入量與具體度，每項各自跟同儕比，不加總、不排名。
+
+    議題分布只在那個來源有通過的評估、而且側寫已經用它算過時才多一個區塊（見 _topics_block）：
+    沒驗過的分類不是事實，連「0 篇」都不該給。
 
     source 省略時用他最近一個有統計的會期的來源；session 省略時用這個來源裡他有發言的
     最近一個會期，都沒有發言就用有統計的最近一個。指定了 session 而省略 source，
@@ -426,6 +492,9 @@ def person_profile(request, person_id: int, source: SourceParam | None = None,
     blocks = [{"key": key, "title": title,
                "indicators": [_indicator_out(mine.get(i.key), i, name, chosen) for i in indicators]}
               for key, title, indicators in profiles.blocks_for(source)]
+    evaluation = topics.passing_evaluations().get(source)
+    if evaluation is not None and _topics_current(mine, evaluation.classifier):
+        blocks.append(_topics_block(mine, evaluation, name, chosen))
     return {
         "person": {"id": person.id, "name": person.name},
         "source": source,
@@ -434,6 +503,43 @@ def person_profile(request, person_id: int, source: SourceParam | None = None,
         "computed_at": timezone.localtime(max(stat.computed_at for stat in mine.values())),
         "min_sample": profiles.MIN_SAMPLE,
         "blocks": blocks,
+    }
+
+
+def _topics_current(mine: dict[str, ProfileStat], classifier: str) -> bool:
+    """這個會期有議題列，而且全都是現在上線的分類器算的。"""
+    topic_rows = [stat for stat in mine.values() if stat.classifier]
+    return bool(topic_rows) and all(stat.classifier == classifier for stat in topic_rows)
+
+
+def _topics_block(mine: dict[str, ProfileStat], evaluation: TopicEvaluation, name: str,
+                  session: Session) -> dict:
+    """議題分布區塊。呼叫端已確認：這個來源有通過的評估，而且側寫算過分布。
+
+    兩個條件都要：評估剛通過、還沒重算側寫的空窗裡沒有分布列，給一排 0 篇會被讀成「他什麼都
+    沒問」。分布與指標的數字都是 compute_profiles 用通過版本的分類器算的。
+    """
+    distribution = []
+    for area in topics.TOPICS:
+        stat = mine.get(profiles.topic_stat_key(area.key))
+        count = int(stat.value or 0) if stat else 0
+        base = stat.n if stat else 0
+        distribution.append({
+            "key": area.key, "label": area.label, "count": count,
+            "share": count / base * 100 if base else 0.0,
+            "evidence_url": f"{_speaker_url(name, session)}&solo=1&brief=1&topic={area.key}",
+        })
+    # sort 是穩定的：同篇數的保持 topics.TOPICS 的順序
+    distribution.sort(key=lambda row: -row["count"])
+    return {
+        "key": profiles.TOPIC_BLOCK,
+        "title": profiles.BLOCK_TITLES[profiles.TOPIC_BLOCK],
+        "indicators": [_with_reason(_indicator_out(mine.get(i.key), i, name, session), mine)
+                       for i in profiles.topic_indicators_for(session.source)],
+        "distribution": distribution,
+        "classifier": {"name": evaluation.classifier, "accuracy": evaluation.accuracy,
+                       "labeled": evaluation.labeled,
+                       "evaluated_at": timezone.localtime(evaluation.ran_at)},
     }
 
 
@@ -451,3 +557,11 @@ def parties(request, source: SourceParam | None = None) -> dict:
             if day > entry["latest_date"]:
                 entry["latest_date"] = day
     return {"items": sorted(stats.values(), key=lambda e: e["count"], reverse=True)}
+
+
+def _with_reason(out: dict, mine: dict[str, ProfileStat]) -> dict:
+    """委員會職掌沒有值、但他其實有分類過的報導：原因是沒有委員會資料，不是樣本不足。"""
+    focus = mine.get("topic_focus")
+    if out["key"] == "committee_alignment" and out["n"] == 0 and focus is not None and focus.n > 0:
+        out["reason"] = "no_committee_data"
+    return out

@@ -4,7 +4,16 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Callable, Protocol
 
-from .entities import AudioClip, Brief, Cue, Deck, Slide, Transcript
+from .entities import (
+    AudioClip,
+    Brief,
+    Cue,
+    Deck,
+    Slide,
+    TopicLabel,
+    TopicResult,
+    Transcript,
+)
 
 # 進度回報：fraction 為 0..1，None 表示不確定；status 為文字說明。
 ProgressCallback = Callable[[float | None, str], None]
@@ -87,6 +96,23 @@ class SlideRewriter(Protocol):
 
         回應不是合法的結構時 raise SummarizerOutputInvalid；連不上模型時
         raise SummarizerUnavailable。取消的規則與 Summarizer 相同。
+        """
+        ...
+
+
+class TopicClassifier(Protocol):
+    def classify(
+        self,
+        text: str,
+        labels: Sequence[TopicLabel],
+        progress: ProgressCallback,
+        is_cancelled: CancelCheck | None = None,
+    ) -> TopicResult:
+        """把一段文字分到 labels 裡的一個主領域（與可有可無的次領域）。
+
+        回應解析不出來、或主領域不在 labels 裡時 raise SummarizerOutputInvalid
+        ——不猜「最接近的」，那等於替模型做決定；連不上模型時 raise
+        SummarizerUnavailable。取消的規則與 Summarizer 相同。
         """
         ...
 

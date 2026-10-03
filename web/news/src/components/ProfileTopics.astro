@@ -1,0 +1,132 @@
+---
+/**
+ * 側寫的議題分布：分類器的說明、各領域的篇數與占比。聚焦度、廣度等指標卡不在這裡，
+ * 由 ProfilePanel 接在後面，跟其他區塊用同一種卡片。
+ *
+ * 圖的選擇：一個數列、十二個沒有順序的類別，要比的是多寡——橫向長條，依篇數排序。
+ * 每條長條同一個顏色（viz-mark）：長度已經在講多少，再依大小換色只是把同一件事
+ * 講兩次。只有一個數列，所以沒有圖例，區塊標題就說明了畫的是什麼。
+ *
+ * 長條的刻度是占比 0～100%，不是「相對於最多的那一列」：最多的那條塗滿整格，
+ * 讀起來會像「全部都在講這個」。淡色的底軌標出 100% 在哪裡。
+ *
+ * 文字版：每一列的文字（領域、篇數、占比）就是這張圖的完整內容，長條本身
+ * aria-hidden——讀螢幕報讀器或不看顏色的人拿到的跟看圖的人一樣。所以不另做
+ * 滑過才出現的提示框：值已經全部寫在圖上，提示框只會重複一次。
+ */
+import type { TopicClassifier, TopicShare } from '../lib/types';
+import { evidenceHref } from '../lib/api';
+import { formatDateTime, formatPercent } from '../lib/format';
+import { TOPIC_AREAS } from '../lib/topics';
+
+interface Props {
+  classifier: TopicClassifier;
+  distribution: TopicShare[];
+}
+
+const { classifier, distribution } = Astro.props;
+
+// 0 篇的領域不畫空長條：十二列裡一半是空的，真正有內容的幾列反而被稀釋
+const shown = distribution.filter((t) => t.count > 0);
+const zero = distribution.filter((t) => t.count === 0);
+const total = shown.reduce((sum, t) => sum + t.count, 0);
+// 後端把 12 個領域都列出來；萬一少給了，說明文字仍照列舉寫，不寫成「從 5 個領域選」
+const areaCount = Math.max(distribution.length, TOPIC_AREAS.length);
+const accuracy = formatPercent(classifier.accuracy * 100);
+// 跟側寫的「計算於」一樣換成臺灣時間：直接切字串的話，後端給 UTC 時日期會差一天
+const evaluated = formatDateTime(classifier.evaluated_at);
+// 分類器的名字是「模型#提示詞版本#提示指紋」。指紋是給程式比對版本用的，讀者看模型與版本就好，
+// 完整字串留在 title 裡給要追究的人看
+const [modelName = '', promptVersion = ''] = (classifier.name || '').split('#');
+const classifierLabel = promptVersion ? `${modelName}（提示詞 ${promptVersion}）` : modelName;
+---
+
+<p class="mt-1 text-[0.78rem] leading-relaxed text-muted">
+  每篇報導由模型從 {areaCount} 個固定領域選一個主領域；分類器在 {classifier.labeled} 篇人工標註上的準確率 {accuracy}%。只算單獨發言、有摘要卡的報導。
+  <a
+    href="/method#profile-topics"
+    class="whitespace-nowrap text-accent underline decoration-accent/40 underline-offset-4 transition-colors hover:decoration-accent"
+  >
+    分類方法與限制
+  </a>
+</p>
+{
+  (classifier.name || evaluated) && (
+    <p class="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-[0.72rem] text-muted">
+      {classifier.name && <span class="break-all" title={classifier.name}>分類器 {classifierLabel}</span>}
+      {classifier.name && evaluated && (
+        <span aria-hidden="true" class="hidden text-line sm:inline">
+          ·
+        </span>
+      )}
+      {evaluated && <span class="tabular">評估於 {evaluated}</span>}
+    </p>
+  )
+}
+
+{
+  shown.length > 0 ? (
+    <figure class="mt-4 max-w-2xl">
+      <figcaption class="text-[0.72rem] text-muted">
+        {total} 篇報導的主領域，依篇數排序；點領域可以看是哪幾篇。
+      </figcaption>
+      <ol class="mt-2 grid" aria-label="各領域的篇數與占比">
+        {shown.map((t) => {
+          const href = evidenceHref(t.evidence_url);
+          const share = formatPercent(t.share);
+          // 手機上名稱與數字一行、長條另起一行；寬一點的螢幕三欄並排
+          const row =
+            '-mx-2 grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-1 rounded-lg px-2 py-1.5 sm:grid-cols-[7.5rem_minmax(0,1fr)_auto]';
+          const body = (
+            <>
+              <span
+                class:list={[
+                  'col-start-1 row-start-1 text-[0.82rem] text-ink-2',
+                  href &&
+                    'underline decoration-transparent underline-offset-4 transition-colors group-hover:text-accent group-hover:decoration-accent/40',
+                ]}
+              >
+                {t.label}
+              </span>
+              <span
+                class="col-span-2 col-start-1 row-start-2 sm:col-span-1 sm:col-start-2 sm:row-start-1"
+                aria-hidden="true"
+              >
+                {/* 底軌是 100%；長條從左邊的基線長出來，只有資料端是圓角 */}
+                <span class="relative block h-2.5 rounded-r-[4px] bg-line-soft">
+                  <span
+                    class="absolute inset-y-0 left-0 rounded-r-[4px] bg-viz-mark"
+                    style={`width: max(2px, ${t.share}%)`}
+                  />
+                </span>
+              </span>
+              <span class="tabular col-start-2 row-start-1 text-right text-[0.78rem] whitespace-nowrap sm:col-start-3">
+                <span class="inline-block min-w-[3.2em] text-ink-2">{t.count} 篇</span>
+                <span class="sr-only">，占</span>
+                <span class="ml-1.5 inline-block min-w-[3.4em] text-muted">{share}%</span>
+              </span>
+            </>
+          );
+          return (
+            <li>
+              {href ? (
+                <a href={href} class:list={[row, 'group transition-colors hover:bg-accent/5']}>
+                  {body}
+                </a>
+              ) : (
+                <div class={row}>{body}</div>
+              )}
+            </li>
+          );
+        })}
+      </ol>
+      {zero.length > 0 && (
+        <p class="mt-2 text-[0.75rem] leading-relaxed text-muted">
+          其他領域都是 0 篇：{zero.map((t) => t.label).join('、')}。
+        </p>
+      )}
+    </figure>
+  ) : (
+    <p class="mt-3 text-[0.78rem] text-muted">這個會期沒有分類過的報導。</p>
+  )
+}
