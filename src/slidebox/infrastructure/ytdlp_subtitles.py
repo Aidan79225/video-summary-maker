@@ -9,16 +9,16 @@ from collections.abc import Sequence
 import yt_dlp
 
 from ..domain.entities import Transcript
-from ..domain.errors import NoSubtitlesAvailable, SubtitleDownloadFailed
+from ..domain.errors import NoSubtitlesAvailable, SubtitleTrackFailed
 from ..usecases.chapters import parse_vtt, pick_subtitle_track
 
 
-def _describe_download_error(lang: str, error: Exception) -> str:
+def _download_error(lang: str, error: Exception) -> SubtitleTrackFailed:
     cause = str(error).removeprefix("ERROR: ").strip()
     if "HTTP Error 429" in cause:
-        return (f"字幕軌 {lang} 下載失敗：YouTube 暫時限制了請求頻率（HTTP 429），"
-                "請過幾分鐘再試。")
-    return f"字幕軌 {lang} 下載失敗：{cause[:160]}"
+        return SubtitleTrackFailed(
+            f"字幕軌 {lang} 下載失敗：YouTube 暫時限制了請求頻率（HTTP 429）", retry_later=True)
+    return SubtitleTrackFailed(f"字幕軌 {lang} 下載失敗：{cause[:160]}")
 
 
 class YtDlpSubtitleGateway:
@@ -70,12 +70,12 @@ class YtDlpSubtitleGateway:
             with yt_dlp.YoutubeDL(opts) as ydl:
                 ydl.download([url])
         except yt_dlp.utils.DownloadError as e:
-            # 不讓 yt-dlp 的英文錯誤原封不動冒到 UI。原因要保留：被限流跟
-            # 影片沒字幕是兩回事，使用者需要知道該等一下還是換一支影片。
-            raise SubtitleDownloadFailed(_describe_download_error(lang, e)) from e
+            # 不讓 yt-dlp 的英文錯誤原封不動冒到 UI，原因也要保留：use case 會改走語音辨識，
+            # 並在投影片的來源註記寫明「字幕下載失敗（原因）」；語音也失敗時，限流的話要提醒稍後重試。
+            raise _download_error(lang, e) from e
         # yt-dlp 會寫成 <id>.<lang>.vtt，語言後綴可能與請求的鍵略有出入
         files = glob.glob(os.path.join(tmp_dir, "*.vtt"))
         if not files:
-            raise SubtitleDownloadFailed(f"字幕軌 {lang} 下載失敗")
+            raise SubtitleTrackFailed(f"字幕軌 {lang} 下載失敗")
         with open(files[0], encoding="utf-8") as f:
             return f.read()

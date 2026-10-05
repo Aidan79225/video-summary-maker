@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import replace
 
 from ..domain.entities import Brief, Deck, DeckResult, Settings, Slide, Transcript
@@ -13,6 +14,7 @@ from ..domain.errors import (
     NoSubtitlesAvailable,
     OperationCancelled,
     SubtitleDownloadFailed,
+    SubtitleTrackFailed,
     SummarizerOutputInvalid,
     SummarizerUnavailable,
 )
@@ -115,16 +117,18 @@ class BuildDeckUseCase:
             note = transcript.source_note or (
                 "使用 YouTube 自動字幕，品質可能較差" if transcript.is_automatic else "")
         except SubtitleDownloadFailed:
-            # 字幕存在但這次下載失敗（例如 HTTP 429）：這是暫時性問題，原樣
-            # 告知使用者稍後重試。改走語音會把品質最好的人工字幕無聲地換成
-            # 較差的語音辨識，而且把「請過幾分鐘再試」的提示吞掉。
+            # 來源明確說「改走語音也幫不上忙」（例如 IVOD 還沒有逐字稿，備援的 yt-dlp 不認得
+            # IVOD 網址）：原樣回報，真正的原因才不會被一個無關的音訊錯誤蓋掉
             raise
-        except NoSubtitlesAvailable:
-            # 影片真的沒有可用字幕，才改用語音辨識
+        except NoSubtitlesAvailable as missing:
+            # 沒有字幕、或字幕軌下載失敗（SubtitleTrackFailed，例如 YouTube 限流）：改用語音辨識。
+            # 下載失敗時把原因寫進來源註記——讀的人要知道這份投影片不是從字幕來的、為什麼
             if self._audio is None or self._transcriber is None:
                 raise
-            transcript = self._transcribe(url, settings, cb, check, cancelled, speech_hint)
-            note = "由語音辨識產生，可能有辨識錯誤"
+            transcript = self._transcribe(url, settings, cb, check, cancelled, speech_hint, missing)
+            note = (f"字幕下載失敗（{missing.reason}），改由語音辨識產生，可能有辨識錯誤"
+                    if isinstance(missing, SubtitleTrackFailed)
+                    else "由語音辨識產生，可能有辨識錯誤")
 
         check()
         cb(_P_SUBTITLES, "整理字幕…" + (f"（{note}）" if note else ""))
@@ -190,8 +194,12 @@ class BuildDeckUseCase:
         check,
         cancelled: CancelCheck,
         speech_hint: str | None = None,
+        missing: NoSubtitlesAvailable | None = None,
     ) -> Transcript:
-        """沒有字幕時：下載音訊 → 語音辨識 → 組成 Transcript。
+        """沒有字幕（或字幕軌下載失敗）時：下載音訊 → 語音辨識 → 組成 Transcript。
+
+        missing 是字幕那一步的錯誤。字幕軌下載失敗（SubtitleTrackFailed）而語音備援也失敗時，
+        最後的錯誤要同時講兩件事：只講音訊的錯，使用者不會知道字幕其實存在、只是被限流。
 
         音訊放在固定的暫存資料夾：此時還不知道 video_id，無法放進影片自己的
         資料夾。app 一次只跑一個生成，不會撞名。資料夾名稱刻意取成明顯屬於
@@ -204,9 +212,10 @@ class BuildDeckUseCase:
         def speech_cb(frac: float | None, status: str) -> None:
             cb(None, status if frac is None else f"{status} {frac:.0%}")
 
+        track_failed = isinstance(missing, SubtitleTrackFailed)
         try:
             check()
-            cb(None, "無法取得字幕，改用語音辨識…")
+            cb(None, "字幕下載失敗，改用語音辨識…" if track_failed else "無法取得字幕，改用語音辨識…")
             # 先清空：上一次若在 finally 之前就中斷（例如轉錄時關掉視窗），
             # 留下的 .part 會被 yt-dlp 續傳，把兩支影片的位元組拼在一起。
             self._audio.cleanup(audio_dir)
@@ -215,10 +224,19 @@ class BuildDeckUseCase:
             cues, language = self._transcriber.transcribe(
                 clip.path, clip.duration, speech_cb, cancelled, speech_hint
             )
+        except OperationCancelled:
+            raise
+        except Exception as e:
+            if not track_failed:
+                raise
+            raise SubtitleDownloadFailed(
+                _both_failed(missing, f"改用語音辨識也失敗：{_speech_reason(e)}")) from e
         finally:
             self._audio.cleanup(audio_dir)
 
         if not cues:
+            if track_failed:
+                raise SubtitleDownloadFailed(_both_failed(missing, "改用語音辨識也沒有偵測到語音"))
             raise NoSubtitlesAvailable("這部影片沒有字幕，也沒有偵測到語音")
         # is_automatic=False：Whisper 的輸出是一句一句的獨立段落，不是 YouTube
         # 的滾動字幕，套用滾動去重只會誤刪內容。
@@ -387,3 +405,32 @@ def _only_first_person(slides, problems: list[str]) -> bool:
     """驗證失敗是否全是第一人稱。其他問題（頁數、空白、太短）要整份重產才修得好。"""
     first_person = {p for s in slides for p in first_person_problems(s)}
     return bool(problems) and all(p in first_person for p in problems)
+
+
+def _short(error: Exception) -> str:
+    """錯誤訊息給畫面用：去掉 yt-dlp 的「ERROR: 」前綴、截短。"""
+    text = str(error).removeprefix("ERROR: ").strip() or type(error).__name__
+    return text[:160]
+
+
+# 音訊與語音辨識的 adapter 預設自己是在「沒有字幕」之後才被叫到，訊息都以這句開頭
+_NO_SUBTITLES_PREFIX = re.compile(r"^這部影片沒有字幕[，；]\s*")
+# 拿掉前綴之後，「音訊也下載失敗」「語音辨識模型…也無法載入」的「也」沒有東西可以接了
+_DANGLING_ALSO = re.compile(r"^([^：（]*?)也")
+
+
+def _speech_reason(error: Exception) -> str:
+    """語音備援失敗的原因，接在「字幕軌下載失敗」後面。
+
+    adapter 丟的 NoSubtitlesAvailable 已經是給人看的句子（含「若未安裝請執行 uv sync」這類提示），
+    只拿掉「這部影片沒有字幕」——字幕其實存在，只是下載失敗——不截短；其他例外照 _short 處理。
+    """
+    if not isinstance(error, NoSubtitlesAvailable):
+        return _short(error)
+    text = _NO_SUBTITLES_PREFIX.sub("", str(error).strip())
+    return _DANGLING_ALSO.sub(r"\1", text, count=1) if text != str(error).strip() else text
+
+
+def _both_failed(missing: SubtitleTrackFailed, speech: str) -> str:
+    """字幕軌下載失敗、語音備援也失敗：兩個原因都講；限流的話提醒稍後重試。"""
+    return f"{missing.reason}；{speech}" + ("，請過幾分鐘再試。" if missing.retry_later else "")
