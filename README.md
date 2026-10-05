@@ -263,11 +263,29 @@ uv run --group api serve_api.py
 | 端點 | 說明 |
 |---|---|
 | `GET /health` | Ollama 是否連得上、目前忙不忙 |
-| `POST /jobs` | `{url, detailed, min_slides, max_slides}` → `202 {id}` |
-| `GET /jobs/{id}` | 進度與結果 |
+| `POST /jobs` | `{url, detailed, min_slides, max_slides}` → `202 {id}`（議題分類工作見下） |
+| `GET /jobs/{id}` | 進度與結果（`kind` 是工作種類） |
 | `DELETE /jobs/{id}` | 取消 |
 
 環境變數見 `serve_api.py` 的 docstring。設了 `SLIDEBOX_API_KEY` 就會強制 `X-API-Key`。
+
+### 議題分類（`kind: "topic"`）
+
+同一個 `POST /jobs` 也收議題分類工作：把一段文字（摘要卡的一句話＋各段小標）分到呼叫端帶來的政策領域。沒帶 `kind` 就是摘要工作，舊的呼叫方式完全不變。
+
+```json
+{"kind": "topic",
+ "text": "一句話：……\n各段小標：\n- ……",
+ "labels": [{"key": "welfare", "label": "衛生福利", "description": "醫療、健保、長照……"}, …]}
+```
+
+- `text` 必填，上限 4000 字；`labels` 2～20 個，`key` 與名稱都不可重複；`url` 不需要（帶了就要是 http／https）
+- 領域清單不寫死在 GPU 端，每次由新聞服務帶來；模型看到的是名稱與說明，選完再對回 `key`
+- `key` 與名稱不可只有空白
+- 成品：`{"primary": "welfare", "secondary": null, "classifier": "qwen3.5:9b#topic-v1#1a2b3c4d"}`。`secondary` 只有第二個領域也占了相當篇幅才有，跟主領域相同就是 `null`
+- `classifier` 是「模型#提示詞版本#提示指紋」，新聞服務靠它分辨哪些結果是評估過的版本分的。指紋從模型實際看到的提示（提示詞範本、領域的名稱與說明、schema）和代碼算出來：新聞服務那邊改了任何一個領域的說明，名稱就跟著變，舊的評估不會被當成新清單的評估。指紋看不到的改動——解析規則、溫度、思考開關——**要手動升 `PROMPT_VERSION`**（`src/slidebox/usecases/topics.py`）
+- 主領域不在清單裡（或回應解析不出來）時工作失敗，不猜
+- 跟摘要排同一個佇列、一次只跑一個；溫度 0、關掉模型的思考，一篇約 3 秒
 
 **要讓 Pi 連得到這個服務，兩件事都要做**（預設只綁 loopback，所以預設狀態下 Pi 是連不到的）：
 

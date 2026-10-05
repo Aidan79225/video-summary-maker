@@ -6,13 +6,15 @@ import base64
 import itertools
 import shutil
 import tempfile
-from datetime import date
+from datetime import date, datetime
 from urllib.parse import parse_qsl, unquote, urlsplit
 
 from django.test import TestCase, override_settings
+from django.utils import timezone
 
 from articles.ingest import save_result
-from articles.models import Article, ArticleStatus, Membership, Person, ProfileStat, Session
+from articles.models import (Article, ArticleStatus, Membership, Person, ProfileStat, Session, Topic,
+                             TopicEvaluation)
 from articles.profiles import assign_sessions, compute_profiles
 
 MEDIA = tempfile.mkdtemp(prefix="news_api_media_")
@@ -599,3 +601,212 @@ class SpeakerPersonTests(TestCase):
         _article("1", speaker="甲")
         items = self.client.get("/api/speakers").json()["items"]
         self.assertEqual([i["person_id"] for i in items], [new.id])
+
+
+# --- 議題分布 ---
+
+CLASSIFIER = "fake-model#topic-v1"
+
+
+def _pass(source, classifier=CLASSIFIER, accuracy=0.9, labeled=20):
+    return TopicEvaluation.objects.create(
+        source=source, classifier=classifier, labeled=labeled, correct=round(labeled * accuracy),
+        accuracy=accuracy, passed=True, ran_at=timezone.make_aware(datetime(2026, 10, 3, 9, 30)))
+
+
+def _topic(article, primary, classifier=CLASSIFIER):
+    Topic.objects.create(article=article, primary=primary, classifier=classifier,
+                         labeled_at=timezone.now())
+    return article
+
+
+def _topic_speech(speaker, primary, classifier=CLASSIFIER, **kw):
+    """一篇基礎文章（單獨發言、有摘要卡）加上它的領域。"""
+    kw.setdefault("brief", BRIEF)
+    return _topic(_speech(speaker, **kw), primary, classifier)
+
+
+@override_settings(MEDIA_ROOT=MEDIA)
+class TopicProfileApiTests(TestCase):
+    """立法院第 11 屆第 5 會期，六位立委，分類器已通過評估。"""
+
+    def setUp(self):
+        self.m = _members("ly", "王立", "甲", "乙", "丙", "丁", "戊")
+        Membership.objects.filter(name="王立").update(
+            committees=["第11屆第5會期：財政委員會", "第11屆第5會期：程序委員會"])
+        Membership.objects.exclude(name="王立").update(committees=["第11屆第5會期：內政委員會"])
+        # 王立：財經 3、衛福 2、勞動 1，基礎文章 6 篇
+        for i, primary in enumerate(("finance", "welfare", "finance", "labor", "welfare", "finance")):
+            _topic_speech("王立", primary, day=f"2026-03-0{i + 1}")
+        _topic(_speech("王立、甲", day="2026-04-01", brief=BRIEF), "defense")    # 聯合質詢
+        _topic(_speech("王立", day="2026-04-02"), "defense")                     # 沒有摘要卡
+        _speech("王立", day="2026-04-03", brief=BRIEF)                           # 還沒分類
+        _topic_speech("王立", "defense", classifier="new-model#topic-v2", day="2026-04-04")
+        _topic_speech("王立", "justice", meeting=S4, day="2025-10-01")                # 上一個會期
+        for name, primaries in (("甲", ["interior"] * 4 + ["finance"]),
+                                ("乙", ["interior", "education", "transport", "labor", "local"]),
+                                ("丙", ["environment"] * 5), ("丁", ["interior", "defense"])):
+            for primary in primaries:
+                _topic_speech(name, primary)
+        self.evaluation = _pass("ly")
+        compute_profiles()
+        self.s5 = Session.objects.get(name="第11屆第5會期")
+
+    def _profile(self, name, **params):
+        return self.client.get(f"/api/people/{self.m[name].person_id}/profile", params).json()
+
+    def _topics(self, res):
+        blocks = {b["key"]: b for b in res["blocks"]}
+        return blocks.get("topics")
+
+    def test_the_topics_block_has_the_documented_shape(self):
+        res = self._profile("王立")
+        self.assertEqual([b["key"] for b in res["blocks"]], ["volume", "specificity", "topics"])
+        block = self._topics(res)
+        self.assertEqual(block["title"], "議題分布")
+        self.assertEqual([i["key"] for i in block["indicators"]],
+                         ["topic_focus", "topic_breadth", "committee_alignment"])
+        self.assertEqual(block["classifier"], {"name": CLASSIFIER, "accuracy": 0.9, "labeled": 20,
+                                               "evaluated_at": "2026-10-03T09:30:00+08:00"})
+        # 其他區塊沒有這兩個欄位
+        self.assertNotIn("distribution", res["blocks"][0])
+
+    def test_the_distribution_lists_all_twelve_by_count_then_in_table_order(self):
+        rows = self._topics(self._profile("王立"))["distribution"]
+        self.assertEqual([(r["key"], r["label"], r["count"]) for r in rows[:3]],
+                         [("finance", "財政經濟", 3), ("welfare", "衛生福利", 2), ("labor", "勞動", 1)])
+        self.assertEqual([r["key"] for r in rows[3:]],
+                         ["defense", "interior", "education", "transport", "environment",
+                          "justice", "agriculture", "digital", "local"])
+        self.assertEqual({r["count"] for r in rows[3:]}, {0})
+        self.assertEqual([r["share"] for r in rows[:4]], [50.0, 2 / 6 * 100, 1 / 6 * 100, 0.0])
+        self.assertEqual(rows[0]["evidence_url"],
+                         f"/speaker/%E7%8E%8B%E7%AB%8B?source=ly&session={self.s5.id}"
+                         "&solo=1&brief=1&topic=finance")
+
+    def test_the_indicators(self):
+        got = {i["key"]: i for i in self._topics(self._profile("王立"))["indicators"]}
+        focus, breadth, aligned = got["topic_focus"], got["topic_breadth"], got["committee_alignment"]
+        self.assertEqual((focus["value"], focus["n"], focus["unit"], focus["n_unit"]),
+                         (50.0, 6, "%", "篇"))
+        self.assertEqual((breadth["value"], breadth["unit"]), (3, "個"))
+        self.assertIsInstance(breadth["value"], int)
+        # 財政委員會的職掌只有財經：6 篇裡 3 篇
+        self.assertEqual((aligned["value"], aligned["n"]), (50.0, 6))
+        # 同儕：基礎文章至少 5 篇的王立、甲、乙、丙（丁只有 2 篇）——不到 5 人，不比
+        self.assertEqual((focus["peers"], focus["percentile"], focus["sample_ok"]), (4, None, True))
+        self.assertEqual(focus["evidence_url"],
+                         f"/speaker/%E7%8E%8B%E7%AB%8B?source=ly&session={self.s5.id}"
+                         "&solo=1&brief=1&topic=any")
+
+    def test_every_count_can_be_clicked_back_to_exactly_that_many_articles(self):
+        """證據一致性：分布每一列的證據網址查出來的篇數等於它的篇數；每個指標等於它的 n。"""
+        checked = 0
+        for name in self.m:
+            res = self._profile(name, session=self.s5.id)
+            for row in self._topics(res)["distribution"]:
+                self.assertEqual(_evidence_count(self.client, row["evidence_url"]), row["count"],
+                                 (name, row["key"]))
+                checked += 1
+            for block in res["blocks"]:
+                for indicator in block["indicators"]:
+                    if indicator["n_unit"] == "篇":
+                        self.assertEqual(_evidence_count(self.client, indicator["evidence_url"]),
+                                         indicator["n"], (name, indicator["key"]))
+                        checked += 1
+        self.assertGreater(checked, 6 * 12)
+
+    def test_without_a_passing_evaluation_there_is_no_block_and_no_evidence(self):
+        TopicEvaluation.objects.all().delete()
+        res = self._profile("王立")
+        self.assertEqual([b["key"] for b in res["blocks"]], ["volume", "specificity"])
+        for topic in ("finance", "any"):
+            self.assertEqual(self.client.get("/api/articles", {"topic": topic}).json()["count"], 0)
+
+    def test_an_evaluation_that_passed_after_the_last_recompute_shows_nothing_yet(self):
+        """評估剛通過、側寫還沒重算：沒有分布列，不能給一排 0 篇。"""
+        tccc = _members("tccc", "楊啓邦")
+        _topic_speech("楊啓邦", "transport", meeting="第4屆第8次定期會 市政總質詢",
+                      day="2026-09-01", source="tccc")
+        compute_profiles()
+        _pass("tccc")
+        res = self.client.get(f"/api/people/{tccc['楊啓邦'].person_id}/profile").json()
+        self.assertEqual([b["key"] for b in res["blocks"]], ["volume", "specificity"])
+        compute_profiles()
+        res = self.client.get(f"/api/people/{tccc['楊啓邦'].person_id}/profile").json()
+        block = self._topics(res)
+        # 市議員沒有委員會職掌
+        self.assertEqual([i["key"] for i in block["indicators"]], ["topic_focus", "topic_breadth"])
+        self.assertEqual(block["distribution"][0]["key"], "transport")
+
+
+@override_settings(MEDIA_ROOT=MEDIA)
+class TopicFilterTests(TestCase):
+    """/api/articles?topic=：主領域是它，而且是那篇文章的來源通過評估的分類器分的。"""
+
+    def setUp(self):
+        self.ly_ok = _topic(_article("1", speaker="王立", brief=BRIEF, slides=1, with_image=False),
+                            "finance")
+        self.ly_other = _topic(_article("2", speaker="王立", brief=BRIEF, slides=1, with_image=False),
+                               "finance", classifier="tccc-model#topic-v1")
+        self.ly_labor = _topic(_article("3", speaker="王立", brief=BRIEF, slides=1, with_image=False),
+                               "labor")
+        _article("4", speaker="王立", brief=BRIEF, slides=1, with_image=False)   # 還沒分類
+        self.tccc = _topic(_article("tccc-5", speaker="楊啓邦", source="tccc", brief=BRIEF, slides=1,
+                                    with_image=False, meeting="第4屆第8次定期會"),
+                           "finance", classifier="tccc-model#topic-v1")
+        _pass("ly")
+
+    def _ids(self, **params):
+        return sorted(i["ivod_id"] for i in self.client.get("/api/articles", params).json()["items"])
+
+    def test_only_the_passing_classifier_of_each_articles_source_counts(self):
+        self.assertEqual(self._ids(topic="finance"), ["1"])
+        # 臺中通過的是另一個分類器：那個分類器分的立法院文章仍然不算
+        _pass("tccc", classifier="tccc-model#topic-v1")
+        self.assertEqual(self._ids(topic="finance"), ["1", "tccc-5"])
+
+    def test_any_means_classified_by_the_passing_version_in_any_area(self):
+        self.assertEqual(self._ids(topic="any"), ["1", "3"])
+        self.assertEqual(self._ids(topic="labor", speaker="王立", solo=1, has_brief=1), ["3"])
+
+    def test_junk_is_refused(self):
+        self.assertEqual(self.client.get("/api/articles?topic=space").status_code, 422)
+        self.assertEqual(self.client.get("/api/articles?topic=財政經濟").status_code, 422)
+
+
+@override_settings(MEDIA_ROOT=MEDIA)
+class TopicStatsVersionTests(TestCase):
+    """攔的 bug：側寫的議題列沒記是哪個分類器算的。上線的分類器換了、重算又失敗時，頁面把
+    A 版算的數字掛上 B 版的名字，證據篩選（用 B 版）點進去是 0 篇。"""
+
+    setUp = TopicProfileApiTests.setUp
+    _profile = TopicProfileApiTests._profile
+    _topics = TopicProfileApiTests._topics
+
+    def test_topic_rows_record_their_classifier(self):
+        rows = ProfileStat.objects.exclude(classifier="")
+        self.assertTrue(rows.exists())
+        self.assertEqual(set(rows.values_list("classifier", flat=True)), {CLASSIFIER})
+        self.assertFalse(ProfileStat.objects.filter(indicator="speeches").exclude(classifier="").exists())
+
+    def test_no_block_when_the_rows_came_from_another_classifier(self):
+        from articles.profiles import topic_stats_stale
+
+        self.assertFalse(topic_stats_stale())
+        # B 版通過評估，但還沒重算（例如重算時資料庫被鎖住）
+        _pass("ly", classifier="new-model#topic-v2")
+        self.assertTrue(topic_stats_stale())
+        self.assertIsNone(self._topics(self._profile("王立")))
+        compute_profiles()
+        self.assertFalse(topic_stats_stale())
+        block = self._topics(self._profile("王立"))
+        self.assertEqual(block["classifier"]["name"], "new-model#topic-v2")
+
+    def test_committee_alignment_says_why_it_has_no_value(self):
+        Membership.objects.filter(name="王立").update(committees=[])
+        compute_profiles()
+        got = {i["key"]: i for i in self._topics(self._profile("王立"))["indicators"]}
+        self.assertEqual((got["committee_alignment"]["n"], got["committee_alignment"]["reason"]),
+                         (0, "no_committee_data"))
+        self.assertEqual(got["topic_focus"]["reason"], "")

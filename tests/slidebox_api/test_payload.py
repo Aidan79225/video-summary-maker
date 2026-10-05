@@ -2,9 +2,10 @@
 from __future__ import annotations
 
 import base64
+import json
 
-from slidebox.domain.entities import Ask, Brief, Deck, KeyNumber, Slide
-from slidebox_api.payload import deck_payload
+from slidebox.domain.entities import Ask, Brief, Deck, KeyNumber, Slide, TopicResult
+from slidebox_api.payload import deck_payload, topic_payload
 
 IMAGE = b"\x00\x01fake-webp\xff"
 
@@ -84,3 +85,18 @@ def test_the_brief_travels_with_the_deck(tmp_path):
 def test_no_brief_is_null_not_an_empty_object(tmp_path):
     """Pi 那邊要分得出「沒產出」與「產出但空」。"""
     assert deck_payload(_deck(tmp_path), video_id="171180")["brief"] is None
+
+
+# --- 分類工作的成品 ---
+
+
+def test_a_topic_result_has_exactly_the_three_fields_the_news_service_reads():
+    data = topic_payload(TopicResult("welfare", "defense", "qwen3.5:9b#topic-v1"))
+    assert data == {"primary": "welfare", "secondary": "defense",
+                    "classifier": "qwen3.5:9b#topic-v1"}
+
+
+def test_no_secondary_is_null_not_an_empty_string():
+    """空字串會被新聞服務當成一個叫「」的領域。"""
+    data = topic_payload(TopicResult("welfare", None, "qwen3.5:9b#topic-v1"))
+    assert json.loads(json.dumps(data))["secondary"] is None

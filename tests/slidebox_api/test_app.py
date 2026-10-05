@@ -6,9 +6,10 @@ import threading
 import pytest
 from fastapi.testclient import TestClient
 
+from slidebox.domain.entities import TopicLabel
 from slidebox.domain.errors import OperationCancelled
 from slidebox_api.app import create_app
-from slidebox_api.jobs import JobStatus, JobStore
+from slidebox_api.jobs import JobKind, JobStatus, JobStore
 from slidebox_api.runner import JobWorker
 
 IVOD = "https://ivod.ly.gov.tw/Play/Clip/1M/171180"
@@ -187,3 +188,138 @@ def test_a_speech_hint_is_stored_on_the_job_and_capped(kit):
     job_id = client.post("/jobs", json={"url": IVOD, "speech_hint": "臺中市議會。發言者：楊啓邦"}).json()["id"]
     assert store.get(job_id).speech_hint == "臺中市議會。發言者：楊啓邦"
     assert client.post("/jobs", json={"url": IVOD, "speech_hint": "x" * 201}).status_code == 422
+
+
+# --- 分類工作（kind=topic）---
+
+LABELS = [
+    {"key": "defense", "label": "國防外交", "description": "國防、軍事、外交、兩岸、僑務"},
+    {"key": "welfare", "label": "衛生福利", "description": "醫療、健保、長照、社福、托育、食安"},
+]
+TEXT = "一句話：要求衛福部說明長照 3.0 的預算\n各段小標：\n- 長照人力缺口"
+
+
+def _topic(**overrides) -> dict:
+    body = {"kind": "topic", "text": TEXT, "labels": LABELS}
+    body.update(overrides)
+    return body
+
+
+def _labels(n: int) -> list[dict]:
+    return [{"key": f"k{i}", "label": f"領域{i}", "description": ""} for i in range(n)]
+
+
+def test_a_topic_job_needs_no_url(kit):
+    client, *_ = kit
+    response = client.post("/jobs", json=_topic())
+    assert response.status_code == 202
+    body = response.json()
+    assert body["kind"] == "topic"
+    assert body["url"] == ""
+
+
+def test_a_topic_job_carries_its_text_and_labels_to_the_worker(kit):
+    client, store, *_ = kit
+    job_id = client.post("/jobs", json=_topic()).json()["id"]
+    job = store.get(job_id)
+    assert job.text == TEXT
+    assert job.labels == (
+        TopicLabel("defense", "國防外交", "國防、軍事、外交、兩岸、僑務"),
+        TopicLabel("welfare", "衛生福利", "醫療、健保、長照、社福、托育、食安"),
+    )
+
+
+def test_an_old_client_that_sends_no_kind_still_gets_a_deck_job(kit):
+    """攔的 bug：新聞服務的摘要排程不會因為 GPU 端升級而改送 kind；
+    沒帶 kind 必須照舊是摘要工作。"""
+    client, store, *_ = kit
+    body = client.post("/jobs", json={"url": IVOD}).json()
+    assert body["kind"] == "deck"
+    assert store.get(body["id"]).kind == JobKind.DECK
+
+
+def test_the_listing_shows_each_jobs_kind(kit):
+    client, *_ = kit
+    client.post("/jobs", json={"url": IVOD})
+    client.post("/jobs", json=_topic())
+    assert [item["kind"] for item in client.get("/jobs").json()] == ["topic", "deck"]
+
+
+def test_an_unknown_kind_is_refused(kit):
+    client, *_ = kit
+    assert client.post("/jobs", json=_topic(kind="speech")).status_code == 422
+
+
+@pytest.mark.parametrize("text", ["", "   \n"])
+def test_a_topic_job_without_text_is_refused(kit, text):
+    client, *_ = kit
+    assert client.post("/jobs", json=_topic(text=text)).status_code == 422
+
+
+def test_a_topic_job_that_omits_the_text_field_is_refused(kit):
+    client, *_ = kit
+    body = _topic()
+    del body["text"]
+    assert client.post("/jobs", json=body).status_code == 422
+
+
+def test_topic_text_is_capped_at_4000_characters(kit):
+    """擋的是誤把整份逐字稿送進來的請求：準確率是在短輸入上量的，長輸入
+    分出來的結果沒有人評估過。中文一個字算一個。"""
+    client, *_ = kit
+    assert client.post("/jobs", json=_topic(text="字" * 4000)).status_code == 202
+    assert client.post("/jobs", json=_topic(text="字" * 4001)).status_code == 422
+
+
+@pytest.mark.parametrize("count,status", [(0, 422), (1, 422), (2, 202), (20, 202),
+                                          (21, 422)])
+def test_a_topic_job_needs_two_to_twenty_labels(kit, count, status):
+    client, *_ = kit
+    assert client.post("/jobs", json=_topic(labels=_labels(count))).status_code == status
+
+
+def test_duplicate_label_keys_are_refused(kit):
+    client, *_ = kit
+    labels = [{"key": "a", "label": "甲"}, {"key": "a", "label": "乙"}]
+    assert client.post("/jobs", json=_topic(labels=labels)).status_code == 422
+
+
+def test_duplicate_label_names_are_refused(kit):
+    """模型選的是名稱，再由名稱對回 key：名稱重複就對不回唯一的 key。"""
+    client, *_ = kit
+    labels = [{"key": "a", "label": "甲"}, {"key": "b", "label": "甲"}]
+    assert client.post("/jobs", json=_topic(labels=labels)).status_code == 422
+
+
+def test_a_label_without_a_key_or_a_name_is_refused(kit):
+    client, *_ = kit
+    no_key = [{"key": "", "label": "甲"}, {"key": "b", "label": "乙"}]
+    no_name = [{"key": "a", "label": ""}, {"key": "b", "label": "乙"}]
+    assert client.post("/jobs", json=_topic(labels=no_key)).status_code == 422
+    assert client.post("/jobs", json=_topic(labels=no_name)).status_code == 422
+
+
+def test_a_label_whose_key_or_name_is_only_whitespace_is_refused(kit):
+    """攔的 bug：min_length 只看長度，"  " 會過。只有空白的名稱去掉空白就是空的，
+    對回代碼時會跟「模型回 null」混在一起；只有空白的 key 存進資料庫也認不出來。"""
+    client, *_ = kit
+    blank_key = [{"key": "  ", "label": "甲"}, {"key": "b", "label": "乙"}]
+    blank_name = [{"key": "a", "label": " \n"}, {"key": "b", "label": "乙"}]
+    assert client.post("/jobs", json=_topic(labels=blank_key)).status_code == 422
+    assert client.post("/jobs", json=_topic(labels=blank_name)).status_code == 422
+
+
+@pytest.mark.parametrize("body", [{}, {"kind": "deck"}, {"kind": "deck", "text": TEXT,
+                                                        "labels": LABELS}])
+def test_a_deck_job_still_requires_a_url(kit, body):
+    """分類工作可以不帶網址，不代表摘要工作也可以：沒有網址就沒有影片。"""
+    client, *_ = kit
+    assert client.post("/jobs", json=body).status_code == 422
+
+
+def test_a_topic_job_may_carry_a_url_but_only_an_http_one(kit):
+    """分類用不到網址，帶了只是讓工作清單看得出是哪一篇。但帶了就照摘要
+    工作的規矩：哪天有人把網址拿去用，file:// 不能是現成的漏洞。"""
+    client, *_ = kit
+    assert client.post("/jobs", json=_topic(url=IVOD)).status_code == 202
+    assert client.post("/jobs", json=_topic(url="file:///C:/Windows/win.ini")).status_code == 422

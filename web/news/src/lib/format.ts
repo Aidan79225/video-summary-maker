@@ -116,3 +116,13 @@ export function formatMetric(value: number): string {
   const digits = Number.isInteger(value) ? 0 : Math.abs(value) >= 10 ? 1 : 2;
   return new Intl.NumberFormat('zh-TW', { maximumFractionDigits: digits }).format(value);
 }
+
+/**
+ * 占比、準確率這類 0～100 的百分比：最多一位小數。
+ *
+ * 不用 formatMetric：它替小於 10 的值留兩位（為了「每篇 0.06 項」），但 1 ÷ 22
+ * 寫成「4.55%」只是雜訊；一整欄占比也該是同一種精度，上下對齊才好比。
+ */
+export function formatPercent(value: number): string {
+  return new Intl.NumberFormat('zh-TW', { maximumFractionDigits: 1 }).format(value);
+}
