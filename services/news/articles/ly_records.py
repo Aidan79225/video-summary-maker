@@ -546,6 +546,8 @@ class RecordsReport:
     removed: Counter = field(default_factory=Counter)
     # 這次一筆都沒抓到、所以沒有刪舊資料的種類（多半是 LYAPI 出狀況）
     kept_because_empty: list[str] = field(default_factory=list)
+    # 議案名稱變了、議案分類刪掉等下一輪重分的件數
+    renamed_bills: int = 0
 
     def __str__(self) -> str:
         scope = f"第{self.term}屆" + (f"第{self.session}會期" if self.session else "（全部會期）")
@@ -562,6 +564,8 @@ class RecordsReport:
         if self.kept_because_empty:
             lines.append(f"這次一筆{'、'.join(self.kept_because_empty)}都沒抓到，資料庫裡的舊紀錄先留著"
                          "（LYAPI 可能出了狀況）")
+        if self.renamed_bills:
+            lines.append(f"議案名稱改了的 {self.renamed_bills} 件：議案分類刪掉，下一輪 classify_bill_topics 重分")
         if self.skipped:
             # 經費稽核委員會的會議每週都會在這裡（LYAPI 標成會期 0）：列幾筆當例子就好
             lines.append(f"沒收的紀錄 {len(self.skipped)} 筆（LYAPI 的資料不完整或會期不合理），例如：")
@@ -583,6 +587,7 @@ def save(fetched: FetchedRecords, now: datetime | None = None) -> RecordsReport:
     with transaction.atomic():
         report.sessions_created = _ensure_sessions(fetched)
         _save_meetings(fetched.meetings, now)
+        report.renamed_bills = _forget_renamed_bills(fetched.bills)
         _save_bills(fetched.bills, now)
         _save_votes(fetched.votes, _meeting_days(fetched), now)
         for label, model, key, records in (
@@ -649,6 +654,21 @@ def _save_meetings(meetings: list[MeetingRecord], now: datetime) -> None:
         update_conflicts=True, unique_fields=["code"], batch_size=_BATCH,
         update_fields=["kind", "term", "session_number", "date", "dates", "name", "units",
                        "attendees", "url", "synced_at"])
+
+
+def _forget_renamed_bills(bills: list[BillRecord]) -> int:
+    """名稱變了的議案，議案分類刪掉、下一輪重分（同文章重產時刪 Topic）：分類讀的就是名稱。
+
+    要在 upsert 之前比：upsert 之後就不知道舊名稱了。只看已經分類過的，一次讀完、在記憶體裡比。
+    人工標註不刪：改名多半是更正錯字，議案是哪個領域不會因此改變。
+    """
+    from .bill_topics import forget  # bill_topics 用到這裡的 name_key，在模組層 import 會循環
+
+    names = {b.bill_no: b.name for b in bills}
+    renamed = [pk for pk, bill_no, name in
+               LyBill.objects.filter(topic__isnull=False).values_list("id", "bill_no", "name")
+               if bill_no in names and names[bill_no] != name]
+    return forget(renamed)
 
 
 def _save_bills(bills: list[BillRecord], now: datetime) -> None:

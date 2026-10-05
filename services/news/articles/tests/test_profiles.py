@@ -457,9 +457,10 @@ class CommandTests(TestCase):
         self.assertEqual(ProfileStat.objects.filter(indicator="speeches").count(), 1)
 
 
-@override_settings(TOPIC_DAILY_LIMIT=200, FOLLOWUP_DAILY_LIMIT=200)
+@override_settings(TOPIC_DAILY_LIMIT=200, FOLLOWUP_DAILY_LIMIT=200, BILL_TOPIC_DAILY_LIMIT=200)
 class NightlyJobTests(SimpleTestCase):
-    """排程：匯入 → 分政策領域 → 判斷追問 → 重算；任何一步失敗都不能冒出排程（APScheduler 會把工作移除）。"""
+    """排程：匯入 → 分政策領域 → 判斷追問 → 議案分類 → 重算；任何一步失敗都不能冒出排程（APScheduler
+    會把工作移除）。"""
 
     LOGGER = "articles.management.commands.run_scheduler"
 
@@ -477,13 +478,25 @@ class NightlyJobTests(SimpleTestCase):
             run_scheduler.nightly(3)
         return calls
 
-    STEPS = ["ingest_ivod", "classify_topics", "check_followups", "compute_profiles"]
+    STEPS = ["ingest_ivod", "classify_topics", "check_followups", "classify_bill_topics",
+             "compute_profiles"]
 
     def test_topics_are_classified_after_the_ingest_and_before_the_recompute(self):
         self.assertEqual(self._run(), [("ingest_ivod", {"days": 3}),
                                        ("classify_topics", {"limit": 200}),
                                        ("check_followups", {"limit": 200}),
+                                       ("classify_bill_topics", {"limit": 200}),
                                        ("compute_profiles", {})])
+
+    @override_settings(BILL_TOPIC_DAILY_LIMIT=11)
+    def test_the_bill_classification_limit_comes_from_the_settings(self):
+        self.assertEqual(self._run()[3], ("classify_bill_topics", {"limit": 11}))
+
+    def test_a_failing_bill_classification_still_recomputes(self):
+        with self.assertLogs(self.LOGGER, "ERROR") as logs:
+            calls = self._run(fail={"classify_bill_topics"})
+        self.assertEqual([name for name, _ in calls], self.STEPS)
+        self.assertIn("議案分類失敗", logs.output[0])
 
     @override_settings(FOLLOWUP_DAILY_LIMIT=9)
     def test_the_followup_limit_comes_from_the_settings(self):

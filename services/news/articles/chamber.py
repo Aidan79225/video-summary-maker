@@ -11,19 +11,24 @@
 每個數字都能點回紀錄清單（/api/people/{id}/records）：清單跟指標用同一個 SessionRecords 算，筆數
 必然等於指標的 n（或值）。
 
-不在這裡的：提案與質詢一致率（議案名稱要另一份標註集，見設計文件）。
+第九張卡「提案與質詢一致率」（proposal_alignment）是唯一用到模型的：議案的領域是議案分類器分的
+（bill_topics），質詢的領域是議題分布的分類器分的（topics）。兩道門檻都過才算（profiles 把兩個上線的
+分類器與每個人的質詢分布帶進 session_rows），列上記「議案分類器｜質詢分類器」，API 只在兩個都等於
+現在上線的版本時給這張卡。它不在 INDICATORS 裡：那八張的證據類別跟紀錄清單的類別一一對應（網站的
+契約），一致率的證據借用主提案清單（每件標出領域）。
 """
 from __future__ import annotations
 
 import logging
 from collections import Counter, defaultdict
-from collections.abc import Iterable, Sequence
-from dataclasses import dataclass
+from collections.abc import Iterable, Mapping, Sequence
+from dataclasses import dataclass, field
 from datetime import date, datetime
+from fractions import Fraction
 
 from django.db.models import Max, Min
 
-from . import profiles, topics
+from . import bill_topics, profiles, topics
 from .ly_records import name_key, parse_session_name
 from .members_sync import term_number
 from .models import (ArticleSource, LyBill, LyMeeting, LyMeetingKind, LyVote, Membership, ProfileStat,
@@ -60,6 +65,10 @@ class _Tally:
     # 他有投票、而且他的黨團那次有多數的表決
     caucus_votes: int = 0
     agreed: int = 0
+    # 提案與質詢一致率：他主提案、通過版本分過類的議案，領域 → 件數；他質詢的領域 → 篇數
+    # （議題分布的基礎文章：單獨發言、有摘要卡、通過版本分類的）
+    proposal_areas: Counter = field(default_factory=Counter)
+    speech_areas: Counter = field(default_factory=Counter)
 
 
 def _percent(part: int, whole: int) -> float | None:
@@ -108,6 +117,50 @@ INDICATOR_KEYS = tuple(i.key for i in INDICATORS)
 CAUCUS_KEYS = (CAUCUS_AGREEMENT.key, CAUCUS_DEFECTIONS.key)
 
 
+def distribution_overlap(a: Mapping[str, int], b: Mapping[str, int]) -> float | None:
+    """兩個分布重疊的部分 × 100：Σ 各領域 min(a 的占比, b 的占比)。完全一樣是 100、沒有交集是 0。
+
+    用分數算再轉浮點數：分布一樣的兩個人值就一樣（浮點數加的順序不同，尾數就不同，百分位會被分出
+    高低）。任何一邊是空的就沒有分布、沒有值。
+    """
+    total_a, total_b = sum(a.values()), sum(b.values())
+    if not total_a or not total_b:
+        return None
+    shared = sum((min(Fraction(a[key], total_a), Fraction(b[key], total_b))
+                  for key in a.keys() & b.keys()), Fraction(0))
+    return float(shared * 100)
+
+
+def _proposal_alignment(t: _Tally) -> tuple[float | None, int]:
+    """n 是分過類的主提案件數（套最小樣本）；質詢的基礎文章不到 MIN_SAMPLE 篇就不給值。
+
+    質詢那一邊也要夠：只有兩三篇質詢的分布，一篇就占三成以上，比出來的重疊只是噪音。值是空的就不進
+    同儕，所以同儕自然是兩邊樣本都夠的人。
+    """
+    n = sum(t.proposal_areas.values())
+    if sum(t.speech_areas.values()) < profiles.MIN_SAMPLE:
+        return None, n
+    return distribution_overlap(t.proposal_areas, t.speech_areas), n
+
+
+PROPOSAL_ALIGNMENT = profiles.Indicator(
+    "proposal_alignment", CHAMBER, "提案與質詢一致率", "%", "件", _proposal_alignment, min_sample=True)
+# 一致率沒有值、因為質詢的基礎文章不到 MIN_SAMPLE 篇：頁面寫「質詢不夠」，不寫提案樣本不足
+FEW_SPEECHES = "few_speeches"
+
+
+@dataclass(frozen=True)
+class Alignment:
+    """一致率的輸入：兩個上線的分類器，與每個人的質詢領域分布（profiles 算議題分布時數好的）。"""
+    bill_classifier: str
+    speech_classifier: str
+    speeches: Mapping[int, Mapping[str, int]]
+
+    @property
+    def stamp(self) -> str:
+        return bill_topics.alignment_stamp(self.bill_classifier, self.speech_classifier)
+
+
 @dataclass(frozen=True)
 class Kind:
     """紀錄清單的一類：網址的 kind、頁面的標題、對應的指標，與清單筆數要等於指標的哪個數。"""
@@ -132,7 +185,8 @@ KINDS = (
 )
 KIND_BY_KEY = {kind.key: kind for kind in KINDS}
 KIND_KEYS = tuple(kind.key for kind in KINDS)
-KIND_OF_INDICATOR = {kind.indicator: kind.key for kind in KINDS}
+# 一致率點回主提案清單：清單上每件分過類的議案標出領域，標了的件數就是一致率的 n
+KIND_OF_INDICATOR = {**{kind.indicator: kind.key for kind in KINDS}, PROPOSAL_ALIGNMENT.key: "proposed"}
 
 
 def evidence_url(person_id: int, session_id: int, indicator_key: str) -> str:
@@ -327,6 +381,7 @@ class SessionRecords:
     def __init__(self, session: Session, legislators: Legislators):
         self.session = session
         numbers = parse_session_name(session.name) if session.source == ArticleSource.LY else None
+        self.numbers = numbers
         self.meetings: list[LyMeeting] = []
         self.bills: list[LyBill] = []
         self.votes: list[LyVote] = []
@@ -422,6 +477,16 @@ class SessionRecords:
     def passed(self, person_id: int) -> list[LyBill]:
         return [b for b in self.proposed(person_id) if PASSED_MARK in b.status]
 
+    def bill_areas(self, classifier: str) -> dict[int, str]:
+        """這個會期的議案 id → 主領域（只認 classifier 這個版本分的）。一致率與主提案清單共用。"""
+        if self.numbers is None:
+            return {}
+        return bill_topics.session_areas(*self.numbers, classifier)
+
+    def proposal_areas(self, person_id: int, areas: Mapping[int, str]) -> Counter:
+        """他主提案、分過類的議案，領域 → 件數。件數加起來就是主提案清單上標了領域的筆數。"""
+        return Counter(areas[b.id] for b in self.proposed(person_id) if b.id in areas)
+
     def all_votes(self, person_id: int) -> list[VoteItem]:
         """在任期間、有記名的票的表決，附他的票與他黨團的多數。"""
         items = []
@@ -460,8 +525,11 @@ class SessionRecords:
 
     # --- 證據清單 ---
 
-    def evidence(self, person_id: int, kind: str) -> list[dict]:
-        """紀錄清單的每一筆（RecordOut 的形狀），新的在前。筆數就是指標的 n 或值。"""
+    def evidence(self, person_id: int, kind: str, bill_areas: Mapping[int, str] | None = None) -> list[dict]:
+        """紀錄清單的每一筆（RecordOut 的形狀），新的在前。筆數就是指標的 n 或值。
+
+        bill_areas（議案 id → 主領域）有給時，議案標出它的領域（topic），沒分過類的是 None。
+        """
         listings = {
             "plenary": (self.plenary, self._meeting_out),
             "committee": (self.committee, self._meeting_out),
@@ -475,7 +543,11 @@ class SessionRecords:
         if kind not in listings:
             raise ValueError(f"沒有這一類紀錄：{kind}")
         listing, out = listings[kind]
-        items = [out(item) for item in listing(person_id)]
+        records = listing(person_id)
+        items = [out(item) for item in records]
+        if bill_areas is not None and out == self._bill_out:
+            for item, bill in zip(items, records):
+                item["topic"] = _area_out(bill_areas.get(bill.id))
         items.sort(key=lambda row: (row["date"] or date.min, row["id"]), reverse=True)
         return items
 
@@ -510,10 +582,15 @@ class SessionRecords:
                 f"母體 {len(self.population)} 人")
 
 
-def session_rows(session: Session, legislators: Legislators,
-                 now: datetime) -> tuple[list[ProfileStat], str]:
-    """一個會期的院內紀錄指標列（每人八列）與報告的一行。沒有同步過紀錄的會期什麼都不給——
-    API 靠「有沒有這幾列」決定要不要給院內紀錄區塊。"""
+def _area_out(key: str | None) -> dict | None:
+    area = topics.TOPIC_BY_KEY.get(key) if key else None
+    return {"key": area.key, "label": area.label} if area else None
+
+
+def session_rows(session: Session, legislators: Legislators, now: datetime,
+                 alignment: Alignment | None = None) -> tuple[list[ProfileStat], str]:
+    """一個會期的院內紀錄指標列（每人八列，兩道門檻都過時再加一致率）與報告的一行。沒有同步過紀錄
+    的會期什麼都不給——API 靠「有沒有這幾列」決定要不要給院內紀錄區塊。"""
     if session.source != ArticleSource.LY:
         return [], ""
     try:
@@ -524,11 +601,60 @@ def session_rows(session: Session, legislators: Legislators,
         rows: list[ProfileStat] = []
         for indicator in INDICATORS:
             rows.extend(profiles._rank(indicator, session, tallies, now))
-        return rows, records.summary()
+        summary = records.summary()
+        if alignment is not None:
+            alignment_rows, problem = _alignment_or_nothing(records, tallies, alignment, now)
+            rows.extend(alignment_rows)
+            summary += problem
+        return rows, summary
     except Exception:  # noqa: BLE001
         # 重算是整批的：這裡出錯不能讓後面的會期（包括市議會的）也停在昨天。這個會期先不給院內紀錄
         logger.exception("%s 的院內紀錄算不出來，這個會期先不給院內紀錄區塊", session.name)
         return [], f"{session.name} 院內紀錄：計算失敗（見 log），這次不給院內紀錄區塊"
+
+
+def _alignment_or_nothing(records: SessionRecords, tallies: dict[int, _Tally], alignment: Alignment,
+                          now: datetime) -> tuple[list[ProfileStat], str]:
+    """一致率的列，與報告那一行要補的字（沒事是空字串）。
+
+    一致率是院內紀錄裡唯一靠模型的卡，多讀一張 BillTopic 表：它出錯時只少這一張，不能連另外八張
+    只靠紀錄計數的卡也一起拿掉。這個會期沒有一致率列，API 就不給這張卡（同門檻沒過）；
+    eval_bill_topics 的 alignment_stats_stale 也看得出「有院內紀錄、卻沒有一致率列」要重算。
+    """
+    try:
+        return _alignment_rows(records, tallies, alignment, now), ""
+    except Exception:  # noqa: BLE001
+        logger.exception("%s 的提案與質詢一致率算不出來，這個會期先不給這張卡", records.session.name)
+        return [], "；提案與質詢一致率計算失敗（見 log），這次不給這張卡"
+
+
+def _alignment_rows(records: SessionRecords, tallies: dict[int, _Tally], alignment: Alignment,
+                    now: datetime) -> list[ProfileStat]:
+    """提案與質詢一致率：每個人一列，記下是哪兩個分類器算的（API 用它確認是現在上線的版本）。
+
+    議案的領域一個會期查一次；質詢的分布是 profiles 數好的（母體裡沒有發言的人是空的、不給值）。
+    """
+    areas = records.bill_areas(alignment.bill_classifier)
+    for pid, tally in tallies.items():
+        tally.proposal_areas = records.proposal_areas(pid, areas)
+        tally.speech_areas = Counter(alignment.speeches.get(pid, {}))
+    rows = profiles._rank(PROPOSAL_ALIGNMENT, records.session, tallies, now)
+    for row in rows:
+        row.classifier = alignment.stamp
+    return rows
+
+
+def alignment_stats_stale() -> bool:
+    """側寫裡的一致率列跟現在上線的兩個分類器對不上（重算失敗過、或上線的分類器剛換）。
+
+    兩道門檻都過：一致率列裡有別的版本算的、或一列都沒有（但有院內紀錄）；沒過：還留著一致率列。
+    """
+    live = bill_topics.live_alignment_classifiers()
+    rows = ProfileStat.objects.filter(indicator=PROPOSAL_ALIGNMENT.key)
+    if live is None:
+        return rows.exists()
+    return rows.exclude(classifier=bill_topics.alignment_stamp(*live)).exists() or (
+        not rows.exists() and ProfileStat.objects.filter(indicator__in=INDICATOR_KEYS).exists())
 
 
 def record_spans(sessions: Iterable[Session]) -> dict[int, tuple[date, date]]:

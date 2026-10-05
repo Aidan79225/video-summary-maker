@@ -12,8 +12,9 @@ from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from ninja import NinjaAPI, Query, Schema
 
-from . import chamber, followups, profiles, topics
-from .models import Article, ArticleStatus, Membership, Person, ProfileStat, Session, TopicEvaluation
+from . import bill_topics, chamber, followups, profiles, topics
+from .models import (Article, ArticleStatus, BillTopicEvaluation, FollowUpEvaluation, Membership, Person,
+                     ProfileStat, Session, TopicEvaluation)
 
 api = NinjaAPI(title="議會質詢摘要 API", version="1.0", urls_namespace="news")
 
@@ -149,8 +150,11 @@ class IndicatorOut(Schema):
     # 「no_committee_data」＝委員會職掌：有分類過的報導、但沒有他這個會期的委員會資料；委員會出席率：
     #   名冊上沒有他這個會期的委員會；
     # 「no_caucus」＝黨團一致率與跨黨投票：沒有參加黨團；
-    # 「rejudging」＝追問率：換了判斷器，他還有要求是舊的判斷器判的，重判完之前不給
+    # 「rejudging」＝追問率：換了判斷器，他還有要求是舊的判斷器判的，重判完之前不給；
+    # 「few_speeches」＝提案與質詢一致率：質詢的基礎文章不到 min_sample 篇
     reason: str = ""
+    # 只有提案與質詢一致率有：質詢的基礎文章數（卡片說明的「提案 n 件、質詢 speech_n 篇」）。其他指標是 null
+    speech_n: int | None = None
 
 
 class BlockOut(Schema):
@@ -237,6 +241,11 @@ class ProfileOut(Schema):
 RecordKindParam = Literal[chamber.KIND_KEYS]
 
 
+class AreaOut(Schema):
+    key: str
+    label: str
+
+
 class RecordOut(Schema):
     """院內紀錄清單的一筆：一場會議、一件議案或一次記名表決。用不到的欄位是預設值。"""
 
@@ -256,6 +265,9 @@ class RecordOut(Schema):
     # 表決：他的票（贊成／反對／棄權；沒投是 null）與他黨團的多數（並列或沒有黨團是 null）
     vote: str | None = None
     caucus_majority: str | None = None
+    # 主提案清單（kind=proposed）、議案分類通過評估時：這件議案的領域；沒分過類（或不是這一類）是 null。
+    # 標了領域的筆數就是提案與質詢一致率的 n
+    topic: AreaOut | None = None
 
 
 class RecordListOut(Schema):
@@ -270,6 +282,8 @@ class RecordListOut(Schema):
     # 等於指標的 n（出席率、投票出席率、一致率）或值（提案、連署、三讀、跨黨投票）
     count: int
     items: list[RecordOut]
+    # 主提案清單標領域用的議案分類器（kind=proposed、而且有通過的評估時）；其他是 null
+    bill_classifier: ClassifierOut | None = None
 
 
 class PartyOut(Schema):
@@ -632,9 +646,7 @@ def _topics_block(mine: dict[str, ProfileStat], evaluation: TopicEvaluation, nam
         "indicators": [_with_reason(_indicator_out(mine.get(i.key), i, name, session), mine)
                        for i in profiles.topic_indicators_for(session.source)],
         "distribution": distribution,
-        "classifier": {"name": evaluation.classifier, "accuracy": evaluation.accuracy,
-                       "labeled": evaluation.labeled,
-                       "evaluated_at": timezone.localtime(evaluation.ran_at)},
+        "classifier": _classifier_out(evaluation),
     }
 
 
@@ -665,10 +677,13 @@ def _followup_block(mine: dict[str, ProfileStat], name: str, session: Session) -
         "indicators": indicators,
         "asks": asks,
         "unparsed": unparsed,
-        "judge": None if evaluation is None else {
-            "name": evaluation.classifier, "accuracy": evaluation.accuracy,
-            "labeled": evaluation.labeled, "evaluated_at": timezone.localtime(evaluation.ran_at)},
+        "judge": None if evaluation is None else _classifier_out(evaluation),
     }
+
+
+def _classifier_out(evaluation: TopicEvaluation | FollowUpEvaluation | BillTopicEvaluation) -> dict:
+    return {"name": evaluation.classifier, "accuracy": evaluation.accuracy,
+            "labeled": evaluation.labeled, "evaluated_at": timezone.localtime(evaluation.ran_at)}
 
 
 @api.get("/parties", response=PartyListOut)
@@ -704,6 +719,7 @@ def _chamber_block(person: Person, mine: dict[str, ProfileStat], session: Sessio
     證據網址是網站的紀錄清單頁（/records/…），不是發言者頁。沒有參加黨團的人，一致率與跨黨投票的
     reason 是 no_caucus：compute 把他的跨黨投票數存成 null（有黨團、從不跨黨的人是 0）。委員會出席率
     n 是 0、而且名冊上沒有他這個會期的委員會（中途離職的人常常沒有）：reason 是 no_committee_data。
+    提案組的最後多一張提案與質詢一致率，只在兩道門檻都過時出現（見 _alignment_out）。
     """
     defections = mine.get(chamber.CAUCUS_DEFECTIONS.key)
     no_caucus = defections is not None and defections.value is None
@@ -717,7 +733,33 @@ def _chamber_block(person: Person, mine: dict[str, ProfileStat], session: Sessio
                 and not chamber.has_committee_data(person.id, session)):
             out["reason"] = chamber.NO_COMMITTEE_DATA
         indicators.append(out)
+        if indicator is chamber.BILLS_PASSED:
+            # 提案組（主提案、連署、三讀）的最後一張
+            alignment = _alignment_out(person, mine, session)
+            if alignment is not None:
+                indicators.append(alignment)
     return {"key": chamber.CHAMBER, "title": chamber.TITLE, "indicators": indicators}
+
+
+def _alignment_out(person: Person, mine: dict[str, ProfileStat], session: Session) -> dict | None:
+    """提案與質詢一致率的卡片。兩道門檻（議案分類、立法院的議題分類）都過，而且這一列是現在上線的
+    兩個分類器算的（ProfileStat.classifier），才給；否則整張卡不出現。
+
+    評估剛換版本、側寫還沒重算的空窗裡，不把舊版本的數字掛上新版本的名字（同議題分布）。
+    質詢的篇數（speech_n）是同一次重算的議題分布的 n：一致率比的就是那一份分布。不到 min_sample 篇
+    時沒有值，reason 是 few_speeches。
+    """
+    live = bill_topics.live_alignment_classifiers()
+    stat = mine.get(chamber.PROPOSAL_ALIGNMENT.key)
+    if live is None or stat is None or stat.classifier != bill_topics.alignment_stamp(*live):
+        return None
+    out = _indicator_out(stat, chamber.PROPOSAL_ALIGNMENT, person.name, session)
+    out["evidence_url"] = chamber.evidence_url(person.id, session.id, chamber.PROPOSAL_ALIGNMENT.key)
+    focus = mine.get(profiles.TOPIC_FOCUS.key)
+    out["speech_n"] = focus.n if focus else 0
+    if out["speech_n"] < profiles.MIN_SAMPLE:
+        out["reason"] = chamber.FEW_SPEECHES
+    return out
 
 
 @api.get("/people/{person_id}/records", response=RecordListOut)
@@ -728,6 +770,9 @@ def person_records(request, person_id: int, session: int, kind: RecordKindParam)
     筆數等於側寫上對應指標的 n（出席率、投票出席率、一致率）或值（提案、連署、三讀、跨黨投票）：
     兩邊用同一個 chamber.SessionRecords 算。人或會期不存在、不是立法院的會期、或這個會期沒有他的
     院內紀錄：404。
+
+    主提案（kind=proposed）在議案分類通過評估時，每件標出領域（topic；只認通過的那個版本分的），
+    並附上那個分類器（bill_classifier）：提案與質詢一致率的證據就是這份清單，標了領域的筆數是它的 n。
     """
     person = get_object_or_404(Person, pk=person_id)
     chosen = get_object_or_404(Session, pk=session, source="ly")
@@ -735,7 +780,9 @@ def person_records(request, person_id: int, session: int, kind: RecordKindParam)
                                       indicator__in=chamber.INDICATOR_KEYS).exists():
         raise Http404("這個會期沒有他的院內紀錄")
     records = chamber.SessionRecords(chosen, chamber.Legislators.load())
-    items = records.evidence(person.id, kind)
+    evaluation = bill_topics.passing_evaluation() if kind == "proposed" else None
+    areas = records.bill_areas(evaluation.classifier) if evaluation is not None else None
+    items = records.evidence(person.id, kind, areas)
     spec = chamber.KIND_BY_KEY[kind]
     return {
         "person": {"id": person.id, "name": person.name},
@@ -746,4 +793,5 @@ def person_records(request, person_id: int, session: int, kind: RecordKindParam)
         "caucus": records.caucus_name(person.id),
         "count": len(items),
         "items": items,
+        "bill_classifier": _classifier_out(evaluation) if evaluation is not None else None,
     }

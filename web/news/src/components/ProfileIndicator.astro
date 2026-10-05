@@ -23,14 +23,19 @@ interface Props {
   evidenceLabel?: string;
   /** n 是 0 時底下那行字。預設照 n 的單位寫「沒有可計算的報導／數字」 */
   emptyNote?: string;
+  /**
+   * n 底下多一行說明。提案與質詢一致率拿兩邊比，只寫一個 n 讀者看不出另一邊有多少，
+   * 由呼叫端寫「提案 N 件、質詢 M 篇」
+   */
+  note?: string;
 }
 
-const { indicator: ind, minSample, evidenceLabel: labelOverride, emptyNote } = Astro.props;
+const { indicator: ind, minSample, evidenceLabel: labelOverride, emptyNote, note } = Astro.props;
 
 const hasValue = ind.value !== null;
 // 值是空的原因（後端給）：委員會職掌或委員會出席率沒有委員會資料、黨團一致率與跨黨投票沒有參加
-// 黨團、追問率換了判斷器正在重判——都不是樣本不足，照實說
-const reasonText = reasonTextOf(ind.reason);
+// 黨團、追問率換了判斷器正在重判、一致率的質詢不夠——都不是 n 的樣本不足，照實說
+const reasonText = reasonTextOf(ind.reason, minSample);
 const pct = ind.percentile;
 // 頁面四捨五入到整數；長條的位置用原值，兩個同儕在 63.5 與 64.4 時記號不會疊在一起
 const pctLabel = pct !== null ? `第 ${Math.round(pct)} 百分位，在 ${ind.peers} 位同儕中` : '';
@@ -83,6 +88,7 @@ const tightUnit = ind.unit === '%';
     }
   </p>
   <p class="tabular mt-0.5 text-[0.72rem] text-muted">n = {ind.n} {ind.n_unit}</p>
+  {note && <p class="tabular text-[0.72rem] text-muted">{note}</p>}
 
   {/* 桌面版三格並排時，長條與「樣本不足」等高，底下的證據連結才會對齊；手機一格一列就不必留白 */}
   <div class="mt-3 sm:min-h-[3.1rem]">

@@ -7,6 +7,8 @@
 純程式計算、不打模型。議題分布讀的是每晚分類好的 Topic（topics.classify_topics），而且只認
 該來源通過評估的那個分類器（topics.passing_classifiers）——沒有通過的來源完全沒有議題指標。
 追問率同理：讀每晚判斷好的 FollowUp（followups.check_followups），只認通過評估的判斷器。
+立法院的提案與質詢一致率（chamber）要兩道門檻都過：議案分類（bill_topics）與立法院的議題分類；
+質詢的領域分布就是這裡算議題分布時數好的那一份，帶進 chamber.session_rows。
 Pi 每晚匯入、分類之後跑一次（run_scheduler），整批重算、冪等。
 Pi 的資料庫是 SD 卡上的 SQLite：任期一個來源只讀一次、文章一個會期只讀一次，
 在記憶體裡對名字，不要每篇查一次。
@@ -27,7 +29,7 @@ from django.db import transaction
 from django.db.models import Count, Max, Min, Q
 from django.utils import timezone
 
-from . import followups, topics
+from . import bill_topics, followups, topics
 from .members_sync import CHAIR_ROLES, SPEAKER_SEPARATOR, term_number
 from .models import Article, ArticleSource, ArticleStatus, Membership, Person, ProfileStat, Session
 
@@ -506,6 +508,8 @@ class ProfileReport:
     chamber: list[str] = field(default_factory=list)
     # 追問率用的判斷器（通過評估的那個）；None 是不算追問率
     followup_judge: str | None = None
+    # 提案與質詢一致率用的議案分類器（通過評估的那個）；None 是不算一致率
+    bill_classifier: str | None = None
 
     def __str__(self) -> str:
         lines = [f"這次掛上會期 {self.assigned} 篇"]
@@ -533,30 +537,42 @@ class ProfileReport:
                 f"用分類器 {classifier}（評估通過）" if classifier
                 else "沒有通過的評估，不計算"))
         lines.extend(self.chamber)
+        lines.append(self._alignment_line())
         lines.append("追問率：" + (f"用判斷器 {self.followup_judge}（評估通過）" if self.followup_judge
                                  else "沒有通過的評估，不計算"))
         return "\n".join(lines)
+
+    def _alignment_line(self) -> str:
+        speech = self.topic_classifiers.get(ArticleSource.LY)
+        if self.bill_classifier and speech:
+            return (f"提案與質詢一致率：用議案分類器 {self.bill_classifier}、質詢分類器 {speech}"
+                    "（評估都通過）")
+        missing = [label for label, ok in (("議案分類", self.bill_classifier), ("立法院的議題分類", speech))
+                   if not ok]
+        return f"提案與質詢一致率：{'與'.join(missing)}沒有通過的評估，不計算"
 
 
 def compute_profiles(now: datetime | None = None) -> ProfileReport:
     """先掛會期、更新涵蓋範圍，再逐會期整批重算。冪等：重跑結果相同（computed_at 除外）。"""
     report = ProfileReport(assigned=assign_sessions(),
                            topic_classifiers=topics.passing_classifiers(),
-                           followup_judge=followups.passing_judge())
+                           followup_judge=followups.passing_judge(),
+                           bill_classifier=bill_topics.passing_classifier())
     now = now or timezone.now()
     rosters: dict[str, _Roster] = {}
     legislators = None
     for session in Session.objects.order_by("source", "start_date", "id"):
         if session.source not in rosters:
             rosters[session.source] = _Roster.load(session.source)
-        rows, summary = _compute_session(session, rosters[session.source], now, report,
-                                         report.topic_classifiers.get(session.source),
-                                         report.followup_judge)
+        rows, summary, speeches = _compute_session(session, rosters[session.source], now, report,
+                                                   report.topic_classifiers.get(session.source),
+                                                   report.followup_judge)
         if session.source == ArticleSource.LY:
             # 院內紀錄（出席、提案、表決）跟文章的指標在同一次 _replace 裡寫，讀者不會看到算一半的
             from . import chamber  # chamber 用到這裡的 Indicator 與 _rank，在模組層級 import 會循環
             legislators = legislators or chamber.Legislators.load()
-            chamber_rows, line = chamber.session_rows(session, legislators, now)
+            chamber_rows, line = chamber.session_rows(session, legislators, now,
+                                                      _alignment(report, speeches))
             rows.extend(chamber_rows)
             if line:
                 report.chamber.append(line)
@@ -570,10 +586,24 @@ def compute_profiles(now: datetime | None = None) -> ProfileReport:
     return report
 
 
+def _alignment(report: ProfileReport, speeches: dict[int, Counter]):
+    """一致率的輸入（chamber.Alignment）：兩道門檻都過才有，否則 None——那就不算一致率。"""
+    from . import chamber
+
+    speech_classifier = report.topic_classifiers.get(ArticleSource.LY)
+    if not (report.bill_classifier and speech_classifier):
+        return None
+    return chamber.Alignment(report.bill_classifier, speech_classifier, speeches)
+
+
 def _compute_session(session: Session, roster: _Roster, now: datetime, report: ProfileReport,
                      classifier: str | None = None, followup_judge: str | None = None,
-                     ) -> tuple[list[ProfileStat], SessionSummary]:
-    """classifier：這個來源通過評估的分類器；None 就不算議題分布。followup_judge 同理（追問率）。"""
+                     ) -> tuple[list[ProfileStat], SessionSummary, dict[int, Counter]]:
+    """classifier：這個來源通過評估的分類器；None 就不算議題分布。followup_judge 同理（追問率）。
+
+    第三個回傳值是每個人的質詢領域分布（議題分布的基礎文章，領域 → 篇數）：一致率拿它跟提案比。
+    沒算議題分布時是空的。
+    """
     # 只算已完成的文章：只有它們有頁面可以點回去。Topic 一起讀（LEFT JOIN），不必每篇再查
     articles = list(Article.objects.filter(session=session, status=ArticleStatus.READY)
                     .order_by().values_list("speaker", "date", "duration_seconds", "brief",
@@ -582,7 +612,7 @@ def _compute_session(session: Session, roster: _Roster, now: datetime, report: P
     summary = SessionSummary(session, len(population) if articles else 0, len(articles))
     if not articles:
         # 會期裡的文章都還沒做完：全員零分不是事實，是還沒有資料
-        return [], summary
+        return [], summary, {}
 
     # 母體裡沒有任何發言的人也要有一列：投入量算 0——這正是要比較的
     tallies = {person_id: _Tally() for person_id in population}
@@ -628,7 +658,9 @@ def _compute_session(session: Session, roster: _Roster, now: datetime, report: P
         rows.extend(topic_rows)
     if followup_judge is not None:
         rows.extend(_followup_rows(session, roster, tallies, followup_judge, now))
-    return rows, summary
+    speeches = ({person_id: tally.topic_counts for person_id, tally in tallies.items()}
+                if classifier is not None else {})
+    return rows, summary, speeches
 
 
 def _followup_rows(session: Session, roster: _Roster, tallies: dict[int, _Tally], judge: str,

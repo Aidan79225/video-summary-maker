@@ -1,10 +1,10 @@
-"""常駐排程：每天固定時間跑一次匯入，接著替新文章分政策領域、判斷追問、重算人物側寫。
+"""常駐排程：每天固定時間跑一次匯入，接著替新文章分政策領域、判斷追問、替委員提案分領域、重算人物側寫。
 
     python manage.py run_scheduler
 
 想用系統排程的人可以不要這個指令，直接用 cron 或 systemd timer 依序跑
 `manage.py ingest_ivod`、`manage.py classify_topics`、`manage.py check_followups`、
-`manage.py compute_profiles`——兩邊跑的是同一段程式碼。每週日另外依序跑 `sync_members`、
+`manage.py classify_bill_topics`、`manage.py compute_profiles`——兩邊跑的是同一段程式碼。每週日另外依序跑 `sync_members`、
 `sync_ly_records`、`compute_profiles`。
 """
 from __future__ import annotations
@@ -41,15 +41,16 @@ def sources_missing_members() -> list[str]:
 
 
 def nightly(days: int) -> None:
-    """每晚的工作：匯入 → 分政策領域 → 判斷追問 → 重算人物側寫。
+    """每晚的工作：匯入 → 分政策領域 → 判斷追問 → 議案分類 → 重算人物側寫。
 
-    三步各包各的：例外若冒出排程，APScheduler 會把這個工作移除，之後就再也不會跑
+    每一步各包各的：例外若冒出排程，APScheduler 會把這個工作移除，之後就再也不會跑
     ——而使用者不會發現，只會覺得「新聞停更了」。前一步失敗不拖垮後一步：匯入失敗時
     積壓的文章照樣值得分類，分類失敗時既有的文章仍然值得一份最新的統計。
 
     分類排在匯入之後：剛做好的文章當晚就分，而且不會跟摘要工作搶 GPU 的佇列。
     排在重算之前：側寫讀的是分好的 Topic。追問判斷同理：剛做好的文章當晚就能當候選，
-    側寫的追問率讀的是判斷好的 FollowUp。
+    側寫的追問率讀的是判斷好的 FollowUp。議案分類也排在重算之前：提案與質詢一致率讀的是分好的
+    BillTopic；排在文章的工作之後，是因為議案每週才同步一次，不急著跟當晚的新文章搶 GPU。
     """
     try:
         call_command("ingest_ivod", days=days)
@@ -63,6 +64,10 @@ def nightly(days: int) -> None:
         call_command("check_followups", limit=settings.FOLLOWUP_DAILY_LIMIT)
     except Exception:  # noqa: BLE001
         logger.exception("追問判斷失敗，排程繼續")
+    try:
+        call_command("classify_bill_topics", limit=settings.BILL_TOPIC_DAILY_LIMIT)
+    except Exception:  # noqa: BLE001
+        logger.exception("議案分類失敗，排程繼續")
     try:
         call_command("compute_profiles")
     except Exception:  # noqa: BLE001

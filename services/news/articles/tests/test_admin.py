@@ -450,3 +450,136 @@ class FollowUpReadOnlyAdminTests(TestCase):
                                {"post": "yes"}, follow=True)
         self.assertContains(res, "已經重算人物側寫")
         self.assertFalse(ProfileStat.objects.filter(indicator="followup_rate").exists())
+
+
+# --- 議案分類（提案與質詢一致率） ---
+
+
+def _ly_bill(bill_no="B1", name="所得稅法部分條文修正草案", proposers=("王立",)):
+    from articles.models import LyBill
+
+    return LyBill.objects.create(
+        bill_no=bill_no, term=11, session_number=5, name=name, status="交付審查",
+        proposers=list(proposers), cosigners=[], url=f"https://ppg.ly.gov.tw/ppg/bills/{bill_no}/details",
+        proposed_on=date(2026, 3, 2), synced_at=timezone.now())
+
+
+class BillTopicLabelAdminTests(TestCase):
+    """議案議題標註頁：議案名稱（分類器讀到的文字）、議事網連結、在清單上直接選主領域；
+    **看不到模型的分類**。"""
+
+    # 刻意取一個不會出現在頁面其他地方的分類器名稱，出現了就是洩漏
+    SECRET = "secret-bill-model-xyz#topic-v9"
+
+    def setUp(self):
+        from articles.models import BillTopic, BillTopicLabel
+
+        user = get_user_model().objects.create_superuser("admin9", "i@example.com", "pw")
+        self.client.force_login(user)
+        self.bill = _ly_bill()
+        # 模型說是「勞動」——人還沒標
+        BillTopic.objects.create(bill=self.bill, primary="labor", secondary="welfare",
+                                 classifier=self.SECRET, labeled_at=timezone.now())
+        self.label = BillTopicLabel.objects.create(bill=self.bill)
+        BillTopicLabel.objects.create(bill=_ly_bill("B2", "國防法修正草案"), primary="defense")
+
+    def _changelist(self, query=""):
+        return self.client.get(f"/admin/articles/billtopiclabel/{query}")
+
+    def test_the_list_shows_the_bill_name_and_links_to_the_official_page(self):
+        res = self._changelist()
+        self.assertEqual(res.status_code, 200)
+        self.assertContains(res, "議案名稱：所得稅法部分條文修正草案")
+        self.assertContains(res, "https://ppg.ly.gov.tw/ppg/bills/B1/details")
+        self.assertContains(res, "第11屆第5會期")
+        self.assertContains(res, 'name="form-0-primary"')
+        self.assertContains(res, "（還沒標）")
+        self.assertContains(res, "地方建設／其他")
+
+    def test_the_model_prediction_is_never_shown(self):
+        """盲標：模型說「勞動」，人還沒標——標註頁與議案頁都不能透露模型的答案。"""
+        pages = [self._changelist(), self._changelist("?labelled=no"),
+                 self.client.get(f"/admin/articles/billtopiclabel/{self.label.pk}/change/"),
+                 self.client.get(f"/admin/articles/lybill/{self.bill.pk}/change/"),
+                 self.client.get("/admin/articles/lybill/")]
+        for res in pages:
+            self.assertEqual(res.status_code, 200)
+            # 下拉選單本來就列出全部 12 個領域，拿掉之後頁面上不能出現模型選的那兩個
+            body = re.sub(r"<select.*?</select>", "", res.content.decode(), flags=re.S)
+            for leak in (self.SECRET, "labor", "勞動", "welfare", "衛生福利"):
+                self.assertNotIn(leak, body, res.request["PATH_INFO"])
+        unlabelled = self._changelist("?labelled=no")
+        self.assertContains(unlabelled, '<option value="" selected>（還沒標）</option>', html=True)
+        self.assertNotContains(unlabelled, '<option value="labor" selected>勞動</option>', html=True)
+
+    def test_the_unlabelled_filter(self):
+        for query, expected in (("?labelled=no", ["B1"]), ("?labelled=yes", ["B2"])):
+            rows = self._changelist(query).context["cl"].result_list
+            self.assertEqual([label.bill.bill_no for label in rows], expected)
+
+    def test_labelling_in_the_list_saves_the_primary_and_the_time(self):
+        def post(value):
+            return self.client.post("/admin/articles/billtopiclabel/?labelled=no", {
+                "form-TOTAL_FORMS": "1", "form-INITIAL_FORMS": "1",
+                "form-MIN_NUM_FORMS": "0", "form-MAX_NUM_FORMS": "1000",
+                "form-0-id": str(self.label.pk), "form-0-primary": value,
+                "form-0-note": "稅", "_save": "儲存"})
+
+        self.assertEqual(post("finance").status_code, 302)
+        self.label.refresh_from_db()
+        self.assertEqual((self.label.primary, self.label.note), ("finance", "稅"))
+        self.assertIsNotNone(self.label.labeled_at)
+        # 不在清單裡的代碼擋下來
+        self.assertEqual(post("space").status_code, 200)
+        self.label.refresh_from_db()
+        self.assertEqual(self.label.primary, "finance")
+
+    def test_labels_come_only_from_sampling(self):
+        self.assertEqual(self.client.get("/admin/articles/billtopiclabel/add/").status_code, 403)
+
+
+class BillTopicReadOnlyAdminTests(TestCase):
+    """模型的議案分類與評估紀錄：看得到，但不能新增或改值；刪掉上線的評估會當場重算側寫。"""
+
+    def setUp(self):
+        from articles.models import BillTopic, BillTopicEvaluation, Membership, Person, TopicEvaluation
+
+        user = get_user_model().objects.create_superuser("admin10", "j@example.com", "pw")
+        self.client.force_login(user)
+        Membership.objects.create(person=Person.objects.create(name="王立"), source="ly", name="王立")
+        self.topic = BillTopic.objects.create(bill=_ly_bill(), primary="finance", classifier="m#topic-v1",
+                                              labeled_at=timezone.now())
+        self.evaluation = BillTopicEvaluation.objects.create(
+            classifier="m#topic-v1", labeled=20, correct=17, accuracy=0.85, passed=True, mistakes=[],
+            ran_at=timezone.now())
+        TopicEvaluation.objects.create(source="ly", classifier="s#topic-v1", labeled=20, correct=18,
+                                       accuracy=0.9, passed=True, ran_at=timezone.now())
+
+    def test_topics_and_evaluations_are_listed_and_viewable(self):
+        res = self.client.get("/admin/articles/billtopic/")
+        self.assertEqual(res.status_code, 200)
+        self.assertContains(res, "財政經濟")
+        res = self.client.get("/admin/articles/billtopicevaluation/")
+        self.assertEqual(res.status_code, 200)
+        self.assertContains(res, "85.0%")
+        for url in (f"/admin/articles/billtopic/{self.topic.pk}/change/",
+                    f"/admin/articles/billtopicevaluation/{self.evaluation.pk}/change/"):
+            res = self.client.get(url)
+            self.assertEqual(res.status_code, 200)
+            self.assertNotContains(res, 'name="_save"')
+
+    def test_nothing_can_be_added_by_hand(self):
+        self.assertEqual(self.client.get("/admin/articles/billtopic/add/").status_code, 403)
+        self.assertEqual(self.client.get("/admin/articles/billtopicevaluation/add/").status_code, 403)
+
+    def test_deleting_the_live_evaluation_recomputes_at_once(self):
+        from articles.models import ProfileStat, Session
+        from articles.profiles import compute_profiles
+
+        Session.objects.create(source="ly", name="第11屆第5會期", term="11")
+        compute_profiles()
+        self.assertTrue(ProfileStat.objects.filter(indicator="proposal_alignment").exists())
+        res = self.client.post(f"/admin/articles/billtopicevaluation/{self.evaluation.pk}/delete/",
+                               {"post": "yes"}, follow=True)
+        self.assertContains(res, "已經重算人物側寫")
+        self.assertFalse(ProfileStat.objects.filter(indicator="proposal_alignment").exists())
