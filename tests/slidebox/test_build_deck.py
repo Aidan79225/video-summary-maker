@@ -7,6 +7,7 @@ from slidebox.domain.entities import Brief, Cue, KeyNumber, Settings, Slide, Tra
 from slidebox.domain.errors import (
     NoSubtitlesAvailable,
     SubtitleDownloadFailed,
+    SubtitleTrackFailed,
     OperationCancelled,
     SummarizerOutputInvalid,
     SummarizerUnavailable,
@@ -377,11 +378,10 @@ def test_cancelling_during_transcription_reaches_the_adapter():
 
 
 
-def test_a_transient_subtitle_failure_is_reported_not_transcribed():
-    """攔的 bug：字幕存在但暫時下載失敗（HTTP 429）時也走語音備援——有人工中文
-    字幕的影片被無聲地降級成較慢、較差的語音辨識，而且「請過幾分鐘再試」的
-    提示被吞掉。使用者要的是「沒有字幕」的影片才改用語音。"""
-    err = SubtitleDownloadFailed("字幕軌 zh-TW 下載失敗：YouTube 暫時限制了請求頻率（HTTP 429），請過幾分鐘再試。")
+def test_a_source_that_says_speech_cannot_help_is_reported_not_transcribed():
+    """SubtitleDownloadFailed 是來源明確說「改走語音也幫不上忙」（例如 IVOD 還沒有逐字稿，
+    備援的 yt-dlp 不認得 IVOD 網址）：照原樣回報，不做語音備援。"""
+    err = SubtitleDownloadFailed("這段 IVOD（170000）還沒有 AI 逐字稿，請過幾分鐘再試。")
     trans = FakeTranscriber()
     uc = _build_speech(subs=FakeSubtitleGateway(error=err), transcriber=trans)
     with pytest.raises(SubtitleDownloadFailed) as exc:
@@ -678,3 +678,57 @@ def test_without_a_hint_the_transcriber_gets_none():
         FakeFrameExtractor(), FakeRenderer(), audio=FakeAudioGateway(), transcriber=transcriber)
     usecase.execute("URL", _settings())
     assert transcriber.prompts == [None]
+
+
+
+# --- 字幕軌下載失敗：改走語音辨識 ---
+
+LIMITED = SubtitleTrackFailed("字幕軌 zh-TW 下載失敗：YouTube 暫時限制了請求頻率（HTTP 429）", retry_later=True)
+
+
+def test_a_failed_subtitle_download_falls_back_to_speech_recognition():
+    """使用者要的：字幕軌下載失敗（例如 YouTube 限流）就自動改用語音辨識，不必等幾分鐘再試。"""
+    trans = FakeTranscriber()
+    seen: list[str] = []
+    result = _build_speech(subs=FakeSubtitleGateway(error=LIMITED), transcriber=trans).execute(
+        "URL", _settings(), lambda f, s: seen.append(s), None)
+    assert len(trans.calls) == 1
+    note = result.deck.source_note
+    assert "字幕下載失敗" in note and "HTTP 429" in note and "語音辨識" in note
+    # 備援成功了，「請過幾分鐘再試」是多餘的
+    assert "請過幾分鐘再試" not in note
+    assert any("字幕下載失敗，改用語音辨識" in s for s in seen)
+    assert note in seen[-1]
+
+
+def test_when_speech_recognition_also_fails_both_reasons_are_reported():
+    audio = FakeAudioGateway(error=RuntimeError("ERROR: HTTP Error 429: Too Many Requests"))
+    uc = _build_speech(subs=FakeSubtitleGateway(error=LIMITED), audio=audio)
+    with pytest.raises(SubtitleDownloadFailed) as exc:
+        uc.execute("URL", _settings())
+    message = str(exc.value)
+    assert "字幕軌 zh-TW 下載失敗" in message
+    assert "改用語音辨識也失敗" in message and "HTTP Error 429" in message
+    assert "ERROR:" not in message
+    assert message.endswith("請過幾分鐘再試。")
+    assert isinstance(exc.value.__cause__, RuntimeError)
+    assert audio.events[-1] == "cleanup"
+
+
+def test_when_the_fallback_hears_no_speech_the_subtitle_failure_is_still_named():
+    trans = FakeTranscriber(cues=())
+    uc = _build_speech(subs=FakeSubtitleGateway(error=SubtitleTrackFailed("字幕軌 en 下載失敗")),
+                       transcriber=trans)
+    with pytest.raises(SubtitleDownloadFailed) as exc:
+        uc.execute("URL", _settings())
+    assert "字幕軌 en 下載失敗" in str(exc.value) and "沒有偵測到語音" in str(exc.value)
+    # 不是限流：不提醒稍後重試
+    assert "請過幾分鐘再試" not in str(exc.value)
+
+
+def test_cancelling_during_the_fallback_is_a_cancellation_not_a_failure():
+    state = {"cancel": False}
+    audio = FakeAudioGateway(on_download=lambda: state.update(cancel=True))
+    uc = _build_speech(subs=FakeSubtitleGateway(error=LIMITED), audio=audio)
+    with pytest.raises(OperationCancelled):
+        uc.execute("URL", _settings(), None, lambda: state["cancel"])
