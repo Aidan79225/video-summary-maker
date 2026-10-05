@@ -7,8 +7,9 @@ from django.utils import timezone
 from django.utils.html import format_html
 
 from . import followups, topics
-from .models import (Article, ArticleStatus, FollowUp, FollowUpEvaluation, FollowUpLabel, Membership,
-                     Person, ProfileStat, Session, Slide, Topic, TopicEvaluation, TopicLabel)
+from .models import (Article, ArticleStatus, FollowUp, FollowUpEvaluation, FollowUpLabel,
+                     LyBill, LyMeeting, LyVote, Membership, Person, ProfileStat, Session,
+                     Slide, Topic, TopicEvaluation, TopicLabel)
 from .profiles import compute_profiles
 
 
@@ -442,3 +443,30 @@ class FollowUpEvaluationAdmin(_ReadOnlyAdmin):
             return
         compute_profiles()
         self.message_user(request, "上線的判斷器變了，已經重算人物側寫", messages.INFO)
+# --- 立法院的院內紀錄：sync_ly_records 每週從 LYAPI 整批 upsert，手改會被下一次同步蓋掉 ---
+
+
+@admin.register(LyMeeting)
+class LyMeetingAdmin(_ReadOnlyAdmin):
+    list_display = ("code", "name", "kind", "session_number", "date", "attendance")
+    list_filter = ("kind", "term", "session_number")
+    search_fields = ("code", "name")
+
+    @admin.display(description="出席")
+    def attendance(self, meeting: LyMeeting) -> str:
+        # null 是「LYAPI 還沒有出席紀錄」，跟 0 人不一樣，不計入任何人的分母
+        return "還沒有紀錄" if meeting.attendees is None else f"{len(meeting.attendees)} 人"
+
+
+@admin.register(LyBill)
+class LyBillAdmin(_ReadOnlyAdmin):
+    list_display = ("bill_no", "name", "status", "session_number", "proposed_on")
+    list_filter = ("term", "session_number", "status")
+    search_fields = ("bill_no", "name")
+
+
+@admin.register(LyVote)
+class LyVoteAdmin(_ReadOnlyAdmin):
+    list_display = ("code", "topic", "meeting_code", "date", "session_number")
+    list_filter = ("term", "session_number")
+    search_fields = ("code", "topic", "meeting_code")

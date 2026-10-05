@@ -502,6 +502,8 @@ class ProfileReport:
     unsessioned: Counter = field(default_factory=Counter)
     # 來源 → 議題分布用的分類器（通過評估的那個）。不在裡面的來源沒有議題指標
     topic_classifiers: dict[str, str] = field(default_factory=dict)
+    # 院內紀錄（立法院）：每個同步過紀錄的會期一行（chamber.SessionRecords.summary）
+    chamber: list[str] = field(default_factory=list)
     # 追問率用的判斷器（通過評估的那個）；None 是不算追問率
     followup_judge: str | None = None
 
@@ -530,6 +532,7 @@ class ProfileReport:
             lines.append(f"議題分布 {source.label}：" + (
                 f"用分類器 {classifier}（評估通過）" if classifier
                 else "沒有通過的評估，不計算"))
+        lines.extend(self.chamber)
         lines.append("追問率：" + (f"用判斷器 {self.followup_judge}（評估通過）" if self.followup_judge
                                  else "沒有通過的評估，不計算"))
         return "\n".join(lines)
@@ -542,12 +545,21 @@ def compute_profiles(now: datetime | None = None) -> ProfileReport:
                            followup_judge=followups.passing_judge())
     now = now or timezone.now()
     rosters: dict[str, _Roster] = {}
+    legislators = None
     for session in Session.objects.order_by("source", "start_date", "id"):
         if session.source not in rosters:
             rosters[session.source] = _Roster.load(session.source)
         rows, summary = _compute_session(session, rosters[session.source], now, report,
                                          report.topic_classifiers.get(session.source),
                                          report.followup_judge)
+        if session.source == ArticleSource.LY:
+            # 院內紀錄（出席、提案、表決）跟文章的指標在同一次 _replace 裡寫，讀者不會看到算一半的
+            from . import chamber  # chamber 用到這裡的 Indicator 與 _rank，在模組層級 import 會循環
+            legislators = legislators or chamber.Legislators.load()
+            chamber_rows, line = chamber.session_rows(session, legislators, now)
+            rows.extend(chamber_rows)
+            if line:
+                report.chamber.append(line)
         _replace(session, rows)
         report.sessions.append(summary)
     report.unsessioned.update({

@@ -61,6 +61,7 @@ class Membership(models.Model):
     role = models.CharField(max_length=32, blank=True)
     # 黨團（國民黨團／民進黨團／無黨團結聯盟／空）。跟政黨不一定相同——新北有 4 人
     # 政黨與黨團不同。文章標的是政黨；黨團只用來判斷「黨團時段」裡誰不屬於該黨團。
+    # 立法院也存（LYAPI 名冊的「黨團」，第 11 屆有 2 位無黨籍參加國民黨團）：院內紀錄的黨團一致率用。
     caucus = models.CharField(max_length=64, blank=True)
     # 所屬委員會（只有立法院）：LYAPI 的原樣字串清單，「第11屆第5會期：財政委員會」，一個會期
     # 可能有好幾個。存原樣而不拆表：只有議題分布的「委員會職掌」會讀它，每週同步整批覆寫。
@@ -317,6 +318,103 @@ class Slide(models.Model):
         return f"{self.article.ivod_id}#{self.index}"
 
 
+# --- 立法院的院內紀錄（出席、提案、表決）：ly_records.sync_ly_records 每週從 LYAPI 同步 ---
+
+
+class LyMeetingKind(models.TextChoices):
+    PLENARY = "plenary", "院會"
+    # 聯席會議也存成委員會：出席率只問「單位裡有沒有他的委員會」
+    COMMITTEE = "committee", "委員會"
+
+
+class LyMeeting(models.Model):
+    """一場院會或委員會會議（含聯席會議）與出席名單。
+
+    以會議代碼為鍵而不是每一天一筆：LYAPI 的一場會議可以開好幾天，每天的簽到名單一樣，
+    出席率的單位是「場」。
+    """
+
+    # LYAPI 的會議代碼（「院會-11-5-23」「聯席會議-11-3-20,36-1」）
+    code = models.CharField(max_length=64, unique=True)
+    kind = models.CharField(max_length=16, choices=LyMeetingKind.choices, db_index=True)
+    term = models.PositiveSmallIntegerField()
+    session_number = models.PositiveSmallIntegerField()
+    # 第一天：判斷「他那時在不在任」用
+    date = models.DateField(null=True, blank=True)
+    # 每一天（ISO 字串）：表決時間只有月日、沒有年，要靠它對回日期
+    dates = models.JSONField(default=list, blank=True)
+    name = models.CharField(max_length=300)
+    # 會議單位：院會是「院會」，委員會是委員會名稱，聯席會議是全部的委員會
+    units = models.JSONField(default=list, blank=True)
+    # 出席委員（LYAPI 的原樣姓名）。null＝LYAPI 還沒有這場的出席紀錄（委員會的議事錄常常晚好幾週），
+    # 不算進任何人的分母——不能當成「沒有人出席」
+    attendees = models.JSONField(null=True, blank=True, default=None)
+    # 議事網的會議頁
+    url = models.URLField(max_length=500, blank=True)
+    synced_at = models.DateTimeField()
+
+    class Meta:
+        ordering = ["-date", "code"]
+        indexes = [models.Index(fields=["term", "session_number"])]
+        verbose_name = verbose_name_plural = "立法院會議"
+
+    def __str__(self) -> str:
+        return f"{self.code} {self.name}"
+
+
+class LyBill(models.Model):
+    """一件委員提案（主提案人、連署人、議案狀態）。"""
+
+    # LYAPI 的議案編號
+    bill_no = models.CharField(max_length=32, unique=True)
+    term = models.PositiveSmallIntegerField()
+    session_number = models.PositiveSmallIntegerField()
+    # 公投案的主文整段都在名稱裡，可能好幾百字
+    name = models.TextField()
+    status = models.CharField(max_length=64, blank=True)
+    # 姓名清單（原樣）。黨團提案的提案人裡會有「台灣民眾黨立法院黨團」，對不到任何人、不算給誰
+    proposers = models.JSONField(default=list, blank=True)
+    cosigners = models.JSONField(default=list, blank=True)
+    # 議事網的議案頁
+    url = models.URLField(max_length=500, blank=True)
+    proposed_on = models.DateField(null=True, blank=True)
+    synced_at = models.DateTimeField()
+
+    class Meta:
+        ordering = ["-proposed_on", "-bill_no"]
+        indexes = [models.Index(fields=["term", "session_number"])]
+        verbose_name = verbose_name_plural = "立法院委員提案"
+
+    def __str__(self) -> str:
+        return f"{self.bill_no} {self.name[:40]}"
+
+
+class LyVote(models.Model):
+    """一次記名表決：每位委員投了什麼。"""
+
+    # LYAPI 的表決代碼
+    code = models.CharField(max_length=64, unique=True)
+    term = models.PositiveSmallIntegerField()
+    session_number = models.PositiveSmallIntegerField()
+    meeting_code = models.CharField(max_length=64, db_index=True)
+    # 表決時間的原文（「中華民國115年3月20日 上午11時52分30秒」，偶爾沒有年）
+    voted_at = models.CharField(max_length=100, blank=True)
+    # 從原文與會議日期推出來的日期：判斷「他那時在不在任」用
+    date = models.DateField(null=True, blank=True)
+    topic = models.TextField(blank=True)
+    yes = models.JSONField(default=list, blank=True)
+    no = models.JSONField(default=list, blank=True)
+    abstain = models.JSONField(default=list, blank=True)
+    voters = models.JSONField(default=list, blank=True)
+    synced_at = models.DateTimeField()
+
+    class Meta:
+        ordering = ["-date", "-code"]
+        indexes = [models.Index(fields=["term", "session_number"])]
+        verbose_name = verbose_name_plural = "立法院記名表決"
+
+    def __str__(self) -> str:
+        return f"{self.code} {self.topic[:40]}"
 class FollowUp(models.Model):
     """摘要卡裡一項帶期限的要求，與「後來有沒有再追問」的判斷（followups.check_followups）。
 

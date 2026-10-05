@@ -12,7 +12,7 @@ from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from ninja import NinjaAPI, Query, Schema
 
-from . import followups, profiles, topics
+from . import chamber, followups, profiles, topics
 from .models import Article, ArticleStatus, Membership, Person, ProfileStat, Session, TopicEvaluation
 
 api = NinjaAPI(title="議會質詢摘要 API", version="1.0", urls_namespace="news")
@@ -146,7 +146,9 @@ class IndicatorOut(Schema):
     # 網站的相對路徑：點進去就是算出這個數字的那幾篇
     evidence_url: str
     # 沒有值時的原因。頁面用它說清楚是哪一種「沒有」，而不是一律寫樣本不足：
-    # 「no_committee_data」＝委員會職掌：有分類過的報導、但沒有他這個會期的委員會資料；
+    # 「no_committee_data」＝委員會職掌：有分類過的報導、但沒有他這個會期的委員會資料；委員會出席率：
+    #   名冊上沒有他這個會期的委員會；
+    # 「no_caucus」＝黨團一致率與跨黨投票：沒有參加黨團；
     # 「rejudging」＝追問率：換了判斷器，他還有要求是舊的判斷器判的，重判完之前不給
     reason: str = ""
 
@@ -230,6 +232,44 @@ class ProfileOut(Schema):
     # 議題分布的區塊多了 distribution 與 classifier；追問的區塊多了 asks、unparsed 與 judge；
     # 其他區塊沒有這些欄位
     blocks: list[TopicsBlockOut | FollowupBlockOut | BlockOut]
+
+
+RecordKindParam = Literal[chamber.KIND_KEYS]
+
+
+class RecordOut(Schema):
+    """院內紀錄清單的一筆：一場會議、一件議案或一次記名表決。用不到的欄位是預設值。"""
+
+    # 會議代碼、議案編號或表決代碼
+    id: str
+    date: date_type | None
+    # 會議名稱、議案名稱或表決議題
+    title: str
+    # 議事網的官方頁面（議案是議案頁、會議是會議頁、表決是那場院會的會議頁）；沒有就空字串
+    url: str
+    meeting_code: str = ""
+    # 會議：他有沒有出席
+    attended: bool | None = None
+    # 議案：議案狀態與主提案人
+    status: str = ""
+    proposers: list[str] = []
+    # 表決：他的票（贊成／反對／棄權；沒投是 null）與他黨團的多數（並列或沒有黨團是 null）
+    vote: str | None = None
+    caucus_majority: str | None = None
+
+
+class RecordListOut(Schema):
+    person: PersonRefOut
+    session: SessionOut
+    kind: str
+    # 這一類的名稱（「院會」「主提案」…）與它對應的指標 key
+    label: str
+    indicator: str
+    # 他在這個會期的黨團；空字串＝沒有參加黨團
+    caucus: str
+    # 等於指標的 n（出席率、投票出席率、一致率）或值（提案、連署、三讀、跨黨投票）
+    count: int
+    items: list[RecordOut]
 
 
 class PartyOut(Schema):
@@ -434,9 +474,15 @@ def speakers(request, source: SourceParam | None = None) -> dict:
 # --- 人物側寫 ---
 
 
-def _recency(session: Session) -> tuple:
-    """會期的新舊：看資料涵蓋到哪一天。"""
-    return (session.end_date or date_type.min, session.start_date or date_type.min, session.id)
+def _recency(session: Session, span: tuple[date_type, date_type] | None = None) -> tuple:
+    """會期的新舊：看資料涵蓋到哪一天。
+
+    span 是還沒有文章的會期（只有院內紀錄）的紀錄期間：Session 的起訖只看文章，這種會期是空的，
+    不補的話剛開議的會期會排在所有舊會期後面。
+    """
+    first, last = span or (None, None)
+    return (session.end_date or last or date_type.min, session.start_date or first or date_type.min,
+            session.id)
 
 
 def _session_out(session: Session) -> dict:
@@ -497,8 +543,9 @@ def person_profile(request, person_id: int, source: SourceParam | None = None,
     """一個人在一個會期的側寫：投入量與具體度，每項各自跟同儕比，不加總、不排名。
 
     議題分布只在那個來源有通過的評估、而且側寫已經用它算過時才多一個區塊（見 _topics_block）：
-    沒驗過的分類不是事實，連「0 篇」都不該給。追問區塊永遠在最後（見 _followup_block）：清單不靠
-    模型，比率與要靠判斷的狀態才要等判斷器通過。
+    沒驗過的分類不是事實，連「0 篇」都不該給。立法院同步過院內紀錄的會期再多一個 chamber 區塊
+    （見 _chamber_block）。追問區塊永遠在最後（見 _followup_block）：清單不靠模型，比率與要靠
+    判斷的狀態才要等判斷器通過。
 
     source 省略時用他最近一個有統計的會期的來源；session 省略時用這個來源裡他有發言的
     最近一個會期，都沒有發言就用有統計的最近一個。指定了 session 而省略 source，
@@ -508,7 +555,8 @@ def person_profile(request, person_id: int, source: SourceParam | None = None,
     person = get_object_or_404(Person, pk=person_id)
     stats = list(ProfileStat.objects.filter(person=person).select_related("session"))
     by_session = {stat.session_id: stat.session for stat in stats}
-    ordered = sorted(by_session.values(), key=_recency, reverse=True)
+    spans = chamber.record_spans(by_session.values())
+    ordered = sorted(by_session.values(), key=lambda s: _recency(s, spans.get(s.id)), reverse=True)
 
     chosen = None
     if session is not None:
@@ -530,12 +578,16 @@ def person_profile(request, person_id: int, source: SourceParam | None = None,
 
     mine = {stat.indicator: stat for stat in stats if stat.session_id == chosen.id}
     name = profiles.name_in_session(person, chosen)
+    # 只給算過的區塊：只有院內紀錄、還沒有任何文章的會期（例如剛開議的），投入量不是 0，是沒有資料
     blocks = [{"key": key, "title": title,
                "indicators": [_indicator_out(mine.get(i.key), i, name, chosen) for i in indicators]}
-              for key, title, indicators in profiles.blocks_for(source)]
+              for key, title, indicators in profiles.blocks_for(source)
+              if any(i.key in mine for i in indicators)]
     evaluation = topics.passing_evaluations().get(source)
     if evaluation is not None and _topics_current(mine, evaluation.classifier):
         blocks.append(_topics_block(mine, evaluation, name, chosen))
+    if any(key in mine for key in chamber.INDICATOR_KEYS):
+        blocks.append(_chamber_block(person, mine, chosen))
     blocks.append(_followup_block(mine, name, chosen))
     return {
         "person": {"id": person.id, "name": person.name},
@@ -641,3 +693,57 @@ def _with_reason(out: dict, mine: dict[str, ProfileStat]) -> dict:
     if out["key"] == "committee_alignment" and out["n"] == 0 and focus is not None and focus.n > 0:
         out["reason"] = "no_committee_data"
     return out
+
+
+# --- 院內紀錄（立法院的出席、提案、表決） ---
+
+
+def _chamber_block(person: Person, mine: dict[str, ProfileStat], session: Session) -> dict:
+    """院內紀錄區塊。呼叫端已確認：這個會期有他的院內紀錄指標（同步過紀錄、而且重算過）。
+
+    證據網址是網站的紀錄清單頁（/records/…），不是發言者頁。沒有參加黨團的人，一致率與跨黨投票的
+    reason 是 no_caucus：compute 把他的跨黨投票數存成 null（有黨團、從不跨黨的人是 0）。委員會出席率
+    n 是 0、而且名冊上沒有他這個會期的委員會（中途離職的人常常沒有）：reason 是 no_committee_data。
+    """
+    defections = mine.get(chamber.CAUCUS_DEFECTIONS.key)
+    no_caucus = defections is not None and defections.value is None
+    indicators = []
+    for indicator in chamber.INDICATORS:
+        out = _indicator_out(mine.get(indicator.key), indicator, person.name, session)
+        out["evidence_url"] = chamber.evidence_url(person.id, session.id, indicator.key)
+        if no_caucus and indicator.key in chamber.CAUCUS_KEYS:
+            out["reason"] = chamber.NO_CAUCUS
+        if (indicator is chamber.COMMITTEE_ATTENDANCE and out["n"] == 0
+                and not chamber.has_committee_data(person.id, session)):
+            out["reason"] = chamber.NO_COMMITTEE_DATA
+        indicators.append(out)
+    return {"key": chamber.CHAMBER, "title": chamber.TITLE, "indicators": indicators}
+
+
+@api.get("/people/{person_id}/records", response=RecordListOut)
+def person_records(request, person_id: int, session: int, kind: RecordKindParam) -> dict:
+    """院內紀錄的證據清單：一個人、一個會期、一類紀錄（院會、委員會會議、主提案、連署、三讀、
+    記名表決、黨團有多數的表決、跨黨投票），每筆附官方連結。
+
+    筆數等於側寫上對應指標的 n（出席率、投票出席率、一致率）或值（提案、連署、三讀、跨黨投票）：
+    兩邊用同一個 chamber.SessionRecords 算。人或會期不存在、不是立法院的會期、或這個會期沒有他的
+    院內紀錄：404。
+    """
+    person = get_object_or_404(Person, pk=person_id)
+    chosen = get_object_or_404(Session, pk=session, source="ly")
+    if not ProfileStat.objects.filter(person=person, session=chosen,
+                                      indicator__in=chamber.INDICATOR_KEYS).exists():
+        raise Http404("這個會期沒有他的院內紀錄")
+    records = chamber.SessionRecords(chosen, chamber.Legislators.load())
+    items = records.evidence(person.id, kind)
+    spec = chamber.KIND_BY_KEY[kind]
+    return {
+        "person": {"id": person.id, "name": person.name},
+        "session": _session_out(chosen),
+        "kind": kind,
+        "label": spec.label,
+        "indicator": spec.indicator,
+        "caucus": records.caucus_name(person.id),
+        "count": len(items),
+        "items": items,
+    }

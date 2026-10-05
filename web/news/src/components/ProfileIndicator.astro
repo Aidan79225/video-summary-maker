@@ -10,6 +10,7 @@
 import type { ProfileIndicator } from '../lib/types';
 import { evidenceHref } from '../lib/api';
 import { formatMetric } from '../lib/format';
+import { isRecordsPath, reasonText as reasonTextOf, recordEvidenceLabel } from '../lib/records';
 
 interface Props {
   indicator: ProfileIndicator;
@@ -27,16 +28,28 @@ interface Props {
 const { indicator: ind, minSample, evidenceLabel: labelOverride, emptyNote } = Astro.props;
 
 const hasValue = ind.value !== null;
-// 委員會職掌沒有值的時候，常常不是樣本不足，而是沒有他這個會期的委員會資料：照實說
-const noCommittee = ind.reason === 'no_committee_data';
-// 追問率：換了判斷器，他還有要求是舊的判斷器判的。值是空的不是因為樣本不足，是還在重判
-const rejudging = ind.reason === 'rejudging';
+// 值是空的原因（後端給）：委員會職掌或委員會出席率沒有委員會資料、黨團一致率與跨黨投票沒有參加
+// 黨團、追問率換了判斷器正在重判——都不是樣本不足，照實說
+const reasonText = reasonTextOf(ind.reason);
 const pct = ind.percentile;
 // 頁面四捨五入到整數；長條的位置用原值，兩個同儕在 63.5 與 64.4 時記號不會疊在一起
 const pctLabel = pct !== null ? `第 ${Math.round(pct)} 百分位，在 ${ind.peers} 位同儕中` : '';
 const evidence = ind.n > 0 ? evidenceHref(ind.evidence_url) : null;
-// 證據連結列出的是文章；「有來源的數字占比」的 n 是數字個數，不能寫成「看這 23 篇」
-const evidenceLabel = labelOverride ?? (ind.n_unit === '篇' ? `看這 ${ind.n} 篇` : '看這些數字出自哪幾篇');
+// 證據連結列出的是文章；「有來源的數字占比」的 n 是數字個數，不能寫成「看這 23 篇」。
+// 院內紀錄連到紀錄清單頁，寫法照紀錄的單位（場、件、次表決）；呼叫端另外給的（追問率）優先
+const evidenceLabel =
+  labelOverride ??
+  (isRecordsPath(ind.evidence_url)
+    ? recordEvidenceLabel(ind)
+    : ind.n_unit === '篇'
+      ? `看這 ${ind.n} 篇`
+      : '看這些數字出自哪幾篇');
+// n 是 0 時沒有連結，改寫一句「沒有…」：呼叫端給的優先，院內紀錄照紀錄寫，其他維持「報導／數字」
+const emptyText =
+  emptyNote ??
+  (isRecordsPath(ind.evidence_url)
+    ? '這個會期沒有紀錄可列'
+    : `這個會期沒有可計算的${ind.n_unit === '篇' ? '報導' : '數字'}`);
 // 百分號緊貼數字，其他單位留一點空隙
 const tightUnit = ind.unit === '%';
 ---
@@ -109,11 +122,9 @@ const tightUnit = ind.unit === '%';
             <path d="M12 11v5" stroke-linecap="round" />
             <circle cx="12" cy="7.8" r="0.9" fill="currentColor" stroke="none" />
           </svg>
-          {noCommittee
-            ? '沒有他這個會期的委員會資料'
-            : rejudging
-              ? '換了判斷器，他的要求正在重新判斷，判完才算'
-              : ind.sample_ok
+          {reasonText
+            ? reasonText
+            : ind.sample_ok
               ? '同儕不足，不比較'
               : `樣本不足（需至少 ${minSample} ${ind.n_unit}）`}
         </p>
@@ -132,9 +143,7 @@ const tightUnit = ind.unit === '%';
         </a>
       ) : (
         <span class="text-muted">
-          {ind.n > 0 || noCommittee || rejudging
-            ? ''
-            : (emptyNote ?? `這個會期沒有可計算的${ind.n_unit === '篇' ? '報導' : '數字'}`)}
+          {ind.n > 0 || reasonText ? '' : emptyText}
         </span>
       )
     }

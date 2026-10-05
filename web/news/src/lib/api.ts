@@ -16,10 +16,13 @@ import type {
   ProfileIndicator,
   ProfileQuery,
   ProfileSession,
+  RecordList,
+  RecordQuery,
   TopicClassifier,
   TopicShare,
 } from './types';
 import { toSource } from './sources';
+import { fixtureChamberBlock, fixtureRecords, normalizeRecords } from './records';
 import { ANY_TOPIC, TOPIC_AREAS, TOPIC_MIN_ACCURACY, TOPIC_MIN_LABELS, topicOrder } from './topics';
 import { FOLLOWUP_ANCHOR, FOLLOWUP_BLOCK, normalizeFollowupBlock } from './followups';
 import fixture from '../fixtures/sample.json';
@@ -107,10 +110,11 @@ export function safeInternalPath(path: string | null | undefined): string | null
  *
  * 側寫區塊在發言者頁的清單上面，不跳到清單的話，點了只會回到頁首、看起來像
  * 沒反應。後端已經帶了錨點就不再接。指標卡與議題分布的每一列共用這一個。
+ * 院內紀錄的證據是另一頁（/records/），清單就在頁首底下，不接錨點。
  */
 export function evidenceHref(path: string | null | undefined): string | null {
   const safe = safeInternalPath(path);
-  return safe && !safe.includes('#') ? `${safe}#articles` : safe;
+  return safe && safe.startsWith('/speaker/') && !safe.includes('#') ? `${safe}#articles` : safe;
 }
 
 /* ------------------------------------------------------------------
@@ -411,6 +415,7 @@ function normalizeIndicator(raw: unknown): ProfileIndicator | null {
     peers,
     sample_ok: sampleOk,
     evidence_url: str(o.evidence_url),
+    // 「沒有值」的原因（沒有委員會資料、沒有參加黨團、換了判斷器正在重判）：丟掉的話頁面只能寫成樣本不足
     ...(reason ? { reason } : {}),
   };
 }
@@ -575,6 +580,8 @@ function fixtureProfile(personId: number, query: ProfileQuery): Result<unknown> 
   // 證據連結用這個人在該來源的寫法，跟後端一樣
   const name = (fx.people ?? []).find((p) => p.id === personId && p.source === source)?.name ?? '';
   const evidence = `/speaker/${encodeURIComponent(name)}?source=${source}&session=${picked.s.id}`;
+  // 院內紀錄放在 records.json：指標由假紀錄照後端的公式算，n 才會等於證據頁的筆數
+  const chamber = fixtureChamberBlock(personId, picked.s.id);
   return {
     ok: true,
     data: {
@@ -596,7 +603,7 @@ function fixtureProfile(personId: number, query: ProfileQuery): Result<unknown> 
           indicators: b.indicators.map((i) => ({ ...i, evidence_url: evidenceUrl })),
           ...(b.distribution ? { distribution: fixtureDistribution(b.distribution, base) } : {}),
         };
-      }),
+      }).concat(chamber ? [chamber] : []),
     },
   };
 }
@@ -781,6 +788,32 @@ export async function getProfile(personId: number, query: ProfileQuery = {}): Pr
   const profile = normalizeProfile(res.data);
   if (!profile) return { ok: false, error: { kind: 'parse', message: '側寫資料不完整' } };
   return { ok: true, data: profile };
+}
+
+/**
+ * 院內紀錄清單：側寫「院內紀錄」每個數字的證據（只有立法院）。
+ *
+ * 會期由呼叫端給：證據頁先拿側寫決定是哪個會期（網址沒帶就用側寫的預設），
+ * 標題的人名、會期名稱也從側寫來，這裡只要清單本身。
+ */
+export async function getRecords(personId: number, query: RecordQuery): Promise<Result<RecordList>> {
+  // 跟 getProfile 一樣：會被拼進路徑的 id 不是正整數就不送出去
+  if (!Number.isSafeInteger(personId) || personId <= 0) {
+    return { ok: false, error: { kind: 'notfound', status: 404, message: '沒有這個人' } };
+  }
+
+  let res: Result<unknown>;
+  if (isFixtureMode()) {
+    res = fixtureRecords(personId, query);
+  } else {
+    const params = new URLSearchParams({ session: String(query.session), kind: query.kind });
+    res = await getJson<unknown>(`/api/people/${personId}/records?${params.toString()}`);
+  }
+  if (!res.ok) return res;
+
+  const list = normalizeRecords(query.kind, res.data);
+  if (!list) return { ok: false, error: { kind: 'parse', message: '紀錄資料不完整' } };
+  return { ok: true, data: list };
 }
 
 /**
