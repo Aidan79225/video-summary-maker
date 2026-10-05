@@ -53,6 +53,7 @@ class JobKind(StrEnum):
     """POST /jobs 的 kind。省略就是 deck（摘要）：舊的請求不必改。協定的一部分，兩邊各留一份。"""
     DECK = "deck"
     TOPIC = "topic"
+    FOLLOWUP = "followup"
 
 
 class GpuApiError(Exception):
@@ -133,6 +134,15 @@ class GpuApiClient:
         帶過去：GPU 端不寫死，改清單只要改 Pi 這邊（topics.TOPICS）。
         """
         return self._submit({"kind": JobKind.TOPIC, "text": text, "labels": labels})
+
+    def submit_followup(self, request: str, response: str, card: str, excerpt: str) -> str:
+        """送一個追問判斷工作：後來那篇（card＋excerpt）有沒有再提舊的要求（request、response）。
+
+        跟摘要、分類工作排同一個佇列，等待與錯誤分類照舊。excerpt 由新聞服務挑好
+        （followups.excerpt_for）：GPU 端不讀整份逐字稿。
+        """
+        return self._submit({"kind": JobKind.FOLLOWUP, "request": request, "response": response,
+                             "card": card, "excerpt": excerpt})
 
     def _submit(self, body: dict) -> str:
         job = self._call("/jobs", "POST", body=body, timeout=_SUBMIT_TIMEOUT)

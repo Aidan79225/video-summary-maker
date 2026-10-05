@@ -4,6 +4,8 @@ from __future__ import annotations
 from slidebox.domain.entities import (
     Deck,
     DeckResult,
+    FollowUpPair,
+    FollowUpResult,
     Settings,
     Slide,
     TopicLabel,
@@ -13,6 +15,7 @@ from slidebox.domain.errors import SummarizerOutputInvalid
 from slidebox_api.jobs import JobKind, JobStatus, JobStore
 from slidebox_api.runner import (
     ByKindExecutor,
+    FollowUpExecutor,
     JobWorker,
     SlideboxExecutor,
     TopicExecutor,
@@ -198,4 +201,113 @@ def test_an_answer_outside_the_list_fails_the_job_with_its_reason():
     worker.run_once()
     assert job.status == JobStatus.FAILED
     assert "不在清單裡" in job.error
+    assert job.result is None
+
+
+# --- 追問工作 ---
+
+PAIR = FollowUpPair(request="要求一個月內提出長照人力補助方案", response="部長允諾",
+                    card="一句話：追問長照人力補助方案", excerpt="上次要求的方案還沒看到")
+
+
+class FakeJudge:
+    """記下自己被用哪個模型建出來、拿到哪一對；回一個固定的答案或錯誤。"""
+
+    def __init__(self, model, calls, error=None):
+        self._model = model
+        self._calls = calls
+        self._error = error
+
+    def judge(self, pair, progress, is_cancelled=None):
+        self._calls.append((self._model, pair))
+        if self._error is not None:
+            raise self._error
+        return FollowUpResult(True, "上次要求的方案還沒看到", f"{self._model}#followup-v1")
+
+
+def _followup_executor(model="qwen3.5:9b", error=None):
+    calls: list = []
+    executor = FollowUpExecutor(lambda m: FakeJudge(m, calls, error=error), model)
+    return executor, calls
+
+
+def _followup_job(store, **overrides):
+    fields = {"kind": JobKind.FOLLOWUP, "followup": PAIR}
+    fields.update(overrides)
+    return store.submit(**fields)
+
+
+def test_a_followup_job_returns_the_verdict_the_quote_and_the_classifier():
+    executor, _ = _followup_executor()
+    assert _run(executor, _followup_job(JobStore())) == {
+        "followed_up": True, "quote": "上次要求的方案還沒看到",
+        "classifier": "qwen3.5:9b#followup-v1"}
+
+
+def test_the_judge_gets_the_jobs_pair():
+    executor, calls = _followup_executor()
+    _run(executor, _followup_job(JobStore()))
+    assert calls == [("qwen3.5:9b", PAIR)]
+
+
+def test_a_followup_job_can_name_its_own_model():
+    executor, calls = _followup_executor()
+    _run(executor, _followup_job(JobStore(), model="llama3"))
+    assert calls[0][0] == "llama3"
+
+
+def test_a_deck_jobs_model_does_not_leak_into_later_followup_jobs():
+    """同議題分類：判斷讀共用的 Settings 的話，一次手動指定模型的摘要會讓之後的
+    判斷都換模型，判斷器名稱跟著變，新聞服務會把它們全部當成沒評估過的版本。"""
+    deck, _, store = _kit()
+    followup, calls = _followup_executor(model="qwen3.5:9b")
+    _run(deck, store.submit(IVOD, model="llama3"))
+    _run(followup, _followup_job(store))
+    assert calls[0][0] == "qwen3.5:9b"
+
+
+def test_a_followup_job_without_a_pair_fails_instead_of_judging_nothing():
+    """API 擋掉了這種工作；這裡再擋一次，免得模型拿空白的提示判出一個答案。"""
+    executor, calls = _followup_executor()
+    store = JobStore()
+    worker = JobWorker(store, ByKindExecutor({JobKind.FOLLOWUP: executor}))
+    job = _followup_job(store, followup=None)
+    worker.run_once()
+    assert job.status == JobStatus.FAILED
+    assert calls == []
+
+
+def test_all_three_kinds_go_to_their_own_executors():
+    deck, usecase, store = _kit()
+    topic, topic_calls = _topic_executor()
+    followup, followup_calls = _followup_executor()
+    dispatch = ByKindExecutor({JobKind.DECK: deck, JobKind.TOPIC: topic,
+                               JobKind.FOLLOWUP: followup})
+    assert _run(dispatch, store.submit(IVOD))["video_id"] == "171180"
+    assert _run(dispatch, _topic_job(store))["primary"] == "welfare"
+    assert _run(dispatch, _followup_job(store))["followed_up"] is True
+    assert (len(usecase.seen), len(topic_calls), len(followup_calls)) == (1, 1, 1)
+
+
+def test_the_worker_runs_a_followup_job_through_the_same_queue():
+    deck, _, store = _kit()
+    followup, _ = _followup_executor()
+    worker = JobWorker(store, ByKindExecutor({JobKind.DECK: deck,
+                                              JobKind.FOLLOWUP: followup}))
+    job = _followup_job(store)
+    assert worker.run_once() is True
+    assert job.status == JobStatus.DONE
+    assert job.result["classifier"] == "qwen3.5:9b#followup-v1"
+
+
+def test_an_unreadable_verdict_fails_the_job_with_its_reason():
+    """不猜：判斷不是布林值，這個工作就是失敗，新聞服務下一輪再送。"""
+    _, _, store = _kit()
+    followup, _ = _followup_executor(
+        error=SummarizerOutputInvalid("followed_up「true」不是布林值"))
+    worker = JobWorker(store, ByKindExecutor({JobKind.FOLLOWUP: followup}))
+    job = _followup_job(store)
+    worker.run_once()
+    assert job.status == JobStatus.FAILED
+    assert "不是布林值" in job.error
     assert job.result is None

@@ -195,3 +195,40 @@ class TopicJobTests(SimpleTestCase):
         client, _, _ = _client([{"status": "queued"}])
         with self.assertRaises(GpuApiError):
             client.submit_topic("x", self.LABELS)
+
+
+class FollowupJobTests(SimpleTestCase):
+    """追問判斷工作：同一個 POST /jobs，帶 kind 與 request、response、card、excerpt；等待與錯誤處理照舊。"""
+
+    def test_a_followup_job_sends_kind_and_the_pair_but_no_url(self):
+        client, transport, _ = _client([{"id": "f1", "status": "queued"}], key="secret")
+        self.assertEqual(client.submit_followup("提出清冊", "部長允諾", "一句話：交機", "逐字稿片段"), "f1")
+        call = transport.calls[0]
+        self.assertEqual((call["method"], call["url"], call["key"]),
+                         ("POST", "http://gpu:8800/jobs", "secret"))
+        self.assertEqual(call["body"], {"kind": "followup", "request": "提出清冊", "response": "部長允諾",
+                                        "card": "一句話：交機", "excerpt": "逐字稿片段"})
+
+    def test_the_result_is_waited_for_like_any_other_job(self):
+        client, _, _ = _client([
+            {"id": "f1", "status": "queued"},
+            {"status": "running"},
+            {"status": "done", "result": {"followed_up": True, "quote": "清冊還沒給",
+                                          "classifier": "qwen3:14b#followup-v1#1a2b3c4d"}},
+        ])
+        job_id = client.submit_followup("提出清冊", "", "一句話：交機", "")
+        self.assertTrue(client.wait(job_id, timeout=60)["followed_up"])
+
+    def test_errors_are_classified_the_same_way(self):
+        import io
+        import urllib.error
+
+        def http_error(code):
+            return urllib.error.HTTPError("http://gpu/jobs", code, "boom", {}, io.BytesIO(b"x"))
+
+        client, _, _ = _client([http_error(422)])
+        with self.assertRaises(JobFailed):
+            client.submit_followup("x", "", "y", "")
+        client, _, _ = _client([http_error(500)])
+        with self.assertRaises(GpuApiError):
+            client.submit_followup("x", "", "y", "")

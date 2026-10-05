@@ -1,4 +1,4 @@
-"""FastAPI 應用：摘要與分類工作的提交、查詢與取消。
+"""FastAPI 應用：摘要、分類與追問判斷工作的提交、查詢與取消。
 
 只做 HTTP。排隊規則在 jobs.py、執行在 runner.py、成品格式在 payload.py，
 三者都不知道 FastAPI 的存在。
@@ -16,7 +16,7 @@ from urllib.parse import urlparse
 from fastapi import Depends, FastAPI, Header, HTTPException
 from pydantic import BaseModel, Field
 
-from slidebox.domain.entities import TopicLabel
+from slidebox.domain.entities import FollowUpPair, TopicLabel
 
 from .jobs import Job, JobKind, JobStore
 from .runner import JobWorker
@@ -30,6 +30,13 @@ MAX_TOPIC_TEXT = 4000
 # 一份亂塞的清單把提示詞灌爆。
 MIN_TOPIC_LABELS = 2
 MAX_TOPIC_LABELS = 20
+# 追問判斷的輸入。逐字稿片段的上限是設計定的：新聞服務挑的是一段視窗，不是整份
+# 逐字稿，長輸入判出來的結果沒有人評估過。要求與回應在摘要卡裡只有二三十字、
+# 摘要卡本身幾百字；這些上限只擋誤送整份逐字稿的請求，不會擋到正常的資料。
+MAX_FOLLOWUP_EXCERPT = 1500
+MAX_FOLLOWUP_REQUEST = 500
+MAX_FOLLOWUP_RESPONSE = 500
+MAX_FOLLOWUP_CARD = 4000
 
 
 class TopicLabelIn(BaseModel):
@@ -54,6 +61,12 @@ class JobRequest(BaseModel):
     # 以下只有分類工作用得到：要分類的文字與可選的領域
     text: str = Field(default="", max_length=MAX_TOPIC_TEXT)
     labels: list[TopicLabelIn] = Field(default_factory=list)
+    # 以下只有追問工作用得到：舊的要求、官員當時的回應（可空）、後來那篇的摘要卡、
+    # 後來那篇逐字稿裡挑出來的一段
+    request: str = Field(default="", max_length=MAX_FOLLOWUP_REQUEST)
+    response: str = Field(default="", max_length=MAX_FOLLOWUP_RESPONSE)
+    card: str = Field(default="", max_length=MAX_FOLLOWUP_CARD)
+    excerpt: str = Field(default="", max_length=MAX_FOLLOWUP_EXCERPT)
 
 
 class JobView(BaseModel):
@@ -136,7 +149,8 @@ def create_app(
             speech_hint=request.speech_hint, kind=request.kind, text=request.text,
             labels=[TopicLabel(key=item.key, label=item.label,
                                description=item.description)
-                    for item in request.labels]))
+                    for item in request.labels],
+            followup=_followup_pair(request)))
 
     @app.get("/jobs", dependencies=[Depends(require_key)])
     def recent(limit: int = 20) -> list[JobView]:
@@ -165,6 +179,8 @@ def create_app(
 def _validate(request: JobRequest) -> None:
     if request.kind == JobKind.TOPIC:
         _validate_topic(request)
+    elif request.kind == JobKind.FOLLOWUP:
+        _validate_followup(request)
     else:
         _validate_deck(request)
 
@@ -213,3 +229,30 @@ def _validate_topic(request: JobRequest) -> None:
 def _has_duplicates(values) -> bool:
     items = list(values)
     return len(set(items)) != len(items)
+
+
+def _validate_followup(request: JobRequest) -> None:
+    """沒有舊的要求就沒有東西可追；沒有後來那篇的摘要卡，模型只能憑一段逐字稿猜。
+
+    逐字稿片段也必填：引用只能從片段裡抄，提示詞又要模型找不到證據就判「沒有」，
+    沒有片段的一對注定判成沒有追問——新聞服務會把它記成判過、之後不再判，等於
+    一個沒看證據的「沒有追問」悄悄算進去。擋下來，新聞服務那邊才看得到是哪一對
+    挑不出片段。只有回應可以空：官員當場可能真的沒回應。網址同分類工作：用不到，
+    帶了就照摘要工作的規矩檢查。
+    """
+    if request.url:
+        _validate_url(request.url)
+    if not request.request.strip():
+        raise HTTPException(status_code=422, detail="追問工作必須帶 request")
+    if not request.card.strip():
+        raise HTTPException(status_code=422, detail="追問工作必須帶 card")
+    if not request.excerpt.strip():
+        raise HTTPException(status_code=422, detail="追問工作必須帶 excerpt")
+
+
+def _followup_pair(request: JobRequest) -> FollowUpPair | None:
+    """只有追問工作才帶這一對；其他種類就算送了這些欄位，工作上也不會多一份。"""
+    if request.kind != JobKind.FOLLOWUP:
+        return None
+    return FollowUpPair(request=request.request, response=request.response,
+                        card=request.card, excerpt=request.excerpt)

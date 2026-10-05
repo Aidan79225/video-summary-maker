@@ -6,6 +6,7 @@
 
 純程式計算、不打模型。議題分布讀的是每晚分類好的 Topic（topics.classify_topics），而且只認
 該來源通過評估的那個分類器（topics.passing_classifiers）——沒有通過的來源完全沒有議題指標。
+追問率同理：讀每晚判斷好的 FollowUp（followups.check_followups），只認通過評估的判斷器。
 Pi 每晚匯入、分類之後跑一次（run_scheduler），整批重算、冪等。
 Pi 的資料庫是 SD 卡上的 SQLite：任期一個來源只讀一次、文章一個會期只讀一次，
 在記憶體裡對名字，不要每篇查一次。
@@ -23,10 +24,10 @@ from datetime import date, datetime
 from fractions import Fraction
 
 from django.db import transaction
-from django.db.models import Count, Max, Min
+from django.db.models import Count, Max, Min, Q
 from django.utils import timezone
 
-from . import topics
+from . import followups, topics
 from .members_sync import CHAIR_ROLES, SPEAKER_SEPARATOR, term_number
 from .models import Article, ArticleSource, ArticleStatus, Membership, Person, ProfileStat, Session
 
@@ -282,6 +283,11 @@ class _Tally:
     # 委員會職掌（立法院）：有委員會資料的基礎文章數、其中主領域在職掌內的篇數
     committee_base: int = 0
     in_committee: int = 0
+    # 追問率：他當來源的要求裡，通過的判斷器判出已追問／未追問的項數
+    followed: int = 0
+    not_followed: int = 0
+    # 他有待重判的要求（換了判斷器、還是舊的判斷器判的）：重判完之前不給追問率
+    followup_rejudging: bool = False
 
     def add_brief(self, brief: object) -> None:
         numbers, deadline_asks, sourced = brief_counts(brief)
@@ -336,7 +342,9 @@ def round_half_up(value: Fraction, places: int = 1) -> float:
 VOLUME = "volume"
 SPECIFICITY = "specificity"
 TOPIC_BLOCK = "topics"
-BLOCK_TITLES = {VOLUME: "投入量", SPECIFICITY: "具體度", TOPIC_BLOCK: "議題分布"}
+FOLLOWUP_BLOCK = "followup"
+BLOCK_TITLES = {VOLUME: "投入量", SPECIFICITY: "具體度", TOPIC_BLOCK: "議題分布",
+                FOLLOWUP_BLOCK: "追問"}
 
 
 @dataclass(frozen=True)
@@ -409,7 +417,23 @@ COMMITTEE_ALIGNMENT = Indicator(
     min_sample=True)
 
 TOPIC_INDICATORS = (TOPIC_FOCUS, TOPIC_BREADTH, COMMITTEE_ALIGNMENT)
-INDICATOR_BY_KEY = {i.key: i for i in (*INDICATORS, *TOPIC_INDICATORS)}
+
+def _followup_rate(t: _Tally) -> tuple[float | None, int]:
+    """已追問 ÷（已追問＋未追問）× 100。
+
+    分母只算判斷得出結果的：還沒到期、還在觀察期內的不知道會不會追，不能算成沒追。
+    有待重判的要求就整個不給（值是空的、n 是 0，也就不進同儕）：舊的判斷器找到的追問不算、
+    新的又還沒判到，只用判完的那幾項算，比率會往 0% 掉，而且看起來像真的。
+    """
+    if t.followup_rejudging:
+        return None, 0
+    return _ratio(t.followed, t.followed + t.not_followed, 100.0), t.followed + t.not_followed
+
+
+FOLLOWUP_RATE = Indicator(
+    "followup_rate", FOLLOWUP_BLOCK, "追問率", "%", "項", _followup_rate, min_sample=True)
+
+INDICATOR_BY_KEY = {i.key: i for i in (*INDICATORS, *TOPIC_INDICATORS, FOLLOWUP_RATE)}
 
 # 分布存成 ProfileStat 的「topic:<代碼>」列：value＝篇數、n＝基礎文章數、不給百分位
 TOPIC_STAT_PREFIX = "topic:"
@@ -417,6 +441,11 @@ TOPIC_STAT_PREFIX = "topic:"
 
 def topic_stat_key(code: str) -> str:
     return f"{TOPIC_STAT_PREFIX}{code}"
+
+
+def is_topic_stat(key: str) -> bool:
+    """議題分布的列（分布與三個指標）。ProfileStat.classifier 非空的不只議題列，追問率也是。"""
+    return key.startswith(TOPIC_STAT_PREFIX) or key in {i.key for i in TOPIC_INDICATORS}
 
 
 def topic_indicators_for(source: str) -> list[Indicator]:
@@ -473,6 +502,8 @@ class ProfileReport:
     unsessioned: Counter = field(default_factory=Counter)
     # 來源 → 議題分布用的分類器（通過評估的那個）。不在裡面的來源沒有議題指標
     topic_classifiers: dict[str, str] = field(default_factory=dict)
+    # 追問率用的判斷器（通過評估的那個）；None 是不算追問率
+    followup_judge: str | None = None
 
     def __str__(self) -> str:
         lines = [f"這次掛上會期 {self.assigned} 篇"]
@@ -499,20 +530,24 @@ class ProfileReport:
             lines.append(f"議題分布 {source.label}：" + (
                 f"用分類器 {classifier}（評估通過）" if classifier
                 else "沒有通過的評估，不計算"))
+        lines.append("追問率：" + (f"用判斷器 {self.followup_judge}（評估通過）" if self.followup_judge
+                                 else "沒有通過的評估，不計算"))
         return "\n".join(lines)
 
 
 def compute_profiles(now: datetime | None = None) -> ProfileReport:
     """先掛會期、更新涵蓋範圍，再逐會期整批重算。冪等：重跑結果相同（computed_at 除外）。"""
     report = ProfileReport(assigned=assign_sessions(),
-                           topic_classifiers=topics.passing_classifiers())
+                           topic_classifiers=topics.passing_classifiers(),
+                           followup_judge=followups.passing_judge())
     now = now or timezone.now()
     rosters: dict[str, _Roster] = {}
     for session in Session.objects.order_by("source", "start_date", "id"):
         if session.source not in rosters:
             rosters[session.source] = _Roster.load(session.source)
         rows, summary = _compute_session(session, rosters[session.source], now, report,
-                                         report.topic_classifiers.get(session.source))
+                                         report.topic_classifiers.get(session.source),
+                                         report.followup_judge)
         _replace(session, rows)
         report.sessions.append(summary)
     report.unsessioned.update({
@@ -524,8 +559,9 @@ def compute_profiles(now: datetime | None = None) -> ProfileReport:
 
 
 def _compute_session(session: Session, roster: _Roster, now: datetime, report: ProfileReport,
-                     classifier: str | None = None) -> tuple[list[ProfileStat], SessionSummary]:
-    """classifier：這個來源通過評估的分類器；None 就不算議題分布。"""
+                     classifier: str | None = None, followup_judge: str | None = None,
+                     ) -> tuple[list[ProfileStat], SessionSummary]:
+    """classifier：這個來源通過評估的分類器；None 就不算議題分布。followup_judge 同理（追問率）。"""
     # 只算已完成的文章：只有它們有頁面可以點回去。Topic 一起讀（LEFT JOIN），不必每篇再查
     articles = list(Article.objects.filter(session=session, status=ArticleStatus.READY)
                     .order_by().values_list("speaker", "date", "duration_seconds", "brief",
@@ -578,7 +614,33 @@ def _compute_session(session: Session, roster: _Roster, now: datetime, report: P
         for row in topic_rows:
             row.classifier = classifier
         rows.extend(topic_rows)
+    if followup_judge is not None:
+        rows.extend(_followup_rows(session, roster, tallies, followup_judge, now))
     return rows, summary
+
+
+def _followup_rows(session: Session, roster: _Roster, tallies: dict[int, _Tally], judge: str,
+                   now: datetime) -> list[ProfileStat]:
+    """追問率：他當來源的要求（依來源文章的會期）裡，已追問 ÷（已追問＋未追問）。
+
+    狀態依今天的日期決定（followups.state_for），只算判斷都出自通過的判斷器的；有待重判的要求
+    （換了判斷器、還是舊版本判的）的人整個不給比率，也不進同儕。講者對人的方式跟其他指標同一套
+    （同來源、同名、任期涵蓋發言日）。列上記下判斷器：API 只在它等於現在上線的判斷器時才給比率。
+    """
+    for speaker, day, state in followups.session_states(session, judge, timezone.localdate(now)):
+        tally = tallies.get(roster.person_for(speaker, day))
+        if tally is None:
+            continue
+        if state == followups.FollowUpState.FOLLOWED:
+            tally.followed += 1
+        elif state == followups.FollowUpState.NOT_FOLLOWED:
+            tally.not_followed += 1
+        else:
+            tally.followup_rejudging = True
+    rows = _rank(FOLLOWUP_RATE, session, tallies, now)
+    for row in rows:
+        row.classifier = judge
+    return rows
 
 
 def _distribution(session: Session, tallies: dict[int, _Tally], now: datetime) -> list[ProfileStat]:
@@ -638,7 +700,8 @@ def topic_stats_stale() -> bool:
     的來源：還留著議題列。任何一種都要重算，網站上的數字才跟證據篩選一致。
     """
     live = topics.passing_classifiers()
-    topic_rows = ProfileStat.objects.exclude(classifier="")
+    topic_rows = ProfileStat.objects.exclude(classifier="").filter(
+        Q(indicator__startswith=TOPIC_STAT_PREFIX) | Q(indicator__in=[i.key for i in TOPIC_INDICATORS]))
     for source in ArticleSource.values:
         rows = topic_rows.filter(session__source=source)
         classifier = live.get(source)
@@ -649,3 +712,16 @@ def topic_stats_stale() -> bool:
                 not rows.exists() and Session.objects.filter(source=source).exists()):
             return True
     return False
+
+
+def followup_stats_stale() -> bool:
+    """側寫裡的追問率列跟現在上線的判斷器對不上（重算失敗過、或上線的判斷器剛換）。
+
+    有上線的判斷器：追問率列裡有別的判斷器算的、或一列都沒有（但有會期）；沒有：還留著追問率列。
+    """
+    judge = followups.passing_judge()
+    rows = ProfileStat.objects.filter(indicator=FOLLOWUP_RATE.key)
+    if judge is None:
+        return rows.exists()
+    return rows.exclude(classifier=judge).exists() or (
+        not rows.exists() and Session.objects.exists())

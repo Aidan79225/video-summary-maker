@@ -21,6 +21,7 @@ import type {
 } from './types';
 import { toSource } from './sources';
 import { ANY_TOPIC, TOPIC_AREAS, TOPIC_MIN_ACCURACY, TOPIC_MIN_LABELS, topicOrder } from './topics';
+import { FOLLOWUP_ANCHOR, FOLLOWUP_BLOCK, normalizeFollowupBlock } from './followups';
 import fixture from '../fixtures/sample.json';
 
 /* ------------------------------------------------------------------
@@ -238,6 +239,10 @@ type FixtureProfile = {
      */
     distribution?: { key: string; count: number }[];
     classifier?: TopicClassifier;
+    /** 追問區塊：asks、unparsed、judge 照 API 的形狀原樣寫（見 lib/followups.ts） */
+    asks?: unknown[];
+    unparsed?: number;
+    judge?: unknown;
   }[];
 };
 
@@ -392,6 +397,9 @@ function normalizeIndicator(raw: unknown): ProfileIndicator | null {
   // 樣本不足、同儕不足、沒有值，都不給百分位。後端本來就回 null，這裡再擋一次：
   // 「最小樣本」與「同儕至少幾人」是側寫的底線，不該只靠一邊守。
   const comparable = sampleOk && value !== null && peers >= MIN_PEERS && percentile !== null;
+  // 沒有值的原因要帶過來，頁面才寫得出是哪一種「沒有」（沒有委員會資料、換判斷器待重判），
+  // 而不是一律寫成樣本不足
+  const reason = str(o.reason).trim();
   return {
     key,
     label,
@@ -403,8 +411,7 @@ function normalizeIndicator(raw: unknown): ProfileIndicator | null {
     peers,
     sample_ok: sampleOk,
     evidence_url: str(o.evidence_url),
-    // 「沒有值」的原因（例如沒有委員會資料）：丟掉的話頁面只能寫成樣本不足
-    ...(str(o.reason) ? { reason: str(o.reason) } : {}),
+    ...(reason ? { reason } : {}),
   };
 }
 
@@ -480,6 +487,8 @@ function normalizeBlock(raw: unknown): ProfileBlock | null {
       .map(normalizeIndicator)
       .filter((i): i is ProfileIndicator => i !== null),
   };
+  // 追問區塊在判斷器沒通過時沒有指標、只有待追蹤清單，不能套「沒有指標就丟掉」
+  if (block.key === FOLLOWUP_BLOCK) return normalizeFollowupBlock(block, b);
   if (!block.key || !block.title || block.indicators.length === 0) return null;
   // 門檻是議題分類器自己的（追問率之後會有另一套），所以只認 topics 這一塊
   if (block.key === 'topics') {
@@ -580,9 +589,11 @@ function fixtureProfile(personId: number, query: ProfileQuery): Result<unknown> 
         const base = b.key === 'specificity' || b.key === 'topics' ? `${evidence}&solo=1&brief=1` : evidence;
         // 議題的指標只算分過類的，再多帶 topic=any（跟後端一樣），篇數才等於 n
         const indicatorUrl = b.key === 'topics' ? `${base}&topic=${ANY_TOPIC}` : base;
+        // 追問率的證據是側寫裡的追問清單，不是文章清單（跟後端一樣指到 #followups）
+        const evidenceUrl = b.key === FOLLOWUP_BLOCK ? `${evidence}#${FOLLOWUP_ANCHOR}` : indicatorUrl;
         return {
           ...b,
-          indicators: b.indicators.map((i) => ({ ...i, evidence_url: indicatorUrl })),
+          indicators: b.indicators.map((i) => ({ ...i, evidence_url: evidenceUrl })),
           ...(b.distribution ? { distribution: fixtureDistribution(b.distribution, base) } : {}),
         };
       }),

@@ -15,19 +15,28 @@ interface Props {
   indicator: ProfileIndicator;
   /** 最小樣本（API 的 min_sample），寫進「樣本不足（需至少 5 篇）」 */
   minSample: number;
+  /**
+   * 證據連結的字。預設照 n 的單位寫（「看這 12 篇」）；證據不是文章清單的指標
+   * （追問率指到側寫裡的追問清單）由呼叫端給
+   */
+  evidenceLabel?: string;
+  /** n 是 0 時底下那行字。預設照 n 的單位寫「沒有可計算的報導／數字」 */
+  emptyNote?: string;
 }
 
-const { indicator: ind, minSample } = Astro.props;
+const { indicator: ind, minSample, evidenceLabel: labelOverride, emptyNote } = Astro.props;
 
 const hasValue = ind.value !== null;
 // 委員會職掌沒有值的時候，常常不是樣本不足，而是沒有他這個會期的委員會資料：照實說
 const noCommittee = ind.reason === 'no_committee_data';
+// 追問率：換了判斷器，他還有要求是舊的判斷器判的。值是空的不是因為樣本不足，是還在重判
+const rejudging = ind.reason === 'rejudging';
 const pct = ind.percentile;
 // 頁面四捨五入到整數；長條的位置用原值，兩個同儕在 63.5 與 64.4 時記號不會疊在一起
 const pctLabel = pct !== null ? `第 ${Math.round(pct)} 百分位，在 ${ind.peers} 位同儕中` : '';
 const evidence = ind.n > 0 ? evidenceHref(ind.evidence_url) : null;
 // 證據連結列出的是文章；「有來源的數字占比」的 n 是數字個數，不能寫成「看這 23 篇」
-const evidenceLabel = ind.n_unit === '篇' ? `看這 ${ind.n} 篇` : '看這些數字出自哪幾篇';
+const evidenceLabel = labelOverride ?? (ind.n_unit === '篇' ? `看這 ${ind.n} 篇` : '看這些數字出自哪幾篇');
 // 百分號緊貼數字，其他單位留一點空隙
 const tightUnit = ind.unit === '%';
 ---
@@ -102,7 +111,9 @@ const tightUnit = ind.unit === '%';
           </svg>
           {noCommittee
             ? '沒有他這個會期的委員會資料'
-            : ind.sample_ok
+            : rejudging
+              ? '換了判斷器，他的要求正在重新判斷，判完才算'
+              : ind.sample_ok
               ? '同儕不足，不比較'
               : `樣本不足（需至少 ${minSample} ${ind.n_unit}）`}
         </p>
@@ -121,7 +132,9 @@ const tightUnit = ind.unit === '%';
         </a>
       ) : (
         <span class="text-muted">
-          {ind.n > 0 || noCommittee ? '' : `這個會期沒有可計算的${ind.n_unit === '篇' ? '報導' : '數字'}`}
+          {ind.n > 0 || noCommittee || rejudging
+            ? ''
+            : (emptyNote ?? `這個會期沒有可計算的${ind.n_unit === '篇' ? '報導' : '數字'}`)}
         </span>
       )
     }

@@ -10,7 +10,7 @@
     SLIDEBOX_API_PORT        監聽埠，預設 8800
     SLIDEBOX_API_KEY         設了就強制 X-API-Key；沒設則不驗（區網自用）
     SLIDEBOX_API_OUTPUT_DIR  成品落點，預設 ~/slidebox_api_output
-    SLIDEBOX_MODEL           Ollama 模型（摘要與議題分類共用），預設同桌面 app
+    SLIDEBOX_MODEL           Ollama 模型（摘要、議題分類與追問判斷共用），預設同桌面 app
     SLIDEBOX_OLLAMA_HOST     Ollama 位址，預設 http://localhost:11434
     SLIDEBOX_WHISPER_DEVICE  語音辨識裝置：auto（預設）／cpu／cuda
 """
@@ -25,11 +25,15 @@ from fastapi import FastAPI
 
 from slidebox.composition import build_usecase
 from slidebox.domain.entities import Settings
-from slidebox.infrastructure.ollama_summarizer import OllamaTopicClassifier
+from slidebox.infrastructure.ollama_summarizer import (
+    OllamaFollowUpJudge,
+    OllamaTopicClassifier,
+)
 from slidebox_api.app import create_app
 from slidebox_api.jobs import JobKind, JobStore
 from slidebox_api.runner import (
     ByKindExecutor,
+    FollowUpExecutor,
     JobWorker,
     SlideboxExecutor,
     TopicExecutor,
@@ -86,7 +90,13 @@ def build_executor(settings: Settings) -> ByKindExecutor:
         partial(OllamaTopicClassifier, settings.ollama_host, num_ctx=settings.num_ctx),
         settings.model,
     )
-    return ByKindExecutor({JobKind.DECK: deck, JobKind.TOPIC: topic})
+    # 追問判斷同上：預設模型、host 與 num_ctx 在這裡定下來，不跟著摘要工作變。
+    followup = FollowUpExecutor(
+        partial(OllamaFollowUpJudge, settings.ollama_host, num_ctx=settings.num_ctx),
+        settings.model,
+    )
+    return ByKindExecutor({JobKind.DECK: deck, JobKind.TOPIC: topic,
+                           JobKind.FOLLOWUP: followup})
 
 
 def build() -> FastAPI:

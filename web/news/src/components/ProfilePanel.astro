@@ -5,12 +5,15 @@
  * 規矩（issue #24 的原則）：不加總、不排名、只跟同一個議會同一個會期的人比。
  * 所以這裡沒有總分、沒有名次，每個指標各自一格；每格都能點回算它用的那幾篇。
  * 議題分布多一張各領域的長條圖（ProfileTopics），只有後端給了才出現——
- * 那個來源的分類器沒通過人工標註的評估，就整塊不上線。
+ * 那個來源的分類器沒通過人工標註的評估，就整塊不上線。追問整塊交給 ProfileFollowups：
+ * 它有自己的清單與錨點（#followups），判斷器沒通過時也還有待追蹤清單。
  */
 import type { Profile } from '../lib/types';
 import { formatDate, formatDateTime } from '../lib/format';
 import ProfileIndicator from './ProfileIndicator.astro';
 import ProfileTopics from './ProfileTopics.astro';
+import ProfileFollowups from './ProfileFollowups.astro';
+import { FOLLOWUP_BLOCK } from '../lib/followups';
 
 interface Props {
   profile: Profile;
@@ -104,7 +107,9 @@ const sessionHref = (id: number) => `${basePath}?source=${profile.source}&sessio
 
   <div class="mt-6 grid gap-7">
     {
-      profile.blocks.map((block) => (
+      profile.blocks.map((block) => block.key === FOLLOWUP_BLOCK ? (
+        <ProfileFollowups block={block} minSample={profile.min_sample} />
+      ) : (
         <section aria-labelledby={`profile-${block.key}`}>
           <h3 id={`profile-${block.key}`} class="text-[0.72rem] tracking-[0.2em] text-muted">
             {block.title}
