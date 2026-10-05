@@ -732,3 +732,27 @@ def test_cancelling_during_the_fallback_is_a_cancellation_not_a_failure():
     uc = _build_speech(subs=FakeSubtitleGateway(error=LIMITED), audio=audio)
     with pytest.raises(OperationCancelled):
         uc.execute("URL", _settings(), None, lambda: state["cancel"])
+
+
+
+def test_the_final_error_never_claims_the_video_has_no_subtitles():
+    """攔的 bug：音訊與語音辨識的 adapter 訊息都以「這部影片沒有字幕」開頭，接在「字幕軌下載失敗」
+    後面就自相矛盾——字幕其實存在。用真實 adapter 的訊息格式。"""
+    audio = FakeAudioGateway(error=NoSubtitlesAvailable(
+        "這部影片沒有字幕，音訊也下載失敗：[youtube] abc: HTTP Error 429: Too Many Requests"))
+    with pytest.raises(SubtitleDownloadFailed) as exc:
+        _build_speech(subs=FakeSubtitleGateway(error=LIMITED), audio=audio).execute("URL", _settings())
+    message = str(exc.value)
+    assert "沒有字幕" not in message
+    assert "改用語音辨識也失敗：音訊下載失敗：[youtube] abc: HTTP Error 429" in message
+
+
+def test_a_long_transcriber_message_keeps_its_install_hint():
+    long_cause = "ImportError: " + "x" * 200
+    trans = FakeTranscriber(error=NoSubtitlesAvailable(
+        f"這部影片沒有字幕；語音辨識套件 faster-whisper 無法載入（{long_cause}），若未安裝請執行 uv sync"))
+    with pytest.raises(SubtitleDownloadFailed) as exc:
+        _build_speech(subs=FakeSubtitleGateway(error=LIMITED), transcriber=trans).execute("URL", _settings())
+    message = str(exc.value)
+    assert "沒有字幕" not in message
+    assert "若未安裝請執行 uv sync" in message

@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import replace
 
 from ..domain.entities import Brief, Deck, DeckResult, Settings, Slide, Transcript
@@ -229,7 +230,7 @@ class BuildDeckUseCase:
             if not track_failed:
                 raise
             raise SubtitleDownloadFailed(
-                _both_failed(missing, f"改用語音辨識也失敗：{_short(e)}")) from e
+                _both_failed(missing, f"改用語音辨識也失敗：{_speech_reason(e)}")) from e
         finally:
             self._audio.cleanup(audio_dir)
 
@@ -410,6 +411,24 @@ def _short(error: Exception) -> str:
     """錯誤訊息給畫面用：去掉 yt-dlp 的「ERROR: 」前綴、截短。"""
     text = str(error).removeprefix("ERROR: ").strip() or type(error).__name__
     return text[:160]
+
+
+# 音訊與語音辨識的 adapter 預設自己是在「沒有字幕」之後才被叫到，訊息都以這句開頭
+_NO_SUBTITLES_PREFIX = re.compile(r"^這部影片沒有字幕[，；]\s*")
+# 拿掉前綴之後，「音訊也下載失敗」「語音辨識模型…也無法載入」的「也」沒有東西可以接了
+_DANGLING_ALSO = re.compile(r"^([^：（]*?)也")
+
+
+def _speech_reason(error: Exception) -> str:
+    """語音備援失敗的原因，接在「字幕軌下載失敗」後面。
+
+    adapter 丟的 NoSubtitlesAvailable 已經是給人看的句子（含「若未安裝請執行 uv sync」這類提示），
+    只拿掉「這部影片沒有字幕」——字幕其實存在，只是下載失敗——不截短；其他例外照 _short 處理。
+    """
+    if not isinstance(error, NoSubtitlesAvailable):
+        return _short(error)
+    text = _NO_SUBTITLES_PREFIX.sub("", str(error).strip())
+    return _DANGLING_ALSO.sub(r"\1", text, count=1) if text != str(error).strip() else text
 
 
 def _both_failed(missing: SubtitleTrackFailed, speech: str) -> str:
