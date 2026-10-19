@@ -257,3 +257,18 @@ def test_the_done_message_says_why_screenshots_are_missing(app, tmp_path):
     uc.gate.set()
     assert _pump(page, lambda: page._queue.items[0].status == ItemStatus.DONE)
     assert "其中 1 頁沒有截圖（抽幀失敗：片段裡沒有可用的畫面）" in page.status.text()
+
+
+def test_each_queued_item_keeps_its_own_screenshot_reason(app, tmp_path):
+    """攔的 bug：A 做完的原因寫進狀態列，下一項一開始就被「開始：B」蓋掉；佇列那一行又不寫原因，
+    排隊跑的時候只有最後一項看得到為什麼沒有截圖。"""
+    uc = GatedUseCase()
+    uc.screenshot_problem = "抽幀失敗：片段裡沒有可用的畫面"
+    page = _page(tmp_path, uc)
+    _add(page, "A")
+    _add(page, "B")
+    uc.gate.set()
+    assert _pump(page, lambda: all(i.status == ItemStatus.DONE for i in page._queue.items))
+    row = page.queue_list.item(0)
+    assert "沒有截圖（抽幀失敗" in row.text()
+    assert "抽幀失敗：片段裡沒有可用的畫面" in row.toolTip()

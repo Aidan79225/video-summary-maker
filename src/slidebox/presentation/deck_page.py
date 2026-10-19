@@ -375,9 +375,8 @@ class DeckPage(QWidget):
         self.progress.setRange(0, 100)
         self.progress.setValue(100)
         self._queue.finish(item, result.html_path, result.deck.video_title)
-        missing = result.deck.missing_images
-        # 佇列裡的那一行只寫頁數；截圖失敗的原因可能很長，放在下面的狀態列
-        item.message = f"{len(result.deck.slides)} 頁" + (f"，其中 {missing} 頁沒有截圖" if missing else "")
+        # 原因也記在佇列那一行（全文在 tooltip）：排隊時狀態列馬上會被「開始：下一項」蓋掉
+        item.message = f"{len(result.deck.slides)} 頁{result.missing_images_note}"
         # 內容來源（例如「由語音辨識產生」）與截圖失敗的原因都留在完成訊息裡，否則做完就看不出來
         source = f"\n{result.deck.source_note}" if result.deck.source_note else ""
         self.status.setText(
@@ -467,9 +466,10 @@ class DeckPage(QWidget):
         self.queue_list.clear()
         for item in self._queue.items:
             text = f"{_ICONS.get(item.status, '')} {item.display}"
+            row = QListWidgetItem(text + (f" — {item.message[:_MAX_MESSAGE]}" if item.message else ""))
             if item.message:
-                text += f" — {item.message[:_MAX_MESSAGE]}"
-            self.queue_list.addItem(text)
+                row.setToolTip(item.message)  # 那一行截到 _MAX_MESSAGE，滑過去看全文
+            self.queue_list.addItem(row)
         if previous is not None:
             index = next(
                 (n for n, i in enumerate(self._queue.items) if i is previous), -1)

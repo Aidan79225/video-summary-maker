@@ -808,3 +808,11 @@ def test_no_problem_is_reported_when_every_screenshot_works():
     result, statuses = _run_with_statuses()
     assert result.screenshot_problem == ""
     assert "沒有截圖" not in statuses[-1]
+
+
+def test_coloured_multi_line_reasons_are_one_clean_line():
+    """yt-dlp 在終端機裡會替「ERROR:」上色，錯誤也可能跨行；完成訊息只有一行可用。"""
+    secs = FakeSectionGateway(results=[None, "b.mp4", "c.mp4"],
+                              failure="\x1b[0;31mERROR:\x1b[0m [youtube] x: Sign in\nto confirm")
+    result, _ = _run_with_statuses(secs)
+    assert result.screenshot_problem == "[youtube] x: Sign in to confirm"

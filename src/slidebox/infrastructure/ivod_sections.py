@@ -22,7 +22,7 @@ from ..domain.entities import SectionClips
 from ..domain.errors import NoSubtitlesAvailable, OperationCancelled
 from ..domain.ports import CancelCheck, ProgressCallback
 from ..usecases.sources import ivod_id
-from .ffmpeg import get_ffmpeg_exe
+from .ffmpeg import ffmpeg_error, get_ffmpeg_exe
 from .ivod_api import IvodClient
 
 # 單次 ffmpeg 呼叫的上限。實測切一段 4 秒片段只要 1 秒，所以 30 秒已經很
@@ -127,7 +127,7 @@ class HlsSectionGateway:
         # 留到抽幀階段才發現就太晚了。
         if result.returncode == 0 and os.path.exists(dest) and os.path.getsize(dest) > 0:
             return dest, ""
-        return None, (getattr(result, "stderr", "") or "").strip()[:200] or "ffmpeg 失敗"
+        return None, ffmpeg_error(getattr(result, "stderr", "")) or "ffmpeg 失敗"
 
 
 def _ivod_stream(client: IvodClient) -> Callable[[str], str]:

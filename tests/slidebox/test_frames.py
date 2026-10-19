@@ -94,3 +94,45 @@ def test_a_clip_without_frames_leaves_no_empty_image_behind(tmp_path):
     assert not dest.exists()
     # 這個原因會出現在完成訊息裡；ffmpeg 有時什麼都不說，不能只剩「抽幀失敗：」
     assert not str(exc.value).rstrip().endswith("：")
+
+
+def test_an_ffmpeg_that_says_nothing_still_gets_a_reason(tmp_path, monkeypatch):
+    """ffmpeg 回傳 0、什麼都沒說、也沒寫出圖（片段有串流卻沒有畫格）：原因要講得出來。"""
+    from slidebox.infrastructure import ffmpeg_frames
+
+    class Silent:
+        returncode = 0
+        stderr = ""
+
+    monkeypatch.setattr(ffmpeg_frames.subprocess, "run", lambda *a, **kw: Silent())
+    with pytest.raises(RuntimeError) as exc:
+        FfmpegFrameExtractor().extract(str(tmp_path / "clip000.mp4"), str(tmp_path / "01.webp"), 160)
+    assert str(exc.value) == "抽幀失敗：片段裡沒有可用的畫面"
+
+
+def test_a_failing_ffmpeg_without_output_reports_its_exit_code(tmp_path, monkeypatch):
+    from slidebox.infrastructure import ffmpeg_frames
+
+    class Crashed:
+        returncode = 3
+        stderr = ""
+
+    monkeypatch.setattr(ffmpeg_frames.subprocess, "run", lambda *a, **kw: Crashed())
+    with pytest.raises(RuntimeError) as exc:
+        FfmpegFrameExtractor().extract(str(tmp_path / "clip000.mp4"), str(tmp_path / "01.webp"), 160)
+    assert str(exc.value) == "抽幀失敗：ffmpeg 結束碼 3"
+
+
+def test_ffmpeg_errors_become_one_readable_line():
+    """攔的 bug：-loglevel error 下 ffmpeg 印兩三行，原樣放進完成訊息會斷成好幾行、帶記憶體位址，
+    第三行還會露出暫存片段的路徑。第一行才是原因。"""
+    from slidebox.infrastructure.ffmpeg import ffmpeg_error
+
+    stderr = ("[mov,mp4,m4a,3gp,3g2,mj2 @ 000001de7e76f5c0] moov atom not found\n"
+              "[in#0 @ 000001de7e775a00] Error opening input: Invalid data found when processing input\n"
+              "Error opening input file C:\\Users\\x\\_clips\\clip000.mp4.\n")
+    assert ffmpeg_error(stderr) == "moov atom not found"
+    assert ffmpeg_error("\n  \n") == ""
+    assert ffmpeg_error(None) == ""
+    assert ffmpeg_error("[tcp @ 0000023] Connection to tcp://127.0.0.1:9 failed") == (
+        "Connection to tcp://127.0.0.1:9 failed")

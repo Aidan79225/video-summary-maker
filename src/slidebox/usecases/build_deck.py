@@ -419,8 +419,14 @@ def _short(error: Exception) -> str:
     return _short_text(str(error)) or type(error).__name__
 
 
+# yt-dlp 在終端機裡會替「ERROR:」上色
+_ANSI_COLOUR = re.compile(r"\x1b\[[0-9;]*m")
+
+
 def _short_text(text: str) -> str:
-    return text.removeprefix("ERROR: ").strip()[:160]
+    """去掉顏色碼與「ERROR: 」前綴，壓成一行（狀態列放不下換行），超過 160 字截短。"""
+    text = " ".join(_ANSI_COLOUR.sub("", text).split()).removeprefix("ERROR: ")
+    return text if len(text) <= 160 else text[:159] + "…"
 
 
 # 音訊與語音辨識的 adapter 預設自己是在「沒有字幕」之後才被叫到，訊息都以這句開頭
