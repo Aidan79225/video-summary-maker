@@ -101,6 +101,9 @@ class YtDlpSectionGateway:
         path = os.path.join(dest_dir, f"clip{index:03d}.mp4")
         try:
             fragments = fmt["fragments"]
+            if not len(fragments):
+                # yt-dlp 查最新片段編號的那一次請求失敗時，清單是空的（它把錯誤吞掉了）
+                raise RuntimeError("YouTube 沒有給這部直播剛結束影片的片段清單，請稍後再試")
             fragment = fragments[min(max(0, int(start // fmt["target_duration"])), len(fragments) - 1)]
             with yt_dlp.YoutubeDL({"quiet": True, "no_warnings": True}) as ydl:
                 data = ydl.urlopen(Request(fragment["url"], headers=fmt.get("http_headers") or {})).read()

@@ -222,3 +222,20 @@ def test_ordinary_videos_still_download_the_time_range(tmp_path, monkeypatch):
     )
     assert _SegmentedYDL.ranged_downloads == 2
     assert _SegmentedYDL.fetched == []
+
+
+def test_an_empty_segment_list_is_reported_in_words(tmp_path, monkeypatch):
+    """yt-dlp 查片段編號的那一次 HEAD 失敗時，post-live 影片的片段清單是空的。每頁都會失敗，
+    但原因要看得懂，不能是「list index out of range」；也不能退回 download_ranges——那條路
+    會「成功」下載出沒有畫格的空殼，連失敗原因都不留。"""
+    _post_live(monkeypatch, fragments=0)
+    statuses: list[str] = []
+    gw = YtDlpSectionGateway(ffmpeg_dir=str(tmp_path))
+    out = gw.download_sections(
+        "URL", [0.0, 10.0], 1080, str(tmp_path / "clips"),
+        lambda frac, status: statuses.append(status), lambda: False
+    )
+    assert out == [None, None]
+    assert _SegmentedYDL.ranged_downloads == 0
+    assert "片段清單" in statuses[-1]
+    assert "index" not in statuses[-1]
