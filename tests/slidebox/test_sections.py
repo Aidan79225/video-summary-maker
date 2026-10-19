@@ -99,7 +99,8 @@ def _capture_opts(monkeypatch, tmp_path, max_height):
     gw.download_sections(
         "URL", [10.0], max_height, str(tmp_path), _noop_progress, lambda: False
     )
-    return _CapturingYDL.captured[0]
+    # 先查格式的那一次不下載；要驗的是下載片段那一次的 opts
+    return next(o for o in _CapturingYDL.captured if "download_ranges" in o)
 
 
 def test_format_excludes_hls_streams(tmp_path, monkeypatch):
@@ -115,3 +116,109 @@ def test_format_excludes_hls_streams(tmp_path, monkeypatch):
 def test_format_excludes_hls_streams_without_a_height_cap(tmp_path, monkeypatch):
     """未設畫質上限時同樣要限定協定。"""
     assert "protocol^=http" in _capture_opts(monkeypatch, tmp_path, None)["format"]
+
+
+# --- 直播剛結束、YouTube 還沒轉檔完的影片（post-live） ---
+
+
+class _Response:
+    def __init__(self, data: bytes):
+        self._data = data
+
+    def read(self) -> bytes:
+        return self._data
+
+
+class _SegmentedYDL:
+    """仿 yt-dlp 對 post-live 影片的回應：選到的格式切成每 5 秒一段，網址帶 &sq=N。"""
+
+    info: dict = {}
+    fetched: list[str] = []
+    ranged_downloads = 0
+    failing_sq: set[int] = set()
+
+    def __init__(self, params):
+        self.params = params
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def extract_info(self, url, download=True):
+        assert download is False
+        return _SegmentedYDL.info
+
+    def urlopen(self, request):
+        url = request.url
+        _SegmentedYDL.fetched.append(url)
+        if int(url.rsplit("sq=", 1)[1]) in _SegmentedYDL.failing_sq:
+            raise OSError("HTTP Error 403: Forbidden")
+        return _Response(f"segment {url}".encode())
+
+    def download(self, urls):
+        _SegmentedYDL.ranged_downloads += 1
+
+
+def _post_live(monkeypatch, fragments=10, failing=()):
+    _SegmentedYDL.info = {
+        "format_id": "137", "protocol": "http_dash_segments", "target_duration": 5,
+        "fragments": [{"url": f"https://x/videoplayback?itag=137&sq={i}"} for i in range(fragments)],
+        "http_headers": {"User-Agent": "UA"},
+    }
+    _SegmentedYDL.fetched = []
+    _SegmentedYDL.ranged_downloads = 0
+    _SegmentedYDL.failing_sq = set(failing)
+    monkeypatch.setattr(ytdlp_sections.yt_dlp, "YoutubeDL", _SegmentedYDL)
+
+
+def test_post_live_videos_fetch_the_segment_that_holds_each_timestamp(tmp_path, monkeypatch):
+    """攔的 bug：post-live 影片只有切段格式，protocol^=http 也會選到；交給 download_ranges 時
+    yt-dlp 讓 ffmpeg 在直播串流網址上 -ss 跳秒，跳不過去，下載「成功」卻是沒有畫格的空殼，
+    整份投影片一張截圖都沒有。每一段本身解得開，直接抓包含那一秒的那一段。"""
+    _post_live(monkeypatch)
+    gw = YtDlpSectionGateway(ffmpeg_dir=str(tmp_path))
+    out = gw.download_sections(
+        "URL", [0.0, 12.0, 49.9], 1080, str(tmp_path / "clips"), _noop_progress, lambda: False
+    )
+    assert [u.rsplit("sq=", 1)[1] for u in _SegmentedYDL.fetched] == ["0", "2", "9"]
+    assert _SegmentedYDL.ranged_downloads == 0
+    assert len(out) == 3
+    with open(out[1], "rb") as f:
+        assert f.read() == b"segment https://x/videoplayback?itag=137&sq=2"
+
+
+def test_a_timestamp_past_the_last_segment_uses_the_last_one(tmp_path, monkeypatch):
+    """投影片的時間點來自字幕，可能比最後一段的起點還晚一點：用最後一段，不要整頁沒圖。"""
+    _post_live(monkeypatch, fragments=4)
+    gw = YtDlpSectionGateway(ffmpeg_dir=str(tmp_path))
+    out = gw.download_sections(
+        "URL", [21.0], 1080, str(tmp_path / "clips"), _noop_progress, lambda: False
+    )
+    assert out[0] is not None
+    assert _SegmentedYDL.fetched[0].endswith("sq=3")
+
+
+def test_a_failing_segment_only_loses_that_page_and_says_why(tmp_path, monkeypatch):
+    _post_live(monkeypatch, failing={2})
+    statuses: list[str] = []
+    gw = YtDlpSectionGateway(ffmpeg_dir=str(tmp_path))
+    out = gw.download_sections(
+        "URL", [0.0, 10.0, 20.0], 1080, str(tmp_path / "clips"),
+        lambda frac, status: statuses.append(status), lambda: False
+    )
+    assert out[0] is not None and out[1] is None and out[2] is not None
+    assert "403" in statuses[-1]
+
+
+def test_ordinary_videos_still_download_the_time_range(tmp_path, monkeypatch):
+    """一般影片（https 格式、沒有 target_duration）照舊走 download_ranges。"""
+    _post_live(monkeypatch)
+    _SegmentedYDL.info = {"format_id": "137", "protocol": "https", "url": "https://x/v"}
+    gw = YtDlpSectionGateway(ffmpeg_dir=str(tmp_path))
+    gw.download_sections(
+        "URL", [10.0, 20.0], 1080, str(tmp_path / "clips"), _noop_progress, lambda: False
+    )
+    assert _SegmentedYDL.ranged_downloads == 2
+    assert _SegmentedYDL.fetched == []
