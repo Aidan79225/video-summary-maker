@@ -86,7 +86,7 @@ YouTube 偶爾改版，下載失敗時先更新：
 
 ```powershell
 uv lock --upgrade-package yt-dlp
-uv sync
+uv sync --inexact   # --inexact：只更新，不移除其他群組裝的套件（例如語音辨識用顯示卡的 cuBLAS）
 ```
 
 ---
@@ -164,7 +164,7 @@ ollama pull qwen3.5:9b
   uv sync --group whisper-gpu
   ```
 
-  載入模型後狀態列會寫「語音辨識模型已載入（cuda）」。預設模型 `large-v3-turbo` 在 RTX 5060 Ti 上實測約 **44 倍即時**：4.7 分鐘的中文語音 6.4 秒辨識完（1 小時推算約 1.5 分鐘）。之後更新套件要用 `uv sync --group whisper-gpu`——只打 `uv sync` 會把 cuBLAS 移掉，退回 CPU
+  載入模型後狀態列會寫「語音辨識模型已載入（cuda）」。預設模型 `large-v3-turbo` 在 RTX 5060 Ti 上實測約 **44 倍即時**：4.7 分鐘的中文語音 6.4 秒辨識完（1 小時推算約 1.5 分鐘）。之後同步套件要用 `uv sync --group whisper-gpu` 或 `uv sync --inexact`——只打 `uv sync` 會把 cuBLAS 移掉，退回 CPU
 - **沒裝 cuBLAS、或顯示卡用不了**（驅動太舊之類）就走 CPU，約 **4 倍即時**：10 分鐘影片約 2.5 分鐘，1 小時約 15 分鐘。想強制用 CPU，設環境變數 `SLIDEBOX_WHISPER_DEVICE=cpu`
 - **首次使用**會從 Hugging Face 下載約 1.6 GB 的模型，之後離線可用；每次開 app 後第一次辨識要載入 12～40 秒
 - 模型載入與「解碼整個音訊檔」這兩段**無法中斷**，按取消會在該步驟完成後才停止
@@ -339,7 +339,7 @@ curl http://localhost:8800/health   # ollama_reachable 要是 true
 
 - Ollama 容器直接掛 Windows 上已經下載好的模型（`OLLAMA_MODELS_DIR`），不必再抓一次；跑這一套時把原生的 Ollama 關掉，否則兩份模型會一起佔 VRAM
 - 容器裡的 ffmpeg 用 Debian 的套件，不用 imageio-ffmpeg 附的靜態檔（後者在容器裡讀立法院的 HLS 串流會 segfault）
-- 語音辨識走 CPU，模型快取在 `whisper-cache` volume；成品在 `summary-output` volume
+- 語音辨識用顯示卡（映像裝了 cuBLAS／cuDNN；載不起來自動退回 CPU），模型快取在 `whisper-cache` volume；成品在 `summary-output` volume
 - 對區網開放是預設（容器一定綁 0.0.0.0），所以 `SLIDEBOX_API_KEY` 是必填
 - 桌面 app（`slides.py`）不在容器裡，照常原生執行
 
