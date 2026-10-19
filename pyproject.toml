@@ -18,10 +18,12 @@ api = [
     "fastapi>=0.141.1",
     "uvicorn[standard]>=0.52.4",
 ]
-# GPU 主機的容器用顯示卡跑 faster-whisper 要的 CUDA 函式庫（ctranslate2 4.x 要 cuDNN 9）。
-# 只在 Linux 裝：Windows 桌面 app 走 CPU。
+# 用顯示卡跑 faster-whisper 要的 CUDA 函式庫（ctranslate2 4.x：CUDA 12、cuDNN 9）。
+# Linux：GPU 主機的容器，Dockerfile 用 LD_LIBRARY_PATH 指給它。
+# Windows：桌面 app，`uv sync --group whisper-gpu`。ctranslate2 的 Windows 版自帶 cuDNN，只缺 cuBLAS
+# （下載約 630 MB），程式載入模型前會把它的資料夾放上 PATH。
 whisper-gpu = [
-    "nvidia-cublas-cu12 ; sys_platform == 'linux'",
+    "nvidia-cublas-cu12 ; sys_platform == 'linux' or sys_platform == 'win32'",
     "nvidia-cudnn-cu12>=9,<10 ; sys_platform == 'linux'",
 ]
 dev = [

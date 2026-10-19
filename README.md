@@ -158,7 +158,14 @@ ollama pull qwen3.5:9b
 
 影片完全沒有字幕、或字幕軌下載失敗時，會自動改用 [faster-whisper](https://github.com/SYSTRAN/faster-whisper) 從語音產生字幕，其後流程不變。成品會註明「由語音辨識產生，可能有辨識錯誤」；字幕下載失敗的話，註記會寫出原因。
 
-- **只用 CPU**（本機沒有 CUDA，且 RTX 5060 Ti 的 Blackwell 架構支援不確定）。預設模型 `large-v3-turbo`，實測約 **4 倍即時**：10 分鐘影片約 2.5 分鐘，1 小時約 15 分鐘
+- **有 NVIDIA 顯示卡就用顯示卡**，但要先裝 cuBLAS（下載約 630 MB；ctranslate2 的 Windows 版自帶 cuDNN，不用另裝）：
+
+  ```powershell
+  uv sync --group whisper-gpu
+  ```
+
+  載入模型後狀態列會寫「語音辨識模型已載入（cuda）」。預設模型 `large-v3-turbo` 在 RTX 5060 Ti 上實測約 **44 倍即時**：4.7 分鐘的中文語音 6.4 秒辨識完（1 小時推算約 1.5 分鐘）。之後更新套件要用 `uv sync --group whisper-gpu`——只打 `uv sync` 會把 cuBLAS 移掉，退回 CPU
+- **沒裝 cuBLAS、或顯示卡用不了**（驅動太舊之類）就走 CPU，約 **4 倍即時**：10 分鐘影片約 2.5 分鐘，1 小時約 15 分鐘。想強制用 CPU，設環境變數 `SLIDEBOX_WHISPER_DEVICE=cpu`
 - **首次使用**會從 Hugging Face 下載約 1.6 GB 的模型，之後離線可用；每次開 app 後第一次辨識要載入 12～40 秒
 - 模型載入與「解碼整個音訊檔」這兩段**無法中斷**，按取消會在該步驟完成後才停止
 - 純音樂、動畫等沒有人聲的影片會回報「沒有偵測到語音」

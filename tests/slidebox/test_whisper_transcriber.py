@@ -1,6 +1,7 @@
 """語音辨識 adapter：注入假模型，驗證 adapter 自己的邏輯而不必下載模型。"""
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 
 import pytest
@@ -8,6 +9,12 @@ import pytest
 from slidebox.domain.entities import Cue
 from slidebox.domain.errors import NoSubtitlesAvailable, OperationCancelled
 from slidebox.infrastructure.whisper_transcriber import FasterWhisperTranscriber
+
+
+@pytest.fixture(autouse=True)
+def _restore_path(monkeypatch):
+    """_default_model_factory 在 Windows 上會把 cuBLAS 放上 PATH；每個測試結束還原，不漏到別的測試。"""
+    monkeypatch.setenv("PATH", os.environ.get("PATH", ""))
 
 
 @dataclass
@@ -370,8 +377,83 @@ def test_an_explicit_cuda_request_reports_the_failure(monkeypatch):
     assert model.device == "cuda"
 
 
-def test_auto_never_picks_cuda_outside_linux(monkeypatch):
+def test_an_explicit_cuda_request_still_puts_cublas_on_path(monkeypatch):
+    """明確指定 cuda 也要靠 PATH 找到 cuBLAS：只在 auto 時才放的話，指定 cuda 反而用不了。"""
+    import faster_whisper
+
+    from slidebox.infrastructure import whisper_transcriber as wt
+
+    exposed = []
+    monkeypatch.setattr(faster_whisper, "WhisperModel", _FakeWhisperModel)
+    monkeypatch.setattr(wt, "_expose_cuda_libraries", lambda: exposed.append(True))
+    monkeypatch.setenv(wt.DEVICE_ENV, "cuda")
+    wt._default_model_factory("large-v3-turbo")
+    assert exposed == [True]
+
+
+def test_auto_never_picks_cuda_on_macos(monkeypatch):
+    from slidebox.infrastructure import whisper_transcriber as wt
+
+    monkeypatch.setattr(wt.sys, "platform", "darwin")
+    assert wt._cuda_available() is False
+
+
+def _nvidia_tree(root, with_cublas: bool):
+    """仿 Windows 版 NVIDIA wheel 的資料夾：nvidia/<套件>/bin 放 DLL。"""
+    nvidia = root / "nvidia"
+    (nvidia / "cuda_nvrtc" / "bin").mkdir(parents=True)
+    (nvidia / "cublas" / "bin").mkdir(parents=True)
+    (nvidia / "no_dlls_here").mkdir()
+    if with_cublas:
+        (nvidia / "cublas" / "bin" / "cublas64_12.dll").write_bytes(b"")
+    return nvidia
+
+
+def test_windows_tries_the_gpu_only_when_cublas_is_installed(monkeypatch, tmp_path):
+    """沒裝 cuBLAS 時先把模型載到顯示卡上、再因為缺 DLL 退回 CPU，只是白等幾秒。"""
+    import ctranslate2
+
     from slidebox.infrastructure import whisper_transcriber as wt
 
     monkeypatch.setattr(wt.sys, "platform", "win32")
+    monkeypatch.setattr(ctranslate2, "get_cuda_device_count", lambda: 1)
+    without = _nvidia_tree(tmp_path / "a", with_cublas=False)
+    monkeypatch.setattr(wt, "_nvidia_roots", lambda: [str(without)])
     assert wt._cuda_available() is False
+
+    monkeypatch.setattr(wt, "_nvidia_roots", lambda: [])
+    assert wt._cuda_available() is False
+
+    with_cublas = _nvidia_tree(tmp_path / "b", with_cublas=True)
+    monkeypatch.setattr(wt, "_nvidia_roots", lambda: [str(with_cublas)])
+    assert wt._cuda_available() is True
+
+    monkeypatch.setattr(ctranslate2, "get_cuda_device_count", lambda: 0)
+    assert wt._cuda_available() is False
+
+
+def test_the_dll_folders_go_first_on_path_once(monkeypatch, tmp_path):
+    """攔的 bug：os.add_dll_directory 對 ctranslate2 找 cuBLAS 沒用，一定要放上 PATH；
+    放過一次的不重複加，模型重載幾次 PATH 都不會越來越長。"""
+    from slidebox.infrastructure import whisper_transcriber as wt
+
+    nvidia = _nvidia_tree(tmp_path, with_cublas=True)
+    monkeypatch.setattr(wt.sys, "platform", "win32")
+    monkeypatch.setattr(wt, "_nvidia_roots", lambda: [str(nvidia)])
+    monkeypatch.setenv("PATH", "existing")
+    wt._expose_cuda_libraries()
+    wt._expose_cuda_libraries()
+    assert os.environ["PATH"].split(os.pathsep) == [
+        str(nvidia / "cublas" / "bin"), str(nvidia / "cuda_nvrtc" / "bin"), "existing"]
+
+
+def test_path_is_left_alone_off_windows(monkeypatch, tmp_path):
+    """Linux 的容器用 LD_LIBRARY_PATH；PATH 不該被動到。"""
+    from slidebox.infrastructure import whisper_transcriber as wt
+
+    nvidia = _nvidia_tree(tmp_path, with_cublas=True)
+    monkeypatch.setattr(wt.sys, "platform", "linux")
+    monkeypatch.setattr(wt, "_nvidia_roots", lambda: [str(nvidia)])
+    monkeypatch.setenv("PATH", "existing")
+    wt._expose_cuda_libraries()
+    assert os.environ["PATH"] == "existing"
