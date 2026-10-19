@@ -1,6 +1,7 @@
 """FrameExtractor 的 ffmpeg 實作：從片段抽一格，縮放後存成 WebP。"""
 from __future__ import annotations
 
+import contextlib
 import os
 import subprocess
 
@@ -25,6 +26,10 @@ class FfmpegFrameExtractor:
             ok, last_error = self._run(section_path, dest_path, width, offset)
             if ok:
                 return
+        # 片段有影像串流卻沒有畫格時，ffmpeg 照樣開出一個 0 bytes 的檔案；留在成品資料夾裡
+        # 看起來像截圖壞掉，而不是這頁沒有截圖
+        with contextlib.suppress(OSError):
+            os.remove(dest_path)
         raise RuntimeError(f"抽幀失敗（{os.path.basename(section_path)}）：{last_error}")
 
     def _run(self, src: str, dest: str, width: int, offset: float) -> tuple[bool, str]:

@@ -71,3 +71,24 @@ def test_falls_back_to_first_frame_for_a_clip_shorter_than_the_offset(tmp_path):
     dest = str(tmp_path / "out.webp")
     FfmpegFrameExtractor().extract(short, dest, 160)
     assert os.path.getsize(dest) > 100
+
+
+def test_a_clip_without_frames_leaves_no_empty_image_behind(tmp_path):
+    """攔的 bug：片段有影像串流卻沒有任何畫格時，ffmpeg 照樣開出一個 0 bytes 的 .webp，
+    兩次都失敗後留在成品資料夾裡，看起來像「截圖壞掉」而不是「這頁沒有截圖」。"""
+    frag = str(tmp_path / "frag.mp4")
+    subprocess.run(
+        [FFMPEG, "-hide_banner", "-loglevel", "error", "-y",
+         "-f", "lavfi", "-i", "testsrc=size=320x180:rate=10:duration=2",
+         "-pix_fmt", "yuv420p", "-movflags", "frag_keyframe+empty_moov", frag],
+        check=True,
+    )
+    with open(frag, "rb") as f:
+        data = f.read()
+    init_only = str(tmp_path / "init.mp4")  # 只有 ftyp＋moov：有串流、沒有畫格
+    with open(init_only, "wb") as f:
+        f.write(data[:data.find(b"moof") - 4])
+    dest = tmp_path / "01.webp"
+    with pytest.raises(RuntimeError):
+        FfmpegFrameExtractor().extract(init_only, str(dest), 160)
+    assert not dest.exists()
