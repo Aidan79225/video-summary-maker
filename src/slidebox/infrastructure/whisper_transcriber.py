@@ -1,12 +1,13 @@
 """SpeechTranscriber 的 faster-whisper 實作：沒有字幕時從語音產生字幕。
 
 裝置由 SLIDEBOX_WHISPER_DEVICE 決定：auto（預設）有 CUDA 就用顯示卡、否則
-CPU；cpu／cuda 則強制。桌面 app 在 Windows 上通常沒有 cuBLAS DLL，會落到
-CPU（Zen 5 上 large-v3-turbo 約片長的四分之一，夠用）；GPU 主機的容器裝了
-cuBLAS／cuDNN，臺中市議會 50 分鐘的片段在顯示卡上一兩分鐘就辨識完。
+CPU；cpu／cuda 則強制。桌面 app 在 Windows 上要先 `uv sync --group whisper-gpu`
+裝 cuBLAS 才用得到顯示卡，沒裝就走 CPU（Zen 5 上 large-v3-turbo 約片長的四分之一）；
+GPU 主機的容器裝了 cuBLAS／cuDNN，臺中市議會 50 分鐘的片段在顯示卡上一兩分鐘就辨識完。
 """
 from __future__ import annotations
 
+import importlib.util
 import os
 import sys
 from collections.abc import Callable
@@ -17,6 +18,8 @@ from ..domain.ports import CancelCheck, ProgressCallback
 from .chinese_script import fix_transcript, keep_terms_from
 
 DEVICE_ENV = "SLIDEBOX_WHISPER_DEVICE"
+# ctranslate2 第一次用顯示卡時才載入的 DLL。Windows 版的 ctranslate2 自帶 cuDNN，缺的只有它
+_WINDOWS_CUBLAS = "cublas64_12.dll"
 # 只對普通話做正體修正。粵語的「晒」「吓」是正確寫法，轉了就錯；日文漢字更不能碰。
 _MANDARIN = "zh"
 
@@ -29,15 +32,52 @@ def resolve_device(requested: str | None, cuda_available: bool) -> tuple[str, st
     return "cpu", "int8"
 
 
-def _cuda_available() -> bool:
-    """auto 只在 Linux（GPU 主機的容器）才考慮顯示卡。
+def _nvidia_roots() -> list[str]:
+    """pip 裝的 NVIDIA 函式庫所在的 nvidia 命名空間資料夾；沒裝 whisper-gpu 就是空的。"""
+    spec = importlib.util.find_spec("nvidia")
+    return list(spec.submodule_search_locations or []) if spec else []
 
-    Windows 上 ctranslate2 看得到顯示卡，但 cuBLAS／cuDNN 的 DLL 通常沒裝，而且要到
-    第一次辨識才會失敗（「cublas64_12.dll is not found」）——建模型時的例外攔不到，
-    桌面 app 的語音辨識會整個壞掉。容器映像有裝這兩個函式庫，所以只在 Linux 上自動用。
-    Windows 上真的裝好了，就明確設 SLIDEBOX_WHISPER_DEVICE=cuda。
+
+def _cuda_library_dirs() -> list[str]:
+    """Windows 版的 NVIDIA wheel 把 DLL 放在 nvidia/<套件>/bin（Linux 版放在 lib）。"""
+    dirs = []
+    for root in _nvidia_roots():
+        for name in sorted(os.listdir(root)):
+            path = os.path.join(root, name, "bin")
+            if os.path.isdir(path):
+                dirs.append(path)
+    return dirs
+
+
+def _expose_cuda_libraries() -> None:
+    """Windows：把 pip 裝的 cuBLAS 的資料夾放到 PATH 最前面。
+
+    ctranslate2 第一次用顯示卡時才用一般的 LoadLibrary 找 cuBLAS，只看 PATH——
+    os.add_dll_directory 對它沒用（實測一樣「cublas64_12.dll is not found」）。
+    Linux 的容器用 LD_LIBRARY_PATH，不必在這裡處理。
     """
-    if not sys.platform.startswith("linux"):
+    if sys.platform != "win32":
+        return
+    current = os.environ.get("PATH", "")
+    entries = current.split(os.pathsep) if current else []
+    missing = [d for d in _cuda_library_dirs() if d not in entries]
+    if missing:
+        os.environ["PATH"] = os.pathsep.join(missing + entries)
+
+
+def _cuda_available() -> bool:
+    """auto 要不要先試顯示卡。
+
+    Linux（GPU 主機的容器）：映像裝了 cuBLAS／cuDNN，看得到顯示卡就用。
+    Windows（桌面 app）：裝了 cuBLAS（uv sync --group whisper-gpu）才試；沒裝的話，
+    把模型載到顯示卡上再因為缺 DLL 退回 CPU，只是白等。
+    其他平台（macOS）：ctranslate2 沒有 CUDA。
+    試了還是不行（驅動太舊之類），由 _default_model_factory 的試跑接住、退回 CPU。
+    """
+    if sys.platform == "win32":
+        if not any(os.path.isfile(os.path.join(d, _WINDOWS_CUBLAS)) for d in _cuda_library_dirs()):
+            return False
+    elif not sys.platform.startswith("linux"):
         return False
     try:
         import ctranslate2
@@ -58,6 +98,8 @@ def _warm_up(model) -> None:
 
 
 def _default_model_factory(name: str):
+    # 明確指定 cuda 的也要靠它找到 cuBLAS，所以不管選哪個裝置都先放上 PATH
+    _expose_cuda_libraries()
     # 延遲 import：faster-whisper 會連帶載入 ctranslate2、onnxruntime、av，
     # 放在模組頂端會拖慢整個 app 的啟動，而多數影片根本用不到語音辨識。
     from faster_whisper import WhisperModel

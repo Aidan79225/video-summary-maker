@@ -30,6 +30,8 @@
 
 **GPU 不可行**：`RuntimeError: Library cublas64_12.dll is not found`。本機未安裝 CUDA toolkit；可用 pip 安裝 NVIDIA DLL 套件補齊，但光 cuDNN 約 600 MB，且 ctranslate2 對 RTX 5060 Ti（Blackwell）的支援不確定。
 
+> **2026-10-19 更新：GPU 可行了。** 缺的只有 cuBLAS——ctranslate2 的 Windows 版自帶 cuDNN，不必另裝。`uv sync --group whisper-gpu` 裝 pip 版的 cuBLAS（下載約 630 MB），載入模型前把它的資料夾放上 PATH（`os.add_dll_directory` 沒用，ctranslate2 只看 PATH）。RTX 5060 Ti 上 `large-v3-turbo` float16 實測 4.7 分鐘中文語音 6.4 秒（約 44 倍即時），CPU int8 是 67.9 秒，辨識結果相同水準。
+
 ### 3. 模型選擇（日韓品質基準）
 
 測資：前一輪端到端用過的日文、韓文簡報演講，各取 130 秒音訊。AMD Zen 5 16 執行緒，CPU int8。
