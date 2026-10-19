@@ -171,6 +171,31 @@ class DeckResult:
     """use case 的回傳：成品與它的落點。UI 需要路徑才能提供「開啟」。"""
     deck: Deck
     html_path: str
+    # 第一張沒截到的圖為什麼失敗（下載片段或抽幀）；都有圖時是空字串。只給畫面看、不寫進 HTML：
+    # 那是給跑的人查問題用的，不是給讀成品的人看的
+    screenshot_problem: str = ""
+
+    @property
+    def missing_images_note(self) -> str:
+        """「，其中 N 頁沒有截圖（原因）」；都有圖時是空字串。use case 的最後一則狀態與畫面共用這一句。"""
+        missing = self.deck.missing_images
+        if not missing:
+            return ""
+        reason = f"（{self.screenshot_problem}）" if self.screenshot_problem else ""
+        return f"，其中 {missing} 頁沒有截圖{reason}"
+
+
+class SectionClips(list):
+    """VideoSectionGateway.download_sections 的回傳：每個時間點一個片段路徑（失敗為 None），
+    另外帶著第一個失敗原因。
+
+    進度訊息裡的原因幾毫秒就被後面的狀態蓋掉，要留到完成訊息就得交給 use case。是 list 的
+    子類別，依位置取、len、跟 list 比較都照舊，只回傳 list 的 gateway 也還能用（沒有原因而已）。
+    """
+
+    def __init__(self, paths=(), failure: str = ""):
+        super().__init__(paths)
+        self.failure = failure
 
 
 @dataclass

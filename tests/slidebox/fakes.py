@@ -1,7 +1,7 @@
 """測試用的記憶體假實作（不碰真實磁碟／網路）。"""
 from __future__ import annotations
 
-from slidebox.domain.entities import AudioClip, Brief, Cue, KeyNumber, Slide, Transcript
+from slidebox.domain.entities import AudioClip, Brief, Cue, KeyNumber, SectionClips, Slide, Transcript
 from slidebox.domain.errors import (
     NoSubtitlesAvailable,
     OperationCancelled,
@@ -100,17 +100,18 @@ class FakeBriefWriter:
 
 
 class FakeSectionGateway:
-    """results 為 None 的位置代表該時間點下載失敗。"""
+    """results 為 None 的位置代表該時間點下載失敗；failure 是 gateway 回報的失敗原因。"""
 
-    def __init__(self, results: list[str | None] | None = None):
+    def __init__(self, results: list[str | None] | None = None, failure: str = ""):
         self._results = results
+        self._failure = failure
         self.timestamps: list[float] = []
         self.cleaned: list[str] = []
 
     def download_sections(self, url, timestamps, max_height, dest_dir, progress, is_cancelled):
         self.timestamps = list(timestamps)
         if self._results is not None:
-            return list(self._results)
+            return SectionClips(self._results, failure=self._failure) if self._failure else list(self._results)
         return [f"{dest_dir}/clip{i}.mp4" for i in range(len(timestamps))]
 
     def cleanup(self, dest_dir):

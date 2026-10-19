@@ -9,6 +9,7 @@ import yt_dlp
 from yt_dlp.networking import Request
 from yt_dlp.utils import download_range_func
 
+from ..domain.entities import SectionClips
 from ..domain.errors import OperationCancelled
 from ..domain.ports import CancelCheck, ProgressCallback
 from .ffmpeg import get_ffmpeg_dir
@@ -42,7 +43,7 @@ class YtDlpSectionGateway:
         dest_dir: str,
         progress: ProgressCallback,
         is_cancelled: CancelCheck,
-    ) -> list[str | None]:
+    ) -> SectionClips:
         os.makedirs(dest_dir, exist_ok=True)
         total = max(1, len(timestamps))
         results: list[str | None] = []
@@ -65,7 +66,7 @@ class YtDlpSectionGateway:
             progress(1.0, f"片段下載完成（{ok}/{total}）；失敗原因：{self._first_error[:120]}")
         else:
             progress(1.0, f"片段下載完成（{ok}/{total}）")
-        return results
+        return SectionClips(results, failure=self._first_error or "")
 
     def cleanup(self, dest_dir: str) -> None:
         shutil.rmtree(dest_dir, ignore_errors=True)

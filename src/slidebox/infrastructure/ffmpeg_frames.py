@@ -5,7 +5,7 @@ import contextlib
 import os
 import subprocess
 
-from .ffmpeg import get_ffmpeg_exe
+from .ffmpeg import ffmpeg_error, get_ffmpeg_exe
 
 
 class FfmpegFrameExtractor:
@@ -30,7 +30,8 @@ class FfmpegFrameExtractor:
         # 看起來像截圖壞掉，而不是這頁沒有截圖
         with contextlib.suppress(OSError):
             os.remove(dest_path)
-        raise RuntimeError(f"抽幀失敗（{os.path.basename(section_path)}）：{last_error}")
+        # 不放暫存片段的檔名：這句會出現在完成訊息裡，clip000.mp4 對使用者沒有意義
+        raise RuntimeError(f"抽幀失敗：{last_error}")
 
     def _run(self, src: str, dest: str, width: int, offset: float) -> tuple[bool, str]:
         result = subprocess.run(
@@ -48,4 +49,8 @@ class FfmpegFrameExtractor:
         )
         if result.returncode == 0 and os.path.exists(dest) and os.path.getsize(dest) > 0:
             return True, ""
-        return False, (result.stderr or "").strip()[:200]
+        if reason := ffmpeg_error(result.stderr):
+            return False, reason
+        # 片段有影像串流卻沒有畫格時，ffmpeg 在 -loglevel error 下可能一個字都不說（實測回傳 0）；
+        # 這個原因會出現在完成訊息裡，不能只剩「抽幀失敗：」
+        return False, "片段裡沒有可用的畫面" if result.returncode == 0 else f"ffmpeg 結束碼 {result.returncode}"

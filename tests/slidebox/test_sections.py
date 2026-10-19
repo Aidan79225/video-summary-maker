@@ -72,6 +72,8 @@ def test_a_failing_download_does_not_abort_the_batch(tmp_path, monkeypatch):
         "URL", [10.0, 20.0], 1080, str(tmp_path), _noop_progress, lambda: False
     )
     assert out == [None, None]
+    # 原因要交給 use case：進度訊息幾毫秒就被後面的狀態蓋掉
+    assert "yt-dlp 爆了" in out.failure
 
 
 class _CapturingYDL:
@@ -185,6 +187,7 @@ def test_post_live_videos_fetch_the_segment_that_holds_each_timestamp(tmp_path, 
     assert [u.rsplit("sq=", 1)[1] for u in _SegmentedYDL.fetched] == ["0", "2", "9"]
     assert _SegmentedYDL.ranged_downloads == 0
     assert len(out) == 3
+    assert out.failure == ""
     with open(out[1], "rb") as f:
         assert f.read() == b"segment https://x/videoplayback?itag=137&sq=2"
 
@@ -210,6 +213,7 @@ def test_a_failing_segment_only_loses_that_page_and_says_why(tmp_path, monkeypat
     )
     assert out[0] is not None and out[1] is None and out[2] is not None
     assert "403" in statuses[-1]
+    assert "403" in out.failure
 
 
 def test_ordinary_videos_still_download_the_time_range(tmp_path, monkeypatch):

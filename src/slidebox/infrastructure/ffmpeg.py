@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import os
+import re
 import shutil
 
 import imageio_ffmpeg
@@ -35,3 +36,20 @@ def get_ffmpeg_exe() -> str:
 def get_ffmpeg_dir() -> str:
     """回傳可供 yt-dlp 使用的 ffmpeg 資料夾。"""
     return os.path.dirname(get_ffmpeg_exe())
+
+
+# ffmpeg 每行開頭的「[mov,mp4,m4a,3gp,3g2,mj2 @ 000001de7e76f5c0] 」：哪個元件、哪個記憶體位址
+_COMPONENT_PREFIX = re.compile(r"^\[[^\]]*@ [0-9a-fA-Fx]+\]\s*")
+
+
+def ffmpeg_error(stderr: str | None) -> str:
+    """ffmpeg 的錯誤給畫面用：第一行有內容的那一行，去掉元件與記憶體位址的前綴。
+
+    -loglevel error 下 ffmpeg 通常印兩三行：第一行才是原因（moov atom not found、連不上），
+    後面的「Error opening input file <路徑>」只是重述，還會露出暫存片段的路徑。
+    """
+    for line in (stderr or "").splitlines():
+        line = _COMPONENT_PREFIX.sub("", line.strip())
+        if line:
+            return line[:200]
+    return ""

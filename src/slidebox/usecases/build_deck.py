@@ -9,7 +9,7 @@ import os
 import re
 from dataclasses import replace
 
-from ..domain.entities import Brief, Deck, DeckResult, Settings, Slide, Transcript
+from ..domain.entities import Brief, Deck, DeckResult, SectionClips, Settings, Slide, Transcript
 from ..domain.errors import (
     NoSubtitlesAvailable,
     OperationCancelled,
@@ -166,7 +166,7 @@ class BuildDeckUseCase:
                 self._scaled(cb, _P_SUMMARY, _P_DOWNLOAD),
                 cancelled,
             )
-            slides = self._attach_images(slides, clips, out_dir, settings, cb, check)
+            slides, screenshot_problem = self._attach_images(slides, clips, out_dir, settings, cb, check)
         finally:
             self._sections.cleanup(clips_dir)
 
@@ -177,12 +177,11 @@ class BuildDeckUseCase:
         html_path = os.path.join(out_dir, "slides.html")
         self._renderer.render(deck, html_path)
 
-        missing = deck.missing_images
-        done = f"完成，共 {len(slides)} 頁"
-        # 來源註記放進最後一則狀態：中途的提示會被後續狀態蓋掉
-        done += f"，其中 {missing} 頁沒有截圖" if missing else ""
+        result = DeckResult(deck=deck, html_path=html_path, screenshot_problem=screenshot_problem)
+        # 截圖失敗的原因與來源註記都放進最後一則狀態：中途的提示會被後續狀態蓋掉
+        done = f"完成，共 {len(slides)} 頁{result.missing_images_note}"
         cb(1.0, done + (f"（{note}）" if note else ""))
-        return DeckResult(deck=deck, html_path=html_path)
+        return result
 
     # --- 內部 ---
 
@@ -371,15 +370,22 @@ class BuildDeckUseCase:
         settings: Settings,
         cb: ProgressCallback,
         check,
-    ) -> tuple[Slide, ...]:
-        """逐頁抽幀。單頁失敗不中斷——13/15 頁有圖的成品仍然有用。"""
+    ) -> tuple[tuple[Slide, ...], str]:
+        """逐頁抽幀。單頁失敗不中斷——13/15 頁有圖的成品仍然有用。
+
+        第二個回傳值是第一張沒截到的圖的原因（下載片段或抽幀），給完成訊息用；都有圖時是空字串。
+        """
         filled: list[Slide] = []
+        problem = ""
+        # gateway 沒說原因（只回 list）時至少講出是哪一步
+        download_failure = (clips.failure if isinstance(clips, SectionClips) else "") or "片段下載失敗"
         total = max(1, len(slides))
         for i, slide in enumerate(slides):
             check()
             clip = clips[i] if i < len(clips) else None
             if clip is None:
                 filled.append(slide)
+                problem = problem or _short_text(download_failure)
             else:
                 # 檔名取自迴圈位置，不是 slide.index——index 來自模型輸出，
                 # 不保證唯一或連續，不能拿來決定檔案系統路徑。
@@ -387,11 +393,12 @@ class BuildDeckUseCase:
                 try:
                     self._frames.extract(clip, dest, settings.image_width)
                     filled.append(replace(slide, image_path=dest))
-                except Exception:  # noqa: BLE001 該頁沒圖，其餘照做
+                except Exception as e:  # noqa: BLE001 該頁沒圖，其餘照做；原因留給完成訊息
                     filled.append(slide)
+                    problem = problem or _short(e)
             span = _P_FRAMES - _P_DOWNLOAD
             cb(_P_DOWNLOAD + span * (i + 1) / total, f"處理截圖 {i + 1}/{total}")
-        return tuple(filled)
+        return tuple(filled), problem
 
     @staticmethod
     def _scaled(cb: ProgressCallback, lo: float, hi: float) -> ProgressCallback:
@@ -409,8 +416,17 @@ def _only_first_person(slides, problems: list[str]) -> bool:
 
 def _short(error: Exception) -> str:
     """錯誤訊息給畫面用：去掉 yt-dlp 的「ERROR: 」前綴、截短。"""
-    text = str(error).removeprefix("ERROR: ").strip() or type(error).__name__
-    return text[:160]
+    return _short_text(str(error)) or type(error).__name__
+
+
+# yt-dlp 在終端機裡會替「ERROR:」上色
+_ANSI_COLOUR = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def _short_text(text: str) -> str:
+    """去掉顏色碼與「ERROR: 」前綴，壓成一行（狀態列放不下換行），超過 160 字截短。"""
+    text = " ".join(_ANSI_COLOUR.sub("", text).split()).removeprefix("ERROR: ")
+    return text if len(text) <= 160 else text[:159] + "…"
 
 
 # 音訊與語音辨識的 adapter 預設自己是在「沒有字幕」之後才被叫到，訊息都以這句開頭
