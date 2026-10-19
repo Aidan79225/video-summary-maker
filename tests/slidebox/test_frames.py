@@ -89,6 +89,8 @@ def test_a_clip_without_frames_leaves_no_empty_image_behind(tmp_path):
     with open(init_only, "wb") as f:
         f.write(data[:data.find(b"moof") - 4])
     dest = tmp_path / "01.webp"
-    with pytest.raises(RuntimeError):
+    with pytest.raises(RuntimeError) as exc:
         FfmpegFrameExtractor().extract(init_only, str(dest), 160)
     assert not dest.exists()
+    # 這個原因會出現在完成訊息裡；ffmpeg 有時什麼都不說，不能只剩「抽幀失敗：」
+    assert not str(exc.value).rstrip().endswith("：")

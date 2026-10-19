@@ -376,12 +376,12 @@ class DeckPage(QWidget):
         self.progress.setValue(100)
         self._queue.finish(item, result.html_path, result.deck.video_title)
         missing = result.deck.missing_images
-        note = f"，其中 {missing} 頁沒有截圖" if missing else ""
-        # 內容來源（例如「由語音辨識產生」）留在完成訊息裡，否則做完就看不出來
+        # 佇列裡的那一行只寫頁數；截圖失敗的原因可能很長，放在下面的狀態列
+        item.message = f"{len(result.deck.slides)} 頁" + (f"，其中 {missing} 頁沒有截圖" if missing else "")
+        # 內容來源（例如「由語音辨識產生」）與截圖失敗的原因都留在完成訊息裡，否則做完就看不出來
         source = f"\n{result.deck.source_note}" if result.deck.source_note else ""
-        item.message = f"{len(result.deck.slides)} 頁{note}"
         self.status.setText(
-            f"✅ 完成，共 {len(result.deck.slides)} 頁{note}。{source}\n{result.html_path}"
+            f"✅ 完成，共 {len(result.deck.slides)} 頁{result.missing_images_note}。{source}\n{result.html_path}"
         )
         self._refresh()
         self._start_next()

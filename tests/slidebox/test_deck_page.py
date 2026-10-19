@@ -32,6 +32,7 @@ class GatedUseCase:
         self.gate = threading.Event()
         self.urls: list[str] = []
         self.fail_urls: set[str] = set()
+        self.screenshot_problem = ""
 
     def execute(self, url, settings, progress=None, is_cancelled=None):
         self.urls.append(url)
@@ -41,7 +42,8 @@ class GatedUseCase:
         if url in self.fail_urls:
             raise RuntimeError("連不上 Ollama")
         deck = Deck(url, f"標題 {url}", (Slide(1, "章", ("點",), 0.0),))
-        return DeckResult(deck=deck, html_path=f"OUT/{url}.html")
+        return DeckResult(deck=deck, html_path=f"OUT/{url}.html",
+                          screenshot_problem=self.screenshot_problem)
 
 
 class Catalog:
@@ -244,3 +246,14 @@ def test_clearing_finished_items_keeps_the_selection_on_the_same_item(app, tmp_p
     page._clear_finished()                     # A 被清掉，列號整個往前移
     assert page._selected() is not None
     assert page._selected().url == "C"
+
+
+def test_the_done_message_says_why_screenshots_are_missing(app, tmp_path):
+    """攔的 bug：完成訊息只寫「其中 1 頁沒有截圖」，原因被中途的狀態蓋掉，使用者無從查起。"""
+    uc = GatedUseCase()
+    uc.screenshot_problem = "抽幀失敗：片段裡沒有可用的畫面"
+    page = _page(tmp_path, uc)
+    _add(page, "A")
+    uc.gate.set()
+    assert _pump(page, lambda: page._queue.items[0].status == ItemStatus.DONE)
+    assert "其中 1 頁沒有截圖（抽幀失敗：片段裡沒有可用的畫面）" in page.status.text()

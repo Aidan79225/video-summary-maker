@@ -147,7 +147,8 @@ class VideoSectionGateway(Protocol):
     ) -> list[str | None]:
         """每個時間點回傳一個本地片段檔路徑；該點失敗則該位置為 None。
 
-        自行建立 dest_dir。回傳長度必須等於 timestamps 長度。
+        自行建立 dest_dir。回傳長度必須等於 timestamps 長度。有失敗時回傳 SectionClips
+        並帶上第一個失敗原因，完成訊息才寫得出為什麼沒有截圖。
         """
         ...
 

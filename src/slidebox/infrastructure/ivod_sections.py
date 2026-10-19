@@ -18,6 +18,7 @@ import shutil
 import subprocess
 from collections.abc import Callable, Sequence
 
+from ..domain.entities import SectionClips
 from ..domain.errors import NoSubtitlesAvailable, OperationCancelled
 from ..domain.ports import CancelCheck, ProgressCallback
 from ..usecases.sources import ivod_id
@@ -59,7 +60,7 @@ class HlsSectionGateway:
         dest_dir: str,
         progress: ProgressCallback,
         is_cancelled: CancelCheck,
-    ) -> list[str | None]:
+    ) -> SectionClips:
         """max_height 用不到：這些來源只給一個串流網址，沒得挑畫質。"""
         os.makedirs(dest_dir, exist_ok=True)
         total = max(1, len(timestamps))
@@ -71,7 +72,7 @@ class HlsSectionGateway:
             # 就會走到這裡。收窄例外型別是刻意的：裸 Exception 會把程式
             # 錯誤也靜默降級成「沒有畫面」，而截圖全缺是最難察覺的失效。
             progress(1.0, f"這段影片沒有可用的串流（{str(e)[:80]}），將產出無截圖的摘要")
-            return [None] * len(timestamps)
+            return SectionClips([None] * len(timestamps), failure=f"這段影片沒有可用的串流（{e}）")
 
         results: list[str | None] = []
         first_error: str | None = None
@@ -97,7 +98,7 @@ class HlsSectionGateway:
             progress(1.0, f"畫面擷取完成（{ok}/{total}）；失敗原因：{first_error[:120]}")
         else:
             progress(1.0, f"畫面擷取完成（{ok}/{total}）")
-        return results
+        return SectionClips(results, failure=first_error or "")
 
     def cleanup(self, dest_dir: str) -> None:
         shutil.rmtree(dest_dir, ignore_errors=True)

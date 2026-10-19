@@ -756,3 +756,55 @@ def test_a_long_transcriber_message_keeps_its_install_hint():
     message = str(exc.value)
     assert "沒有字幕" not in message
     assert "若未安裝請執行 uv sync" in message
+
+
+# --- 截圖失敗的原因 ---
+
+
+def _run_with_statuses(secs=None, frames=None):
+    statuses: list[str] = []
+    result = _build(secs=secs, frames=frames).execute(
+        "URL", _settings(), progress=lambda frac, status: statuses.append(status))
+    return result, statuses
+
+
+def test_why_screenshots_failed_reaches_the_result_and_the_final_status():
+    """攔的 bug：23 頁全部沒有截圖，最後的狀態只寫「其中 23 頁沒有截圖」——下載的原因幾毫秒就被
+    後面的狀態蓋掉，抽幀的錯誤更是整個吞掉，從畫面上看不出是哪一步、為什麼。"""
+    secs = FakeSectionGateway(results=["a.mp4", "b.mp4", "c.mp4"])
+    frames = FakeFrameExtractor(fail_on={"a.mp4", "b.mp4", "c.mp4"})
+    result, statuses = _run_with_statuses(secs, frames)
+    assert result.screenshot_problem == "抽幀失敗"
+    assert "其中 3 頁沒有截圖（抽幀失敗）" in statuses[-1]
+
+
+def test_the_download_failure_reason_from_the_gateway_is_kept():
+    secs = FakeSectionGateway(results=[None, "b.mp4", None], failure="HTTP Error 403: Forbidden")
+    result, statuses = _run_with_statuses(secs)
+    assert result.screenshot_problem == "HTTP Error 403: Forbidden"
+    assert "其中 2 頁沒有截圖（HTTP Error 403: Forbidden）" in statuses[-1]
+
+
+def test_a_download_failure_without_a_reason_still_names_the_step():
+    result, _ = _run_with_statuses(FakeSectionGateway(results=[None, "b.mp4", "c.mp4"]))
+    assert result.screenshot_problem == "片段下載失敗"
+
+
+def test_the_first_page_that_failed_decides_the_reason():
+    secs = FakeSectionGateway(results=["a.mp4", None, "c.mp4"], failure="HTTP Error 429")
+    frames = FakeFrameExtractor(fail_on={"a.mp4"})
+    result, _ = _run_with_statuses(secs, frames)
+    assert result.screenshot_problem == "抽幀失敗"
+
+
+def test_long_gateway_reasons_are_shortened_for_the_status_line():
+    secs = FakeSectionGateway(results=[None, "b.mp4", "c.mp4"], failure="ERROR: " + "x" * 500)
+    result, _ = _run_with_statuses(secs)
+    assert not result.screenshot_problem.startswith("ERROR")
+    assert len(result.screenshot_problem) <= 160
+
+
+def test_no_problem_is_reported_when_every_screenshot_works():
+    result, statuses = _run_with_statuses()
+    assert result.screenshot_problem == ""
+    assert "沒有截圖" not in statuses[-1]

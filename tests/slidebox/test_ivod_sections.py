@@ -99,6 +99,7 @@ def test_one_failed_timestamp_only_costs_that_page(tmp_path):
         URL, [0.0, 30.0], None, str(tmp_path), _noop, lambda: False)
     assert paths[0] is None
     assert paths[1] is not None
+    assert paths.failure == "segment missing"
 
 
 def test_an_unreachable_stream_gives_up_after_two_failures(tmp_path):
@@ -161,6 +162,7 @@ def test_a_stream_url_that_cannot_be_resolved_degrades_to_a_deck_with_no_images(
     paths = _gateway(client=client).download_sections(
         URL, [0.0, 30.0], None, str(tmp_path), _noop, lambda: False)
     assert paths == [None, None]
+    assert "沒有提供影片網址" in paths.failure
 
 
 def test_the_stream_url_is_resolved_once_for_the_whole_deck(tmp_path):
