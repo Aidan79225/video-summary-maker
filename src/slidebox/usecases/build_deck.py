@@ -136,8 +136,10 @@ class BuildDeckUseCase:
             transcript.cues, _budget(settings), is_automatic=transcript.is_automatic
         )
 
-        slides = self._summarize(
+        slides, leftover = self._summarize(
             compressed, transcript, settings, cb, check, cancelled)
+        # 改不掉的第一人稱照樣出片，但寫進來源註記：讀的人要知道那幾頁的「我們」是講者
+        note = "；".join(n for n in (note, leftover) if n)
 
         # 逐字稿在摘要之後才算：取消發生在摘要階段的話，這幾十毫秒的字串
         # 處理就白做了。內容無損，字元預算只約束餵給模型的那一份。
@@ -256,8 +258,13 @@ class BuildDeckUseCase:
         cb: ProgressCallback,
         check,
         cancelled: CancelCheck,
-    ) -> tuple[Slide, ...]:
-        """摘要並驗證；不合格時把錯誤回饋給模型，最多重試一次。"""
+    ) -> tuple[tuple[Slide, ...], str]:
+        """摘要並驗證；不合格時把錯誤回饋給模型，最多重試一次。
+
+        第二個回傳值是改不掉的第一人稱註記（都改好時是空字串）：重試後剩下的問題只有
+        第一人稱時照樣出片——那是小瑕疵，為它把幾分鐘的摘要（還可能有語音辨識）整份作廢不划算。
+        頁數不對、空白頁這種是真的壞了，照舊失敗。
+        """
         hint = ""
         problems: list[str] = []
         for attempt in (1, 2):
@@ -293,8 +300,12 @@ class BuildDeckUseCase:
                 slides, problems = self._repair_first_person(
                     slides, settings, cb, check, cancelled)
             if not problems:
-                return slides
+                return slides, ""
             hint = "上一次的輸出有這些問題，請修正後重新產出：" + "；".join(problems)
+        if _only_first_person(slides, problems):
+            pages = "、".join(str(s.index) for s in slides if first_person_problems(s))
+            cb(None, f"第 {pages} 頁仍有第一人稱，照樣出片")
+            return slides, f"第 {pages} 頁仍有第一人稱的敘述（模型改寫不掉）"
         raise SummarizerOutputInvalid(
             "模型輸出重試後仍不符合要求（" + "；".join(problems) + "）。可以試試換一個模型。"
         )
@@ -320,7 +331,12 @@ class BuildDeckUseCase:
             for n, (i, slide, found) in enumerate(offenders, start=1):
                 check()
                 cb(None, f"第 {slide.index} 頁改寫成第三人稱…（{n}/{len(offenders)}）")
-                fixed[i] = self._rewriter.rewrite(slide, found[0], cb, cancelled)
+                try:
+                    fixed[i] = self._rewriter.rewrite(slide, found[0], cb, cancelled)
+                except (SummarizerOutputInvalid, SummarizerUnavailable) as e:
+                    # 改寫失敗（實測模型偶爾回空字串）就當這頁沒改掉：交給下一輪或整份重產，
+                    # 不讓一頁的改寫把整個工作停掉
+                    cb(None, f"第 {slide.index} 頁改寫失敗（{_short(e)}），先保留原樣")
             slides = tuple(fixed)
             problems = validate_slides(
                 slides, settings.min_slides, settings.max_slides, settings.detailed)

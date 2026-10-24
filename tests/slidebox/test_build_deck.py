@@ -618,15 +618,62 @@ def test_first_person_pages_are_rewritten_instead_of_regenerating_the_deck():
     assert "第 2 頁" in rewriter.calls[0][1] and "我們" in rewriter.calls[0][1]
 
 
-def test_a_stubborn_rewrite_falls_back_to_a_full_retry_then_fails():
-    summ = FakeSummarizer([first_person_slides(3), first_person_slides(3)])
+def test_first_person_left_after_every_retry_still_ships_with_a_note():
+    """攔的 bug：改寫與整份重產都修不掉第一人稱時整份作廢——幾分鐘的摘要（臺中、新北還有
+    語音辨識）全部白做。第一人稱是小瑕疵：照樣出片，註記哪幾頁沒改掉。"""
+    summ = FakeSummarizer([first_person_slides(3, bad=(1, 3)), first_person_slides(3, bad=(1, 3))])
     rewriter = FakeSlideRewriter(stubborn=True)
-    with pytest.raises(SummarizerOutputInvalid, match="第一人稱"):
-        _build(summ=summ, rewriter=rewriter).execute("URL", _settings())
+    result = _build(summ=summ, rewriter=rewriter).execute("URL", _settings())
     assert len(summ.hints) == 2                       # 改寫沒用才整份重產
     assert "第一人稱" in summ.hints[1]
-    # 每次產出後最多兩輪改寫：2 次產出 × 2 輪 × 1 頁
-    assert len(rewriter.calls) == 4
+    # 每次產出後最多兩輪改寫：2 次產出 × 2 輪 × 2 頁
+    assert len(rewriter.calls) == 8
+    assert len(result.deck.slides) == 3
+    assert "第 1、3 頁仍有第一人稱" in result.deck.source_note
+
+
+def test_a_rewrite_that_returns_garbage_does_not_stop_the_job():
+    """攔的 bug：改寫回空字串（「改寫的回應不是合法的 JSON：Expecting value」）直接讓整個工作停掉。
+    改寫失敗就當這頁沒改掉，交給整份重產。"""
+    class Broken:
+        calls = 0
+
+        def rewrite(self, slide, problem, progress, is_cancelled=None):
+            Broken.calls += 1
+            raise SummarizerOutputInvalid("改寫的回應不是合法的 JSON：Expecting value: line 1 column 1 (char 0)")
+
+    summ = FakeSummarizer([first_person_slides(3), make_slides(3)])
+    result = _build(summ=summ, rewriter=Broken()).execute("URL", _settings())
+    assert len(result.deck.slides) == 3
+    assert len(summ.hints) == 2
+    assert result.deck.source_note == "" or "第一人稱" not in result.deck.source_note
+
+
+def test_a_rewriter_that_cannot_reach_ollama_does_not_stop_the_job():
+    class Unreachable:
+        def rewrite(self, slide, problem, progress, is_cancelled=None):
+            raise SummarizerUnavailable("連不上 Ollama")
+
+    summ = FakeSummarizer([first_person_slides(3), first_person_slides(3)])
+    result = _build(summ=summ, rewriter=Unreachable()).execute("URL", _settings())
+    assert "第 1 頁仍有第一人稱" in result.deck.source_note
+
+
+def test_a_cancel_during_rewrite_still_cancels():
+    class Cancelling:
+        def rewrite(self, slide, problem, progress, is_cancelled=None):
+            raise OperationCancelled()
+
+    summ = FakeSummarizer([first_person_slides(3)])
+    with pytest.raises(OperationCancelled):
+        _build(summ=summ, rewriter=Cancelling()).execute("URL", _settings())
+
+
+def test_real_problems_left_after_every_retry_still_fail():
+    """頁數不足這種是真的壞了，不能照樣出片。"""
+    summ = FakeSummarizer([first_person_slides(1), first_person_slides(1)])
+    with pytest.raises(SummarizerOutputInvalid):
+        _build(summ=summ, rewriter=FakeSlideRewriter(stubborn=True)).execute("URL", _settings())
 
 
 def test_without_a_rewriter_first_person_still_triggers_the_old_full_retry():
