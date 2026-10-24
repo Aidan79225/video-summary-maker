@@ -450,6 +450,9 @@ class OllamaSlideRewriter:
             ],
             "format": rewrite_schema(),
             "stream": True,
+            # qwen3.5 預設先「思考」：改寫一頁幾百字用不到，而且偶爾整段都進了 thinking、
+            # content 是空的，回來的就是空字串（改寫的回應不是合法的 JSON）
+            "think": False,
             "options": {"num_ctx": self._num_ctx, "temperature": 0.2},
         }
         text = _stream_chat(self._host, body, self._timeout, progress, is_cancelled,

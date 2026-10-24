@@ -223,3 +223,40 @@ class SpeechTranscriber(Protocol):
         duration 只用於進度顯示，給 0 時不顯示總長。
         """
         ...
+
+
+class Checkpoints(Protocol):
+    """做完的貴步驟（逐字稿、摘要、摘要卡）存起來：工作中途失敗或取消時，同一個網址再跑一次
+    就從斷掉的地方接著做，不用再等一次語音辨識與摘要。
+
+    fingerprint 是產生那一步時的設定（模型、頁數範圍…）；讀的時候對不上就當作沒有，不拿舊設定
+    的結果冒充。**存、讀、清都不得 raise**：存檔是加值，工作不能因為它失敗。
+    """
+
+    def load_transcript(self, output_dir: str, url: str,
+                        fingerprint: str) -> tuple[Transcript, str] | None:
+        """回傳 (逐字稿, 來源註記)；沒有或對不上時回 None。"""
+        ...
+
+    def save_transcript(self, output_dir: str, url: str, fingerprint: str,
+                        transcript: Transcript, note: str) -> None:
+        ...
+
+    def load_slides(self, output_dir: str, url: str,
+                    fingerprint: str) -> tuple[tuple[Slide, ...], str] | None:
+        """回傳 (投影片, 改不掉的第一人稱註記)；沒有或對不上時回 None。"""
+        ...
+
+    def save_slides(self, output_dir: str, url: str, fingerprint: str,
+                    slides: Sequence[Slide], note: str) -> None:
+        ...
+
+    def load_brief(self, output_dir: str, url: str, fingerprint: str) -> Brief | None:
+        ...
+
+    def save_brief(self, output_dir: str, url: str, fingerprint: str, brief: Brief) -> None:
+        ...
+
+    def clear(self, output_dir: str, url: str) -> None:
+        """整份成功出片後刪掉這個網址的存檔。"""
+        ...
