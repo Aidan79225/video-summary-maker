@@ -5,6 +5,8 @@
 """
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 import re
 from dataclasses import replace
@@ -22,6 +24,7 @@ from ..domain.ports import (
     AudioGateway,
     BriefWriter,
     CancelCheck,
+    Checkpoints,
     DeckRenderer,
     FrameExtractor,
     ProgressCallback,
@@ -81,7 +84,10 @@ class BuildDeckUseCase:
         transcriber: SpeechTranscriber | None = None,
         brief_writer: BriefWriter | None = None,
         rewriter: SlideRewriter | None = None,
+        checkpoints: Checkpoints | None = None,
     ):
+        # 做完的貴步驟存起來，停了可以接著做；None 時每次都從頭來（測試多半這樣用）
+        self._checkpoints = checkpoints
         self._audio = audio
         self._transcriber = transcriber
         self._brief_writer = brief_writer
@@ -109,26 +115,16 @@ class BuildDeckUseCase:
             if cancelled():
                 raise OperationCancelled()
 
-        check()
-        cb(0.0, "取得字幕…")
-        try:
-            transcript = self._subtitles.fetch(url, settings.subtitle_langs)
-            # 來源自己講的優先；沒講就用「是不是 YouTube 自動字幕」判斷
-            note = transcript.source_note or (
-                "使用 YouTube 自動字幕，品質可能較差" if transcript.is_automatic else "")
-        except SubtitleDownloadFailed:
-            # 來源明確說「改走語音也幫不上忙」（例如 IVOD 還沒有逐字稿，備援的 yt-dlp 不認得
-            # IVOD 網址）：原樣回報，真正的原因才不會被一個無關的音訊錯誤蓋掉
-            raise
-        except NoSubtitlesAvailable as missing:
-            # 沒有字幕、或字幕軌下載失敗（SubtitleTrackFailed，例如 YouTube 限流）：改用語音辨識。
-            # 下載失敗時把原因寫進來源註記——讀的人要知道這份投影片不是從字幕來的、為什麼
-            if self._audio is None or self._transcriber is None:
-                raise
-            transcript = self._transcribe(url, settings, cb, check, cancelled, speech_hint, missing)
-            note = (f"字幕下載失敗（{missing.reason}），改由語音辨識產生，可能有辨識錯誤"
-                    if isinstance(missing, SubtitleTrackFailed)
-                    else "由語音辨識產生，可能有辨識錯誤")
+        ck = self._checkpoints
+        transcript_fp = _fingerprint(settings.subtitle_langs, settings.whisper_model, speech_hint or "")
+        saved = ck.load_transcript(settings.output_dir, url, transcript_fp) if ck else None
+        if saved is not None:
+            transcript, note = saved
+            cb(_P_SUBTITLES, "沿用上次取得的逐字稿")
+        else:
+            transcript, note = self._fetch_transcript(url, settings, cb, check, cancelled, speech_hint)
+            if ck:
+                ck.save_transcript(settings.output_dir, url, transcript_fp, transcript, note)
 
         check()
         cb(_P_SUBTITLES, "整理字幕…" + (f"（{note}）" if note else ""))
@@ -136,8 +132,18 @@ class BuildDeckUseCase:
             transcript.cues, _budget(settings), is_automatic=transcript.is_automatic
         )
 
-        slides, leftover = self._summarize(
-            compressed, transcript, settings, cb, check, cancelled)
+        # 指紋含餵給模型的那份字幕：字元預算、字幕語言變了，摘要就該重做
+        slides_fp = _fingerprint(settings.model, settings.min_slides, settings.max_slides,
+                                 settings.detailed, settings.num_ctx, compressed)
+        saved_slides = ck.load_slides(settings.output_dir, url, slides_fp) if ck else None
+        if saved_slides is not None:
+            slides, leftover = saved_slides
+            cb(_P_SUMMARY, "沿用上次整理好的摘要")
+        else:
+            slides, leftover = self._summarize(
+                compressed, transcript, settings, cb, check, cancelled)
+            if ck:
+                ck.save_slides(settings.output_dir, url, slides_fp, slides, leftover)
         # 改不掉的第一人稱照樣出片，但寫進來源註記：讀的人要知道那幾頁的「我們」是講者
         note = "；".join(n for n in (note, leftover) if n)
 
@@ -148,10 +154,19 @@ class BuildDeckUseCase:
             if settings.detailed else ""
         )
         # 質詢卡只在詳細模式做：它讀的是各段的 detail，一般模式沒有那一段。
-        brief = (
-            self._brief(slides, transcript_text, cb, check, cancelled)
-            if settings.detailed and self._brief_writer is not None else None
-        )
+        brief = None
+        if settings.detailed and self._brief_writer is not None:
+            # 卡片是從這份摘要寫出來的：摘要重產了，舊卡片的指紋就對不上
+            brief_fp = _fingerprint(settings.model, [(x.title, x.bullets, x.detail) for x in slides],
+                                    transcript_text)
+            brief = ck.load_brief(settings.output_dir, url, brief_fp) if ck else None
+            if brief is not None:
+                cb(None, "沿用上次的摘要卡")
+            else:
+                brief = self._brief(slides, transcript_text, cb, check, cancelled)
+                if brief is not None and ck:
+                    # 放棄的卡片（None）不存：下次再試一次
+                    ck.save_brief(settings.output_dir, url, brief_fp, brief)
 
         out_dir = os.path.join(
             settings.output_dir, deck_folder_name(transcript.title, transcript.video_id)
@@ -180,12 +195,47 @@ class BuildDeckUseCase:
         self._renderer.render(deck, html_path)
 
         result = DeckResult(deck=deck, html_path=html_path, screenshot_problem=screenshot_problem)
+        if ck:
+            # 只在整份成功之後清：失敗或取消時留著，下次接著做
+            ck.clear(settings.output_dir, url)
         # 截圖失敗的原因與來源註記都放進最後一則狀態：中途的提示會被後續狀態蓋掉
         done = f"完成，共 {len(slides)} 頁{result.missing_images_note}"
         cb(1.0, done + (f"（{note}）" if note else ""))
         return result
 
     # --- 內部 ---
+
+    def _fetch_transcript(
+        self,
+        url: str,
+        settings: Settings,
+        cb: ProgressCallback,
+        check,
+        cancelled: CancelCheck,
+        speech_hint: str | None,
+    ) -> tuple[Transcript, str]:
+        """取得字幕；沒有字幕（或字幕軌下載失敗）就改走語音辨識。回傳 (逐字稿, 來源註記)。"""
+        check()
+        cb(0.0, "取得字幕…")
+        try:
+            transcript = self._subtitles.fetch(url, settings.subtitle_langs)
+            # 來源自己講的優先；沒講就用「是不是 YouTube 自動字幕」判斷
+            note = transcript.source_note or (
+                "使用 YouTube 自動字幕，品質可能較差" if transcript.is_automatic else "")
+        except SubtitleDownloadFailed:
+            # 來源明確說「改走語音也幫不上忙」（例如 IVOD 還沒有逐字稿，備援的 yt-dlp 不認得
+            # IVOD 網址）：原樣回報，真正的原因才不會被一個無關的音訊錯誤蓋掉
+            raise
+        except NoSubtitlesAvailable as missing:
+            # 沒有字幕、或字幕軌下載失敗（SubtitleTrackFailed，例如 YouTube 限流）：改用語音辨識。
+            # 下載失敗時把原因寫進來源註記——讀的人要知道這份投影片不是從字幕來的、為什麼
+            if self._audio is None or self._transcriber is None:
+                raise
+            transcript = self._transcribe(url, settings, cb, check, cancelled, speech_hint, missing)
+            note = (f"字幕下載失敗（{missing.reason}），改由語音辨識產生，可能有辨識錯誤"
+                    if isinstance(missing, SubtitleTrackFailed)
+                    else "由語音辨識產生，可能有辨識錯誤")
+        return transcript, note
 
     def _transcribe(
         self,
@@ -466,3 +516,8 @@ def _speech_reason(error: Exception) -> str:
 def _both_failed(missing: SubtitleTrackFailed, speech: str) -> str:
     """字幕軌下載失敗、語音備援也失敗：兩個原因都講；限流的話提醒稍後重試。"""
     return f"{missing.reason}；{speech}" + ("，請過幾分鐘再試。" if missing.retry_later else "")
+
+
+def _fingerprint(*parts) -> str:
+    """產生某一步時用到的設定與輸入。存檔的指紋對不上就重做那一步，不拿舊設定的結果冒充。"""
+    return hashlib.sha256(json.dumps(parts, ensure_ascii=False).encode("utf-8")).hexdigest()[:16]

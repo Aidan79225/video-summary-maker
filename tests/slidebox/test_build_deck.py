@@ -17,6 +17,7 @@ from slidebox.usecases.build_deck import BuildDeckUseCase
 from .fakes import (
     FakeAudioGateway,
     FakeBriefWriter,
+    FakeCheckpoints,
     FakeFrameExtractor,
     FakeRenderer,
     FakeSectionGateway,
@@ -863,3 +864,127 @@ def test_coloured_multi_line_reasons_are_one_clean_line():
                               failure="\x1b[0;31mERROR:\x1b[0m [youtube] x: Sign in\nto confirm")
     result, _ = _run_with_statuses(secs)
     assert result.screenshot_problem == "[youtube] x: Sign in to confirm"
+
+
+# --- 存檔續跑 ---
+
+
+class ExplodingRenderer:
+    """第一次產生 HTML 時失敗：摘要、摘要卡都做完了，工作卻在最後一步停掉。"""
+
+    def __init__(self):
+        self.calls = 0
+
+    def render(self, deck, dest_path):
+        self.calls += 1
+        if self.calls == 1:
+            raise OSError("磁碟滿了")
+
+
+def _resumable(checkpoints, subs=None, summ=None, brief=None, rend=None, audio=None,
+               transcriber=None):
+    return BuildDeckUseCase(
+        subs or FakeSubtitleGateway(),
+        summ or FakeSummarizer([make_slides(3, detail=True)]),
+        FakeSectionGateway(), FakeFrameExtractor(), rend or FakeRenderer(),
+        audio=audio, transcriber=transcriber,
+        brief_writer=brief or FakeBriefWriter([Brief("講者要求一個月內提出改善計畫")]),
+        checkpoints=checkpoints)
+
+
+def test_a_run_that_stopped_resumes_without_redoing_the_expensive_steps():
+    """使用者要的：停了要能接著做，不要從頭再等一次字幕、摘要、摘要卡。"""
+    ck = FakeCheckpoints()
+    subs = FakeSubtitleGateway()
+    summ = FakeSummarizer([make_slides(3, detail=True)])
+    brief = FakeBriefWriter([Brief("講者要求一個月內提出改善計畫")])
+    rend = ExplodingRenderer()
+    usecase = _resumable(ck, subs=subs, summ=summ, brief=brief, rend=rend)
+    with pytest.raises(OSError):
+        usecase.execute("URL", _settings(detailed=True))
+    assert ck.stages() == ["brief", "slides", "transcript"]
+
+    statuses: list[str] = []
+    result = usecase.execute("URL", _settings(detailed=True),
+                             progress=lambda f, s: statuses.append(s))
+    assert len(subs.calls) == 1          # 字幕沒有再抓
+    assert len(summ.hints) == 1          # 摘要沒有再產
+    assert brief.calls == 1              # 摘要卡沒有再寫
+    assert len(result.deck.slides) == 3
+    assert result.deck.brief is not None
+    assert any("沿用上次" in s for s in statuses)
+
+
+def test_speech_recognition_is_not_redone_when_the_summary_failed():
+    """臺中、新北的片段一段要辨識好幾分鐘：摘要那一步失敗後重跑，不能再辨識一次。"""
+    ck = FakeCheckpoints()
+    transcriber = FakeTranscriber()
+    summ = FakeSummarizer([make_slides(3)])
+
+    class FlakySummarizer:
+        calls = 0
+
+        def summarize(self, *args, **kwargs):
+            FlakySummarizer.calls += 1
+            if FlakySummarizer.calls == 1:
+                raise SummarizerUnavailable("連不上 Ollama")
+            return summ.summarize(*args, **kwargs)
+
+    usecase = BuildDeckUseCase(
+        FakeSubtitleGateway(fail=True), FlakySummarizer(), FakeSectionGateway(),
+        FakeFrameExtractor(), FakeRenderer(), audio=FakeAudioGateway(), transcriber=transcriber,
+        checkpoints=ck)
+    with pytest.raises(SummarizerUnavailable):
+        usecase.execute("URL", _settings())
+    result = usecase.execute("URL", _settings())
+    assert len(transcriber.calls) == 1
+    assert "語音辨識" in result.deck.source_note   # 來源註記也跟著存檔回來
+
+
+def test_changed_settings_redo_the_summary_but_keep_the_transcript():
+    """頁數範圍改了，拿舊的摘要冒充就錯了；字幕跟這些設定無關，照樣沿用。"""
+    ck = FakeCheckpoints()
+    subs = FakeSubtitleGateway()
+    summ = FakeSummarizer([make_slides(3), make_slides(4)])
+    usecase = _resumable(ck, subs=subs, summ=summ, rend=ExplodingRenderer())
+    with pytest.raises(OSError):
+        usecase.execute("URL", _settings())
+    result = usecase.execute("URL", _settings(max_slides=6))
+    assert len(subs.calls) == 1
+    assert len(summ.hints) == 2
+    assert len(result.deck.slides) == 4
+
+
+def test_a_new_summary_means_a_new_brief():
+    """摘要卡是從摘要寫出來的：摘要重產了，舊的卡片就不能沿用。"""
+    ck = FakeCheckpoints()
+    brief = FakeBriefWriter([Brief("講者要求交通局一個月內提出公車改善計畫"),
+                             Brief("講者要求交通局提出智慧站牌的建置進度報告")])
+    summ = FakeSummarizer([make_slides(3, detail=True), make_slides(4, detail=True)])
+    usecase = _resumable(ck, summ=summ, brief=brief, rend=ExplodingRenderer())
+    with pytest.raises(OSError):
+        usecase.execute("URL", _settings(detailed=True))
+    result = usecase.execute("URL", _settings(detailed=True, max_slides=6))
+    assert brief.calls == 2
+    assert result.deck.brief.one_liner == "講者要求交通局提出智慧站牌的建置進度報告"
+
+
+def test_a_finished_deck_clears_its_checkpoint_and_a_failed_one_keeps_it():
+    ck = FakeCheckpoints()
+    usecase = _resumable(ck, rend=ExplodingRenderer())
+    with pytest.raises(OSError):
+        usecase.execute("URL", _settings())
+    assert ck.cleared == []
+    usecase.execute("URL", _settings())
+    assert ck.cleared == [("OUT", "URL")]
+    assert ck.stages() == []
+
+
+def test_a_cancelled_run_keeps_what_it_finished():
+    ck = FakeCheckpoints()
+    flag = {"on": False}
+    summ = FakeSummarizer([make_slides(3)], on_summarize=lambda: flag.update(on=True))
+    usecase = _resumable(ck, summ=summ)
+    with pytest.raises(OperationCancelled):
+        usecase.execute("URL", _settings(), is_cancelled=lambda: flag["on"])
+    assert "transcript" in ck.stages()
