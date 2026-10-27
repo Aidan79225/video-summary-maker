@@ -17,6 +17,7 @@ from slidebox.usecases.build_deck import BuildDeckUseCase
 from .fakes import (
     FakeAudioGateway,
     FakeBriefWriter,
+    FakeCheckpoints,
     FakeFrameExtractor,
     FakeRenderer,
     FakeSectionGateway,
@@ -618,15 +619,62 @@ def test_first_person_pages_are_rewritten_instead_of_regenerating_the_deck():
     assert "第 2 頁" in rewriter.calls[0][1] and "我們" in rewriter.calls[0][1]
 
 
-def test_a_stubborn_rewrite_falls_back_to_a_full_retry_then_fails():
-    summ = FakeSummarizer([first_person_slides(3), first_person_slides(3)])
+def test_first_person_left_after_every_retry_still_ships_with_a_note():
+    """攔的 bug：改寫與整份重產都修不掉第一人稱時整份作廢——幾分鐘的摘要（臺中、新北還有
+    語音辨識）全部白做。第一人稱是小瑕疵：照樣出片，註記哪幾頁沒改掉。"""
+    summ = FakeSummarizer([first_person_slides(3, bad=(1, 3)), first_person_slides(3, bad=(1, 3))])
     rewriter = FakeSlideRewriter(stubborn=True)
-    with pytest.raises(SummarizerOutputInvalid, match="第一人稱"):
-        _build(summ=summ, rewriter=rewriter).execute("URL", _settings())
+    result = _build(summ=summ, rewriter=rewriter).execute("URL", _settings())
     assert len(summ.hints) == 2                       # 改寫沒用才整份重產
     assert "第一人稱" in summ.hints[1]
-    # 每次產出後最多兩輪改寫：2 次產出 × 2 輪 × 1 頁
-    assert len(rewriter.calls) == 4
+    # 每次產出後最多兩輪改寫：2 次產出 × 2 輪 × 2 頁
+    assert len(rewriter.calls) == 8
+    assert len(result.deck.slides) == 3
+    assert "第 1、3 頁仍有第一人稱" in result.deck.source_note
+
+
+def test_a_rewrite_that_returns_garbage_does_not_stop_the_job():
+    """攔的 bug：改寫回空字串（「改寫的回應不是合法的 JSON：Expecting value」）直接讓整個工作停掉。
+    改寫失敗就當這頁沒改掉，交給整份重產。"""
+    class Broken:
+        calls = 0
+
+        def rewrite(self, slide, problem, progress, is_cancelled=None):
+            Broken.calls += 1
+            raise SummarizerOutputInvalid("改寫的回應不是合法的 JSON：Expecting value: line 1 column 1 (char 0)")
+
+    summ = FakeSummarizer([first_person_slides(3), make_slides(3)])
+    result = _build(summ=summ, rewriter=Broken()).execute("URL", _settings())
+    assert len(result.deck.slides) == 3
+    assert len(summ.hints) == 2
+    assert result.deck.source_note == "" or "第一人稱" not in result.deck.source_note
+
+
+def test_a_rewriter_that_cannot_reach_ollama_does_not_stop_the_job():
+    class Unreachable:
+        def rewrite(self, slide, problem, progress, is_cancelled=None):
+            raise SummarizerUnavailable("連不上 Ollama")
+
+    summ = FakeSummarizer([first_person_slides(3), first_person_slides(3)])
+    result = _build(summ=summ, rewriter=Unreachable()).execute("URL", _settings())
+    assert "第 1 頁仍有第一人稱" in result.deck.source_note
+
+
+def test_a_cancel_during_rewrite_still_cancels():
+    class Cancelling:
+        def rewrite(self, slide, problem, progress, is_cancelled=None):
+            raise OperationCancelled()
+
+    summ = FakeSummarizer([first_person_slides(3)])
+    with pytest.raises(OperationCancelled):
+        _build(summ=summ, rewriter=Cancelling()).execute("URL", _settings())
+
+
+def test_real_problems_left_after_every_retry_still_fail():
+    """頁數不足這種是真的壞了，不能照樣出片。"""
+    summ = FakeSummarizer([first_person_slides(1), first_person_slides(1)])
+    with pytest.raises(SummarizerOutputInvalid):
+        _build(summ=summ, rewriter=FakeSlideRewriter(stubborn=True)).execute("URL", _settings())
 
 
 def test_without_a_rewriter_first_person_still_triggers_the_old_full_retry():
@@ -816,3 +864,127 @@ def test_coloured_multi_line_reasons_are_one_clean_line():
                               failure="\x1b[0;31mERROR:\x1b[0m [youtube] x: Sign in\nto confirm")
     result, _ = _run_with_statuses(secs)
     assert result.screenshot_problem == "[youtube] x: Sign in to confirm"
+
+
+# --- 存檔續跑 ---
+
+
+class ExplodingRenderer:
+    """第一次產生 HTML 時失敗：摘要、摘要卡都做完了，工作卻在最後一步停掉。"""
+
+    def __init__(self):
+        self.calls = 0
+
+    def render(self, deck, dest_path):
+        self.calls += 1
+        if self.calls == 1:
+            raise OSError("磁碟滿了")
+
+
+def _resumable(checkpoints, subs=None, summ=None, brief=None, rend=None, audio=None,
+               transcriber=None):
+    return BuildDeckUseCase(
+        subs or FakeSubtitleGateway(),
+        summ or FakeSummarizer([make_slides(3, detail=True)]),
+        FakeSectionGateway(), FakeFrameExtractor(), rend or FakeRenderer(),
+        audio=audio, transcriber=transcriber,
+        brief_writer=brief or FakeBriefWriter([Brief("講者要求一個月內提出改善計畫")]),
+        checkpoints=checkpoints)
+
+
+def test_a_run_that_stopped_resumes_without_redoing_the_expensive_steps():
+    """使用者要的：停了要能接著做，不要從頭再等一次字幕、摘要、摘要卡。"""
+    ck = FakeCheckpoints()
+    subs = FakeSubtitleGateway()
+    summ = FakeSummarizer([make_slides(3, detail=True)])
+    brief = FakeBriefWriter([Brief("講者要求一個月內提出改善計畫")])
+    rend = ExplodingRenderer()
+    usecase = _resumable(ck, subs=subs, summ=summ, brief=brief, rend=rend)
+    with pytest.raises(OSError):
+        usecase.execute("URL", _settings(detailed=True))
+    assert ck.stages() == ["brief", "slides", "transcript"]
+
+    statuses: list[str] = []
+    result = usecase.execute("URL", _settings(detailed=True),
+                             progress=lambda f, s: statuses.append(s))
+    assert len(subs.calls) == 1          # 字幕沒有再抓
+    assert len(summ.hints) == 1          # 摘要沒有再產
+    assert brief.calls == 1              # 摘要卡沒有再寫
+    assert len(result.deck.slides) == 3
+    assert result.deck.brief is not None
+    assert any("沿用上次" in s for s in statuses)
+
+
+def test_speech_recognition_is_not_redone_when_the_summary_failed():
+    """臺中、新北的片段一段要辨識好幾分鐘：摘要那一步失敗後重跑，不能再辨識一次。"""
+    ck = FakeCheckpoints()
+    transcriber = FakeTranscriber()
+    summ = FakeSummarizer([make_slides(3)])
+
+    class FlakySummarizer:
+        calls = 0
+
+        def summarize(self, *args, **kwargs):
+            FlakySummarizer.calls += 1
+            if FlakySummarizer.calls == 1:
+                raise SummarizerUnavailable("連不上 Ollama")
+            return summ.summarize(*args, **kwargs)
+
+    usecase = BuildDeckUseCase(
+        FakeSubtitleGateway(fail=True), FlakySummarizer(), FakeSectionGateway(),
+        FakeFrameExtractor(), FakeRenderer(), audio=FakeAudioGateway(), transcriber=transcriber,
+        checkpoints=ck)
+    with pytest.raises(SummarizerUnavailable):
+        usecase.execute("URL", _settings())
+    result = usecase.execute("URL", _settings())
+    assert len(transcriber.calls) == 1
+    assert "語音辨識" in result.deck.source_note   # 來源註記也跟著存檔回來
+
+
+def test_changed_settings_redo_the_summary_but_keep_the_transcript():
+    """頁數範圍改了，拿舊的摘要冒充就錯了；字幕跟這些設定無關，照樣沿用。"""
+    ck = FakeCheckpoints()
+    subs = FakeSubtitleGateway()
+    summ = FakeSummarizer([make_slides(3), make_slides(4)])
+    usecase = _resumable(ck, subs=subs, summ=summ, rend=ExplodingRenderer())
+    with pytest.raises(OSError):
+        usecase.execute("URL", _settings())
+    result = usecase.execute("URL", _settings(max_slides=6))
+    assert len(subs.calls) == 1
+    assert len(summ.hints) == 2
+    assert len(result.deck.slides) == 4
+
+
+def test_a_new_summary_means_a_new_brief():
+    """摘要卡是從摘要寫出來的：摘要重產了，舊的卡片就不能沿用。"""
+    ck = FakeCheckpoints()
+    brief = FakeBriefWriter([Brief("講者要求交通局一個月內提出公車改善計畫"),
+                             Brief("講者要求交通局提出智慧站牌的建置進度報告")])
+    summ = FakeSummarizer([make_slides(3, detail=True), make_slides(4, detail=True)])
+    usecase = _resumable(ck, summ=summ, brief=brief, rend=ExplodingRenderer())
+    with pytest.raises(OSError):
+        usecase.execute("URL", _settings(detailed=True))
+    result = usecase.execute("URL", _settings(detailed=True, max_slides=6))
+    assert brief.calls == 2
+    assert result.deck.brief.one_liner == "講者要求交通局提出智慧站牌的建置進度報告"
+
+
+def test_a_finished_deck_clears_its_checkpoint_and_a_failed_one_keeps_it():
+    ck = FakeCheckpoints()
+    usecase = _resumable(ck, rend=ExplodingRenderer())
+    with pytest.raises(OSError):
+        usecase.execute("URL", _settings())
+    assert ck.cleared == []
+    usecase.execute("URL", _settings())
+    assert ck.cleared == [("OUT", "URL")]
+    assert ck.stages() == []
+
+
+def test_a_cancelled_run_keeps_what_it_finished():
+    ck = FakeCheckpoints()
+    flag = {"on": False}
+    summ = FakeSummarizer([make_slides(3)], on_summarize=lambda: flag.update(on=True))
+    usecase = _resumable(ck, summ=summ)
+    with pytest.raises(OperationCancelled):
+        usecase.execute("URL", _settings(), is_cancelled=lambda: flag["on"])
+    assert "transcript" in ck.stages()

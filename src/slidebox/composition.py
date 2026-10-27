@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING
 
 from .domain.entities import Brief, Settings, Slide
 from .domain.ports import CancelCheck, ProgressCallback
+from .infrastructure.checkpoint_store import JsonCheckpointStore
 from .infrastructure.ffmpeg_frames import FfmpegFrameExtractor
 from .infrastructure.hls_audio import NoSubtitlesGateway
 from .infrastructure.html_renderer import HtmlDeckRenderer
@@ -153,6 +154,8 @@ def build_usecase(settings: Settings) -> BuildDeckUseCase:
         brief_writer=CurrentSettingsBriefWriter(settings),
         # 摘要有第一人稱時只把那幾頁送回去改，不整份重產
         rewriter=CurrentSettingsSlideRewriter(settings),
+        # 停了可以接著做：逐字稿、摘要、摘要卡存在輸出資料夾的 .slidebox_cache/
+        checkpoints=JsonCheckpointStore(),
     )
 
 

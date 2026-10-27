@@ -242,3 +242,44 @@ class FakeSlideRewriter:
         return Slide(index=slide.index, title=slide.title,
                      bullets=tuple(fix(b) for b in slide.bullets),
                      timestamp=slide.timestamp, detail=fix(slide.detail))
+
+
+class FakeCheckpoints:
+    """記憶體裡的存檔，比照 JsonCheckpointStore：指紋對不上就當作沒有。"""
+
+    def __init__(self):
+        self.stored: dict[tuple[str, str, str], tuple[str, object]] = {}
+        self.cleared: list[tuple[str, str]] = []
+
+    def _load(self, output_dir, url, stage, fingerprint):
+        found = self.stored.get((output_dir, url, stage))
+        return found[1] if found and found[0] == fingerprint else None
+
+    def _save(self, output_dir, url, stage, fingerprint, value):
+        self.stored[(output_dir, url, stage)] = (fingerprint, value)
+
+    def load_transcript(self, output_dir, url, fingerprint):
+        return self._load(output_dir, url, "transcript", fingerprint)
+
+    def save_transcript(self, output_dir, url, fingerprint, transcript, note):
+        self._save(output_dir, url, "transcript", fingerprint, (transcript, note))
+
+    def load_slides(self, output_dir, url, fingerprint):
+        return self._load(output_dir, url, "slides", fingerprint)
+
+    def save_slides(self, output_dir, url, fingerprint, slides, note):
+        self._save(output_dir, url, "slides", fingerprint, (tuple(slides), note))
+
+    def load_brief(self, output_dir, url, fingerprint):
+        return self._load(output_dir, url, "brief", fingerprint)
+
+    def save_brief(self, output_dir, url, fingerprint, brief):
+        self._save(output_dir, url, "brief", fingerprint, brief)
+
+    def clear(self, output_dir, url):
+        self.cleared.append((output_dir, url))
+        for key in [k for k in self.stored if k[:2] == (output_dir, url)]:
+            del self.stored[key]
+
+    def stages(self, output_dir="OUT", url="URL"):
+        return sorted(k[2] for k in self.stored if k[:2] == (output_dir, url))
