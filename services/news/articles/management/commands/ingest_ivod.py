@@ -37,7 +37,8 @@ class Command(BaseCommand):
         parser.add_argument("--source", choices=["ly", "tccc", "ntpc"],
                             help="只查這個來源的清單（ly=立法院、tccc=臺中市議會、"
                                  "ntpc=新北市議會）；不給就查所有啟用的來源。"
-                                 "只影響查清單，處理積壓不分來源。")
+                                 "只影響查清單，處理積壓不分議會來源"
+                                 "（YouTube 影片不在排程裡，見 add_video）。")
         parser.add_argument("--process-only", action="store_true",
                             help="不查立法院，只把待處理的送出去")
         parser.add_argument("--retry-imageless", action="store_true",

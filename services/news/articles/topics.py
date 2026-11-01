@@ -31,7 +31,8 @@ from django.utils import timezone
 
 from .gpu_client import GpuApiClient, GpuApiError, JobFailed, RequestRejected
 from .members_sync import SPEAKER_SEPARATOR
-from .models import Article, ArticleSource, ArticleStatus, Topic, TopicEvaluation, TopicLabel
+from .models import (COUNCIL_SOURCES, Article, ArticleSource, ArticleStatus, Topic, TopicEvaluation,
+                     TopicLabel)
 
 logger = logging.getLogger(__name__)
 
@@ -95,12 +96,15 @@ def labels_payload() -> list[dict[str, str]]:
 
 
 def base_articles() -> QuerySet[Article]:
-    """分類、抽樣、評估、指標共用的基礎文章：已完成、單獨發言、有摘要卡。
+    """分類、抽樣、評估、指標共用的基礎文章：議會的、已完成、單獨發言、有摘要卡。
 
     跟具體度同一批，也跟 /api/articles 的 solo=1&has_brief=1 同一個定義——證據清單才對得上。
     聯合質詢分不出每個人講了哪個議題；沒有摘要卡就沒有一句話可讀。
+    只認議會的來源（白名單）：YouTube 影片也是單一講者、也有摘要卡，但十二個政策領域對它沒有意義，
+    分類還會白花 GPU 的時間、被抽進要人工標註的集合、當成追問的候選。followups.is_base 是同一個定義。
     """
-    return (Article.objects.filter(status=ArticleStatus.READY, brief__isnull=False)
+    return (Article.objects.filter(status=ArticleStatus.READY, brief__isnull=False,
+                                   source__in=COUNCIL_SOURCES)
             .exclude(speaker__contains=SPEAKER_SEPARATOR))
 
 
@@ -269,7 +273,7 @@ class SampleReport:
 
     def __str__(self) -> str:
         lines = []
-        for source in ArticleSource:
+        for source in COUNCIL_SOURCES:
             lines.append(f"{source.label}：新抽 {self.added[source.value]} 篇，"
                          f"標註集共 {self.total[source.value]} 篇")
         return "\n".join(lines)
@@ -283,7 +287,7 @@ def sample_labels(per_source: int = TOPIC_MIN_LABELS, seed: int = 0) -> SampleRe
     每個來源用自己的亂數序列，多一個來源不會改變其他來源抽到的文章。
     """
     report = SampleReport()
-    for source in ArticleSource.values:
+    for source in (s.value for s in COUNCIL_SOURCES):
         have = TopicLabel.objects.filter(article__source=source).count()
         need = per_source - have
         if need > 0:

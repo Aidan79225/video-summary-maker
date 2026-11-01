@@ -31,7 +31,8 @@ from django.utils import timezone
 
 from . import bill_topics, followups, topics
 from .members_sync import CHAIR_ROLES, SPEAKER_SEPARATOR, term_number
-from .models import Article, ArticleSource, ArticleStatus, Membership, Person, ProfileStat, Session
+from .models import (COUNCIL_SOURCES, Article, ArticleSource, ArticleStatus, Membership, Person,
+                     ProfileStat, Session)
 
 logger = logging.getLogger(__name__)
 
@@ -66,7 +67,11 @@ def parse_session(source: str, meeting: str) -> SessionKey | None:
     """從會議名稱解析會期。解析不出來（例如「立法院朝野黨團協商」）回 None，那篇不計入。
 
     名稱用解析出來的數字重組，不照抄原文：全形數字與「第05會期」這種寫法才會併成同一個會期。
+    只有議會有會期：影片的會議名稱是空的，就算哪天有人把像「第4屆第8次定期會」的標題塞進去，
+    也不能長出一個 Session('youtube')。
     """
+    if source not in COUNCIL_SOURCES:
+        return None
     text = (meeting or "").translate(_FULLWIDTH_DIGITS)
     if source == ArticleSource.LY:
         match = _LY_SESSION_RE.search(text)
@@ -531,7 +536,7 @@ class ProfileReport:
         for source, count in sorted(self.unsessioned.items()):
             lines.append(f"{ArticleSource(source).label}：已完成但會議名稱裡沒有會期的文章 "
                          f"{count} 篇（不計入指標）")
-        for source in ArticleSource:
+        for source in COUNCIL_SOURCES:
             classifier = self.topic_classifiers.get(source.value)
             lines.append(f"議題分布 {source.label}：" + (
                 f"用分類器 {classifier}（評估通過）" if classifier
@@ -580,7 +585,8 @@ def compute_profiles(now: datetime | None = None) -> ProfileReport:
         report.sessions.append(summary)
     report.unsessioned.update({
         row["source"]: row["n"] for row in (
-            Article.objects.filter(status=ArticleStatus.READY, session__isnull=True)
+            Article.objects.filter(status=ArticleStatus.READY, session__isnull=True,
+                                   source__in=COUNCIL_SOURCES)
             .order_by().values("source").annotate(n=Count("id")))})
     logger.info("人物側寫重算完成：%d 個會期", len(report.sessions))
     return report
@@ -746,7 +752,7 @@ def topic_stats_stale() -> bool:
     live = topics.passing_classifiers()
     topic_rows = ProfileStat.objects.exclude(classifier="").filter(
         Q(indicator__startswith=TOPIC_STAT_PREFIX) | Q(indicator__in=[i.key for i in TOPIC_INDICATORS]))
-    for source in ArticleSource.values:
+    for source in (s.value for s in COUNCIL_SOURCES):
         rows = topic_rows.filter(session__source=source)
         classifier = live.get(source)
         if classifier is None:

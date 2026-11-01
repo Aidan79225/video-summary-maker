@@ -6,8 +6,8 @@ import Filters from '../components/Filters.astro';
 import Notice from '../components/Notice.astro';
 import Pagination from '../components/Pagination.astro';
 import { getArticles, getParties, getSpeakers, mediaUrl, statusFor } from '../lib/api';
-import { displayTitle, formatDateWithWeekday, humanDuration } from '../lib/format';
-import { isSource, SOURCES, SOURCE_LABEL } from '../lib/sources';
+import { formatDateWithWeekday, humanDuration } from '../lib/format';
+import { articleTitle, COUNCIL_SOURCES, isCouncilSource, SOURCE_LABEL } from '../lib/sources';
 
 const PAGE_SIZE = 12;
 
@@ -15,8 +15,9 @@ const url = Astro.url;
 const date = url.searchParams.get('date')?.trim() ?? '';
 const speaker = url.searchParams.get('speaker')?.trim() ?? '';
 const rawSource = url.searchParams.get('source')?.trim() ?? '';
-// 只認得 lib/sources.ts 列出的來源代碼；亂打的當成沒篩，不要把 422 傳染給整頁
-const source = isSource(rawSource) ? rawSource : '';
+// 只認得 lib/sources.ts 列出的議會代碼；亂打的當成沒篩，不要把 422 傳染給整頁。
+// ?source=youtube 也算亂打：影片只在 /videos，首頁不列
+const source = isCouncilSource(rawSource) ? rawSource : '';
 const q = url.searchParams.get('q')?.trim() ?? '';
 const party = url.searchParams.get('party')?.trim() ?? '';
 const page = Math.max(1, Number(url.searchParams.get('page')) || 1);
@@ -55,8 +56,8 @@ const params = {
 };
 
 const latestDate = items[0]?.date ?? '';
-// 報頭小字與頁首同一份來源清單，從來源表組出來
-const bodies = SOURCES.map((s) => SOURCE_LABEL[s]).join(' · ');
+// 報頭小字與頁首同一份來源清單，從來源表組出來（只列議會，影片有自己的頁面）
+const bodies = COUNCIL_SOURCES.map((s) => SOURCE_LABEL[s]).join(' · ');
 ---
 
 <Base title={hasFilter ? '篩選結果' : ''}>
@@ -133,7 +134,7 @@ const bodies = SOURCES.map((s) => SOURCE_LABEL[s]).join(' · ');
         >
           <Figure
             src={leadCover}
-            alt={`${lead.speaker}｜${displayTitle(lead.title)}`}
+            alt={`${lead.speaker}｜${articleTitle(lead.source, lead.title)}`}
             ratio="16 / 10"
             eager={true}
             label="無封面截圖"
@@ -153,13 +154,13 @@ const bodies = SOURCES.map((s) => SOURCE_LABEL[s]).join(' · ');
               <span>{lead.speaker}</span>
             </p>
             <h2 class="headline text-2xl font-semibold transition-colors group-hover:text-accent-ink sm:text-[1.75rem]">
-              {displayTitle(lead.title)}
+              {articleTitle(lead.source, lead.title)}
             </h2>
             <p class="line-clamp-5 text-sm leading-relaxed text-muted sm:text-[0.95rem]">
               {lead.teaser}
             </p>
             <p class="tabular mt-1 text-[0.7rem] text-muted/70">
-              {lead.slide_count} 段重點 · {humanDuration(lead.duration_seconds)}
+              {lead.slide_count} 段重點{lead.duration_seconds > 0 && ` · ${humanDuration(lead.duration_seconds)}`}
             </p>
           </div>
         </a>

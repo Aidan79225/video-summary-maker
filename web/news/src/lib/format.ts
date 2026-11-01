@@ -39,7 +39,12 @@ export function formatDateWithWeekday(iso: string | null | undefined): string {
   return `${m[1]}.${m[2]}.${m[3]}${wd}`;
 }
 
-/** 逐字稿拆行：每行開頭是 mm:ss */
+/**
+ * 逐字稿拆行：每行開頭是 mm:ss。
+ *
+ * 分鐘是累計的、不補到兩位以上：兩小時的影片會寫到「125:30」，所以允許三位數；
+ * 只認兩位的話，一百分鐘以後的每一行都會掉出時間欄。
+ */
 export function parseTranscript(text: string): { time: string; body: string }[] {
   if (!text) return [];
   return text
@@ -47,7 +52,7 @@ export function parseTranscript(text: string): { time: string; body: string }[] 
     .map((line) => line.trim())
     .filter(Boolean)
     .map((line) => {
-      const m = /^(\d{1,2}:\d{2}(?::\d{2})?)\s*(.*)$/.exec(line);
+      const m = /^(\d{1,3}:\d{2}(?::\d{2})?)\s*(.*)$/.exec(line);
       return m ? { time: m[1], body: m[2] } : { time: '', body: line };
     });
 }

@@ -1,7 +1,7 @@
 ---
 import type { Party, Speaker } from '../lib/types';
 import { buildQuery } from '../lib/format';
-import { SOURCES, SOURCE_LABEL, sourceLabel } from '../lib/sources';
+import { COUNCIL_SOURCES, SOURCE_LABEL, sourceLabel } from '../lib/sources';
 import { partyShort } from '../lib/parties';
 
 interface Props {
@@ -55,7 +55,7 @@ const label = 'mb-1.5 block text-[0.7rem] tracking-wider text-muted';
         <label class={label} for="f-source">來源</label>
         <select id="f-source" name="source" class={field}>
           <option value="">全部</option>
-          {SOURCES.map((s) => (
+          {COUNCIL_SOURCES.map((s) => (
             <option value={s} selected={s === source}>
               {SOURCE_LABEL[s]}
             </option>

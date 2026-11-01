@@ -1,7 +1,8 @@
 ---
 import type { ArticleCard } from '../lib/types';
 import { mediaUrl } from '../lib/api';
-import { displayTitle, formatDateWithWeekday, humanDuration } from '../lib/format';
+import { formatDateWithWeekday, humanDuration } from '../lib/format';
+import { articleTitle } from '../lib/sources';
 import Figure from './Figure.astro';
 import SourceBadge from './SourceBadge.astro';
 import PartyBadge from './PartyBadge.astro';
@@ -14,7 +15,7 @@ interface Props {
 
 const { article, index = 0, eager = false } = Astro.props;
 const cover = mediaUrl(article.cover_image_url);
-const title = displayTitle(article.title);
+const title = articleTitle(article.source, article.title);
 ---
 
 <article
@@ -59,8 +60,14 @@ const title = displayTitle(article.title);
       class="mt-auto flex items-center gap-3 border-t border-line-soft pt-3 text-[0.7rem] text-muted/80"
     >
       <span class="tabular">{article.slide_count} 段重點</span>
-      <span aria-hidden="true" class="text-line">·</span>
-      <span class="tabular">{humanDuration(article.duration_seconds)}</span>
+      {
+        article.duration_seconds > 0 && (
+          <>
+            <span aria-hidden="true" class="text-line">·</span>
+            <span class="tabular">{humanDuration(article.duration_seconds)}</span>
+          </>
+        )
+      }
       <span
         class="ml-auto inline-flex items-center gap-1 text-accent opacity-0 transition-opacity group-hover:opacity-100"
         aria-hidden="true"

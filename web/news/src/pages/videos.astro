@@ -1,0 +1,111 @@
+---
+import Base from '../layouts/Base.astro';
+import ArticleCardView from '../components/ArticleCard.astro';
+import Notice from '../components/Notice.astro';
+import Pagination from '../components/Pagination.astro';
+import { getArticles, statusFor } from '../lib/api';
+import { sourceLabel } from '../lib/sources';
+
+const PAGE_SIZE = 12;
+// 影片來源的代碼（lib/sources.ts 裡 kind 是 video 的那一列）。後端沒帶 source 時只回議會，
+// 影片一定要明確要
+const SOURCE = 'youtube';
+// 新增影片只能在 Pi 上用指令：網站是唯讀的，空的時候把指令寫出來
+const ADD_COMMAND = "sudo docker exec ly-news-api python manage.py add_video '<影片網址>'";
+
+const url = Astro.url;
+const page = Math.max(1, Number(url.searchParams.get('page')) || 1);
+
+// 沒有篩選器，所以只有這一個 API 呼叫（首頁還要發言者與政黨的清單）
+const listRes = await getArticles({ source: SOURCE, page, page_size: PAGE_SIZE });
+
+// 後端掛掉時仍然 render 可讀的頁面，但回報 503 讓監控看得出來（跟首頁一樣）
+if (!listRes.ok) {
+  Astro.response.status = statusFor(listRes.error.kind);
+}
+
+const list = listRes.ok ? listRes.data : null;
+const items = list?.items ?? [];
+// 分頁越界時說「還沒有加入任何影片」會誤導——那兩件事完全不同
+const beyondLastPage = !!list && list.count > 0 && items.length === 0;
+const retryHref = `${url.pathname}${url.search}`;
+---
+
+<Base
+  title="影片"
+  description="本站手動挑選的 YouTube 影片，用同一套流程整理成逐段截圖、重點條列與可展開的逐字稿，並連回原影片。"
+  noindex={true}
+>
+  <!-- 報頭 -->
+  <section class="border-b border-line-soft bg-bg-soft/60">
+    <div class="mx-auto max-w-6xl px-4 py-10 sm:px-6 sm:py-14">
+      <p class="text-[0.7rem] tracking-[0.3em] text-accent">{sourceLabel(SOURCE)}</p>
+      <h1 class="headline mt-3 text-3xl font-semibold sm:text-[2.6rem] sm:leading-[1.2]">
+        本站挑的影片<br class="hidden sm:block" />
+        整理成看得懂的重點
+      </h1>
+      <p class="mt-4 max-w-xl text-sm leading-relaxed text-muted sm:text-base">
+        這裡收的不是議會的質詢，是本站手動挑選的 YouTube 影片。用同一套流程逐段附上畫面截圖、重點條列與完整敘述，並保留可展開的逐字稿；全部由 AI 自動整理，可能有誤，請以原影片為準。
+      </p>
+      {
+        list && (
+          <p class="mt-5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted/80">
+            <span class="tabular">共 {list.count} 支影片</span>
+          </p>
+        )
+      }
+    </div>
+  </section>
+
+  <div class="mx-auto max-w-6xl px-4 py-8 sm:px-6 sm:py-10">
+    {
+      !listRes.ok && (
+        <div class="mt-2">
+          <Notice error={listRes.error} retryHref={retryHref} />
+        </div>
+      )
+    }
+
+    {
+      listRes.ok && items.length === 0 && (
+        <div class="mt-2">
+          <Notice
+            title={beyondLastPage ? '沒有這一頁' : '還沒有加入任何影片'}
+            body={
+              beyondLastPage
+                ? `影片只有 ${list?.pages ?? 1} 頁。`
+                : '影片只能在 Raspberry Pi 上用指令加入，網站本身是唯讀的。在容器裡貼上 YouTube 影片的網址：'
+            }
+            retryHref={beyondLastPage ? '/videos' : retryHref}
+          >
+            {
+              !beyondLastPage && (
+                <p class="mx-auto mt-4 max-w-full rounded-md bg-bg-soft px-3 py-2 text-left font-mono text-[0.72rem] leading-relaxed wrap-break-word text-ink-2 sm:w-fit">
+                  {ADD_COMMAND}
+                </p>
+              )
+            }
+          </Notice>
+        </div>
+      )
+    }
+
+    {
+      items.length > 0 && (
+        <>
+          <h2 class="mb-4 flex items-center gap-3 text-[0.72rem] tracking-[0.2em] text-muted uppercase">
+            最近加入的影片
+            <span class="h-px flex-1 bg-line-soft" />
+          </h2>
+          <div class="grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
+            {items.map((a, i) => (
+              <ArticleCardView article={a} index={i} eager={i < 3} />
+            ))}
+          </div>
+        </>
+      )
+    }
+
+    {list && <Pagination page={list.page} pages={list.pages} base="/videos" />}
+  </div>
+</Base>

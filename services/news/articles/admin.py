@@ -7,9 +7,9 @@ from django.utils import timezone
 from django.utils.html import format_html
 
 from . import bill_topics, followups, topics
-from .models import (Article, ArticleStatus, BillTopic, BillTopicEvaluation, BillTopicLabel, FollowUp,
-                     FollowUpEvaluation, FollowUpLabel, LyBill, LyMeeting, LyVote, Membership, Person,
-                     ProfileStat, Session, Slide, Topic, TopicEvaluation, TopicLabel)
+from .models import (Article, ArticleSource, ArticleStatus, BillTopic, BillTopicEvaluation, BillTopicLabel,
+                     FollowUp, FollowUpEvaluation, FollowUpLabel, LyBill, LyMeeting, LyVote, Membership,
+                     Person, ProfileStat, Session, Slide, Topic, TopicEvaluation, TopicLabel)
 from .profiles import compute_profiles
 
 
@@ -46,16 +46,26 @@ class ArticleAdmin(admin.ModelAdmin):
 
         已完成的刻意不收：打回 pending 會讓它從網站上消失直到重做完成；
         要重產已完成的文章用 `ingest_ivod --rerun-ready`，那條路不會下架。
+        YouTube 影片不進夜間排程，也不歸 --rerun-ready 管：重做它們用 `add_video`。
         """
         ready = queryset.filter(status=ArticleStatus.READY).count()
+        videos = (queryset.exclude(status=ArticleStatus.READY)
+                  .filter(source=ArticleSource.YOUTUBE).count())
         updated = (queryset.exclude(status=ArticleStatus.READY)
                    .update(status=ArticleStatus.PENDING, error="", attempts=0, gpu_job_id=""))
         self.message_user(request, f"已打回待處理 {updated} 篇。", messages.SUCCESS)
+        if videos:
+            self.message_user(
+                request,
+                f"其中 {videos} 篇是 YouTube 影片：夜間排程不處理影片，要重新執行 add_video 才會處理。"
+                "斷線之後請直接再跑 add_video（會接回 GPU 上做完的工作），不要用這裡的「打回待處理」"
+                "——它把 GPU 工作編號清掉了，幾十分鐘的成品就丟了。",
+                messages.WARNING)
         if ready:
             self.message_user(
                 request,
-                f"略過 {ready} 篇已完成的文章：要重產請用 ingest_ivod --rerun-ready，"
-                "打回待處理會讓它們先從網站上消失。",
+                f"略過 {ready} 篇已完成的文章：要重產請用 ingest_ivod --rerun-ready"
+                "（YouTube 影片用 add_video --rerun），打回待處理會讓它們先從網站上消失。",
                 messages.WARNING)
 
 

@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from datetime import date as date_type
 from datetime import datetime
-from typing import Literal
+from typing import Any, Literal
 from urllib.parse import quote
 
 from django.db.models import Max, Q
@@ -13,14 +13,14 @@ from django.utils import timezone
 from ninja import NinjaAPI, Query, Schema
 
 from . import bill_topics, chamber, followups, profiles, topics
-from .models import (Article, ArticleStatus, BillTopicEvaluation, FollowUpEvaluation, Membership, Person,
-                     ProfileStat, Session, TopicEvaluation)
+from .models import (COUNCIL_SOURCES, Article, ArticleSource, ArticleStatus, BillTopicEvaluation,
+                     FollowUpEvaluation, Membership, Person, ProfileStat, Session, TopicEvaluation)
 
 api = NinjaAPI(title="議會質詢摘要 API", version="1.0", urls_namespace="news")
 
 # 來源代碼（Article.source）。宣告成 Literal，ninja 會把非法值擋成 422，
-# 而不是讓一個打錯的 ?source= 變成空清單或 500。
-SourceParam = Literal["ly", "tccc", "ntpc"]
+# 而不是讓一個打錯的 ?source= 變成空清單或 500。清單從列舉來，不在這裡再抄一份
+SourceParam = Literal[tuple(ArticleSource.values)]
 # 政策領域代碼，或 any（有通過版本的分類、哪個領域都可以）。同樣宣告成 Literal，打錯的回 422。
 # 清單從 topics.TOPICS 來，不在這裡再抄一份
 TopicParam = Literal[(*topics.TOPIC_KEYS, topics.ANY_TOPIC)]
@@ -95,6 +95,8 @@ class ArticleDetailOut(ArticleCardOut):
     # 沒有摘要卡就是 null：前端退回只用導言的版面
     brief: BriefOut | None
     slides: list[SlideOut]
+    # 影片裡的講者（YouTube 影片第二部分才會有內容）；議會的文章與還沒區分講者的影片是空清單
+    speakers: list[Any] = []
 
 
 class ArticleListOut(Schema):
@@ -354,18 +356,23 @@ def list_articles(request, date: date_type | None = None, speaker: str | None = 
     帶的就是這幾個條件，查出來的篇數必須等於那個數字的 n（profiles 用同一套定義）。
     solo、has_brief 是 false 時不篩——「只要聯合質詢」沒有人要。topic 只認各來源通過評估的
     那個分類器分出來的領域（見 _topic_q）。
+
+    省略 source 時只回議會的來源；YouTube 影片要明確給 source=youtube 才看得到（見 _scope），
+    而且影片依加進來的時間排（新加的在最前面），不依它自己的上傳日期——否則兩年前上傳的影片
+    加進來之後會埋在最後幾頁。
     """
     # page 由 Query 擋住（超過 int64 的 OFFSET 會讓 SQLite 直接 500），
     # page_size 則夾住就好——一個看起來合理的 ?page_size=100 不值得回錯誤。
     page_size = max(1, min(page_size, _MAX_PAGE_SIZE))
 
-    queryset = Article.objects.filter(status=ArticleStatus.READY).prefetch_related("slides")
+    queryset = _scope(Article.objects.filter(status=ArticleStatus.READY), source)
+    queryset = queryset.prefetch_related("slides")
+    if source == ArticleSource.YOUTUBE:
+        queryset = queryset.order_by("-published_at", "-id")
     if date:
         queryset = queryset.filter(date=date)
     if speaker:
         queryset = queryset.filter(_speaker_q(speaker))
-    if source:
-        queryset = queryset.filter(source=source)
     if party:
         queryset = queryset.filter(_joined_q("party", party))
     if session is not None:
@@ -405,6 +412,7 @@ def article_detail(request, slug: str) -> dict:
         "source_note": article.source_note,
         "transcript_text": article.transcript_text,
         "brief": article.brief,
+        "speakers": list(article.speakers or []),
         "slides": [{
             "index": s.index,
             "title": s.title,
@@ -415,6 +423,18 @@ def article_detail(request, slug: str) -> dict:
         } for s in article.slides.all()],
     })
     return data
+
+
+def _scope(queryset, source: str | None):
+    """來源的範圍：給了 source 就是那一個；省略就**只有議會**的來源。
+
+    首頁、發言者下拉選單、議員頁一行都不用改，YouTube 影片也不會混進議會的清單、人數與政黨；
+    影片要用 source=youtube 明確要。用白名單（COUNCIL_SOURCES），不是「排除 youtube」，
+    下次再加一個非議會的來源時不會又漏掉。
+    """
+    if source:
+        return queryset.filter(source=source)
+    return queryset.filter(source__in=COUNCIL_SOURCES)
 
 
 # 聯合質詢的文章講者是「甲、乙、丙」（見 tccc_source.SPEAKER_SEPARATOR）。
@@ -452,9 +472,7 @@ def _topic_q(code: str) -> Q:
 
 @api.get("/speakers", response=SpeakerListOut)
 def speakers(request, source: SourceParam | None = None) -> dict:
-    queryset = Article.objects.filter(status=ArticleStatus.READY)
-    if source:
-        queryset = queryset.filter(source=source)
+    queryset = _scope(Article.objects.filter(status=ArticleStatus.READY), source)
     # 在 Python 裡彙總：聯合質詢的「甲、乙、丙」要拆成三個人各算一篇
     stats: dict[tuple[str, str], dict] = {}
     for speaker, article_source, day in queryset.values_list("speaker", "source", "date"):
@@ -688,10 +706,8 @@ def _classifier_out(evaluation: TopicEvaluation | FollowUpEvaluation | BillTopic
 
 @api.get("/parties", response=PartyListOut)
 def parties(request, source: SourceParam | None = None) -> dict:
-    """READY 文章的政黨彙總（聯合質詢的多黨各算一篇），給篩選器用。"""
-    queryset = Article.objects.filter(status=ArticleStatus.READY).exclude(party="")
-    if source:
-        queryset = queryset.filter(source=source)
+    """READY 文章的政黨彙總（聯合質詢的多黨各算一篇），給篩選器用。省略 source 時只算議會（見 _scope）。"""
+    queryset = _scope(Article.objects.filter(status=ArticleStatus.READY).exclude(party=""), source)
     stats: dict[str, dict] = {}
     for party, day in queryset.values_list("party", "date"):
         for name in filter(None, (n.strip() for n in party.split(_SEP))):

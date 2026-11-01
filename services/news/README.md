@@ -115,6 +115,52 @@ uv run python manage.py run_scheduler --backfill-days 0 # 不要回補
 30 3 * * 0 cd /home/pi/yt-downloader/services/news && /home/pi/.local/bin/uv run python manage.py sync_members >> /var/log/ly-news-ingest.log 2>&1; /home/pi/.local/bin/uv run python manage.py sync_ly_records >> /var/log/ly-news-ingest.log 2>&1; /home/pi/.local/bin/uv run python manage.py compute_profiles >> /var/log/ly-news-ingest.log 2>&1
 ```
 
+## YouTube 手動加入
+
+使用者手動貼網址加進來的 YouTube 影片，來源代碼 `youtube`，跟立法院、臺中、新北並列，但**不當成議會**：不進每晚排程，也不算人物側寫、議題分類、追問、會期、人物名單。網站上的專屬頁面是 `/videos`。Pi 上怎麼跑（`sudo docker exec …`、背景執行、旗標表）見根目錄 README 的「YouTube 手動加入」；設計與每個決定的理由見 `docs/superpowers/specs/2026-10-31-youtube-videos-design.md`。
+
+```bash
+uv run python manage.py add_video 'https://www.youtube.com/watch?v=jNQXAC9IVRw' --dry-run   # 只預檢，什麼都不寫
+uv run python manage.py add_video 'https://www.youtube.com/watch?v=jNQXAC9IVRw' --speakers 1
+uv run python manage.py add_video 'https://www.youtube.com/watch?v=jNQXAC9IVRw' --speakers 1 --rerun   # 重做已發佈的（影片留在站上）
+uv run python manage.py remove_video yt-jNQXAC9IVRw --dry-run   # 下架：刪文章與截圖檔案
+```
+
+一支影片經過的幾步（程式在 `articles/youtube_source.py`、`articles/ingest.py` 與兩個指令；Pi 的相依刻意最少，**不引進 yt-dlp**，抓取全用標準函式庫、用注入的函式測試）：
+
+1. 嚴格解析網址：精確的主機名單、id 剛好 11 碼，換成正規網址 `https://www.youtube.com/watch?v=<id>`（同一支影片怎麼貼都是同一篇，GPU 的檢查點以網址為鍵，正規化之後重試才接得回去）。清單、頻道、搜尋、`/clip/` 拒絕並說明。
+2. 讀影片資料：oEmbed（標題、頻道）→ 影片頁的 `ytInitialPlayerResponse`（日期、長度、播放狀態、是不是直播／不公開／音樂／Shorts）→ microdata → 正規表示式。**影片不存在時影片頁也回 200**，所以一定要看 `playabilityStatus`。一支影片最多兩個請求。
+3. 預檢：不存在、直播中、尚未首播、Shorts 拒絕；不公開、音樂、超過長度上限、剛結束的直播拒絕並寫出要加的旗標。
+4. `ingest.register_video` 登記成 PENDING；`ingest.process_articles` 點名處理（claim、重試次數、接回 GPU 工作都跟其他文章同一套），頁數範圍依長度算。
+
+| 欄位 | 值 |
+|---|---|
+| `source` | `youtube` |
+| `ivod_id` | `yt-<11 碼影片 id>`（14 字） |
+| `slug` | `<日期>-yt-<id>` |
+| `ivod_url` | 一律是正規網址 `https://www.youtube.com/watch?v=<id>` |
+| `speaker` | 頻道名稱；「、」換成「・」（「、」是聯合質詢的分隔字元，API 會把一個頻道拆成兩個講者） |
+| `meeting` | 一律空：非空的會議名稱可能被 `parse_session` 解析成會期 |
+| `date` | 直播開始（或上傳）當下的**台北時間**日期；影片頁的日期帶太平洋時區，台北白天上傳的會差一天 |
+| `party`、`membership`、`session` | 空：不對任期、不掛會期（頻道叫「王立」不會借到立法院那位王立的政黨） |
+| `speakers` | 空清單：影片裡有哪些人在講話（區分講者的功能還在做，現在沒有程式會寫它） |
+
+**`--speakers 1` 是區分講者完成之前的安全閥。** 現在的管線會把一支影片的全部話寫成同一個「講者」說的，指令又沒辦法事先知道有幾個人在講話，所以沒有 `--speakers 1` 就拒絕登記與送出；`--dry-run` 與「已經發佈」這種什麼都不會送的結果不受影響。
+
+**議會的範圍用白名單擋**（`models.COUNCIL_SOURCES`），不用「排除 youtube」，下次再加一個非議會的來源時不會又漏掉：`topics.base_articles()`（分類、抽樣、評估、追問都從它來）與 `followups.is_base()`、`topics` 與 `profiles` 裡逐來源的迴圈、`profiles.parse_session`、人物側寫的「沒有會期」查詢、`ingest.process_pending`／`imageless`／`rerun_ready`、API 沒給 `source` 時的預設範圍。`Membership`、`Session`、`TopicEvaluation` 的 `choices` 也只列議會，管理頁不會出現「YouTube」的任期。影片只由 `add_video` 處理：一支兩小時的影片會占住夜間批次，GPU 離線時還會白白燒掉它的重試次數。
+
+### 部署這一版之後
+
+**整個 stack 一起重新部署**（`migrate` 在容器啟動時跑），等 api healthy、web 重建完成**之後**才跑 `add_video`；兩個映像之間沒有先後。GPU 主機這一版不需要更新，但第一次真的加影片之前，要在 GPU 主機做一次煙霧測試，確認容器裡的 yt-dlp 抓得到 YouTube（先短的 `jNQXAC9IVRw`，再長的 `f4r2yWk4LV0`）：失敗時 `add_video` 會把錯誤原樣顯示。
+
+```bash
+uv run python manage.py migrate    # 0014：Article.source 多一個 youtube 的選項（SQL 上是 no-op），加 Article.speakers（JSON，預設空）；
+                                   # SQLite 加欄位會把 article 表重建一次，既有的文章原樣帶過去（在真實資料庫的副本上驗證過）
+uv run python manage.py add_video 'https://www.youtube.com/watch?v=jNQXAC9IVRw' --dry-run
+```
+
+等待 GPU 的時間用 `GPU_JOB_TIMEOUT_SECONDS`，指令沒有 `--timeout`：夜間批次用同一個數字判斷「卡住」，指令等得比它久，夜間會把還在跑的工作取消掉。長影片要在 `api` 與 `scheduler` 兩個容器都調大這個環境變數。
+
 ## 人物側寫（投入量、具體度）
 
 設計見 issue #24 與 `docs/superpowers/specs/2026-10-01-profile-indicators-step1-design.md`。原則：不加總、不排名、只跟同一議會同一會期的人比、樣本不足不給百分位、每個數字都能點回那幾篇文章。
@@ -514,10 +560,10 @@ uv run python manage.py eval_bill_topics
 
 | 端點 | 說明 |
 |---|---|
-| `GET /api/health` | 文章數與最新日期 |
-| `GET /api/articles?date=&speaker=&q=&source=&party=&session=&solo=&has_brief=&topic=&page=&page_size=` | 已完成的文章清單。`session`（會期 id）、`solo=1`（只要單獨發言）、`has_brief=1`（只要有摘要卡）、`topic`（領域代碼，或 `any`＝哪個領域都可以）是側寫的證據篩選：證據網址查出來的篇數等於指標的 n。`topic` 只認各來源通過評估的那個分類器分出來的領域；打錯的代碼回 422 |
-| `GET /api/articles/{slug}` | 單篇，含摘要卡（`brief`：一句話、關鍵數字、要求與回應；GPU 端產不出來時為 `null`）、每段的條列與完整敘述、完整逐字稿 |
-| `GET /api/speakers` | 委員與篇數；`person_id` 是同來源、同名任期所屬的人（查無任期為 `null`） |
+| `GET /api/health` | 文章數與最新日期（含 YouTube 影片） |
+| `GET /api/articles?date=&speaker=&q=&source=&party=&session=&solo=&has_brief=&topic=&page=&page_size=` | 已完成的文章清單。`session`（會期 id）、`solo=1`（只要單獨發言）、`has_brief=1`（只要有摘要卡）、`topic`（領域代碼，或 `any`＝哪個領域都可以）是側寫的證據篩選：證據網址查出來的篇數等於指標的 n。`topic` 只認各來源通過評估的那個分類器分出來的領域；打錯的代碼回 422。**省略 `source` 時只回議會的來源**，YouTube 影片要 `source=youtube`（`ly`、`tccc`、`ntpc`、`youtube`，其他回 422）；影片依加入的時間排（新的在前），不依它的上傳日期 |
+| `GET /api/articles/{slug}` | 單篇，含摘要卡（`brief`：一句話、關鍵數字、要求與回應；GPU 端產不出來時為 `null`）、每段的條列與完整敘述、完整逐字稿；`speakers` 是影片裡的講者（現在永遠是空清單） |
+| `GET /api/speakers?source=` | 委員與篇數（省略 `source` 只算議會；`source=youtube` 列頻道）；`person_id` 是同來源、同名任期所屬的人（查無任期為 `null`，頻道永遠是 `null`） |
 | `GET /api/people/{person_id}/profile?source=&session=` | 人物側寫：一個會期的投入量與具體度，每項附 n、百分位、同儕人數與證據網址（網站的相對路徑）。那個來源有通過的議題評估時多一個 `topics` 區塊：`distribution`（12 個領域都列，依篇數由多到少、同數依領域表的順序；`share` 是 0～100）、`classifier`（`name`、`accuracy` 是 0～1、`labeled`、`evaluated_at`）。最後永遠有一個 `followup` 區塊（見「人物側寫：追問率」）。省略 `source` 用他最近一個有統計的會期的來源；省略 `session` 用他有發言的最近一個會期。沒有統計回 404。立法院同步過院內紀錄的會期多一個 `chamber` 區塊（見上面「院內紀錄」；議案分類與議題分類都通過時多一張 `proposal_alignment`，見「提案與質詢一致率」）；只算過院內紀錄的會期不給投入量與具體度 |
 | `GET /api/people/{person_id}/records?session=&kind=` | 院內紀錄的證據清單（院會、委員會會議、主提案、連署、三讀、記名表決、黨團有多數的表決、跨黨投票），每筆附議事網連結；筆數等於對應指標的 n 或值。主提案清單在議案分類通過時每件標出領域（`topic`）並附 `bill_classifier` |
 
@@ -577,6 +623,7 @@ WantedBy=multi-user.target
 articles/
 ├─ models.py        實體：Article / Slide / Person / Membership / Session / ProfileStat / Topic / TopicLabel / TopicEvaluation / LyMeeting / LyBill / LyVote / BillTopic / BillTopicLabel / BillTopicEvaluation / FollowUp / FollowUpLabel / FollowUpEvaluation
 ├─ ivod_source.py   adapter：立法院開放資料
+├─ youtube_source.py adapter：YouTube 的網址解析、oEmbed 與影片頁、預檢、頁數範圍（標準函式庫）
 ├─ gpu_client.py    adapter：GPU 主機上的摘要 API
 ├─ ingest.py        use case：發現 → 處理 → 落地（相依都用注入的）
 ├─ profiles.py      use case：會期解析、人物側寫指標的計算與快取
@@ -588,6 +635,8 @@ articles/
 ├─ api.py           presentation：django-ninja 端點
 └─ management/commands/
    ├─ ingest_ivod.py    composition root：從 settings 組出 adapter 再注入
+   ├─ add_video.py      手動加入 YouTube 影片
+   ├─ remove_video.py   下架 YouTube 影片（文章與截圖檔案）
    ├─ compute_profiles.py
    ├─ sync_ly_records.py
    ├─ classify_topics.py
