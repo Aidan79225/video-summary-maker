@@ -1,14 +1,19 @@
 ---
 import { isFixtureMode } from '../lib/api';
-import { SOURCES, SOURCE_LABEL } from '../lib/sources';
+import { COUNCIL_SOURCES, SOURCE_LABEL } from '../lib/sources';
 
 interface Props {
   back?: boolean;
+  /** 返回鍵回哪裡，預設回首頁 */
+  backHref?: string;
+  backLabel?: string;
 }
-const { back = false } = Astro.props;
+const { back = false, backHref = '/', backLabel = '回到首頁' } = Astro.props;
 const fixture = isFixtureMode();
-// 從來源表組出來：加來源時這行不必再手改，也不會漏掉
-const bodies = SOURCES.map((s) => SOURCE_LABEL[s]).join(' · ');
+// 從來源表組出來：加來源時這行不必再手改，也不會漏掉。只列議會：影片不是議會，有自己的連結
+const bodies = COUNCIL_SOURCES.map((s) => SOURCE_LABEL[s]).join(' · ');
+// 「影片」是新加的連結，才有標示現在在不在這一區
+const onVideos = Astro.url.pathname === '/videos' || Astro.url.pathname.startsWith('/videos/');
 ---
 
 {
@@ -28,9 +33,9 @@ const bodies = SOURCES.map((s) => SOURCE_LABEL[s]).join(' · ');
     {
       back && (
         <a
-          href="/"
+          href={backHref}
           class="lift -ml-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-line text-muted hover:border-accent hover:text-accent"
-          aria-label="回到首頁"
+          aria-label={backLabel}
         >
           <svg viewBox="0 0 24 24" class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
             <path d="M15 18l-6-6 6-6" stroke-linecap="round" stroke-linejoin="round" />
@@ -56,6 +61,16 @@ const bodies = SOURCES.map((s) => SOURCE_LABEL[s]).join(' · ');
         class="rounded-full px-3 py-1.5 text-muted transition-colors hover:bg-surface hover:text-ink"
       >
         最新
+      </a>
+      <a
+        href="/videos"
+        aria-current={onVideos ? 'page' : undefined}
+        class:list={[
+          'rounded-full px-3 py-1.5 transition-colors hover:bg-surface hover:text-ink',
+          onVideos ? 'bg-surface text-ink' : 'text-muted',
+        ]}
+      >
+        影片
       </a>
       <a
         href="/#filters"

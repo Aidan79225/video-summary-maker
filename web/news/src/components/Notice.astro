@@ -51,6 +51,8 @@ const isError = tone === 'error';
 
   <h2 class="headline mt-4 text-lg font-semibold sm:text-xl">{heading}</h2>
   {message && <p class="mx-auto mt-2 max-w-prose text-sm leading-relaxed text-muted">{message}</p>}
+  {/* 說明底下的額外內容，例如影片頁空的時候要貼的指令；沒有就什麼都不輸出 */}
+  <slot />
 
   <div class="mt-6 flex flex-wrap items-center justify-center gap-2 text-sm">
     {

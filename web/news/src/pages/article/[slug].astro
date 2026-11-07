@@ -5,8 +5,8 @@ import Notice from '../../components/Notice.astro';
 import SlideBlock from '../../components/SlideBlock.astro';
 import Transcript from '../../components/Transcript.astro';
 import { getArticle, safeExternalUrl, statusFor } from '../../lib/api';
-import { displayTitle, formatDateWithWeekday, humanDuration, mmss } from '../../lib/format';
-import { sourceSiteName } from '../../lib/sources';
+import { formatDateWithWeekday, humanDuration, mmss } from '../../lib/format';
+import { articleTitle, isVideoSource, sourceSiteName } from '../../lib/sources';
 import SourceBadge from '../../components/SourceBadge.astro';
 import PartyBadge from '../../components/PartyBadge.astro';
 
@@ -19,13 +19,31 @@ if (!res || !res.ok) {
 }
 
 const article = res && res.ok ? res.data : null;
-const title = article ? displayTitle(article.title) : '找不到報導';
+// 影片（YouTube）不是議會的質詢：標題、長度、返回鍵、備註與頁尾的連結都要另外處理
+const video = article ? isVideoSource(article.source) : false;
+const title = article ? articleTitle(article.source, article.title) : '找不到報導';
 const slides = article?.slides ?? [];
 const ivodUrl = safeExternalUrl(article?.ivod_url);
 const retryHref = Astro.url.pathname;
+// 備註：影片固定先寫「這是 AI 整理的」並連回原影片，來源自己的說明（逐字稿怎麼來的）接在後面
+const notes: { text: string; link?: { href: string; label: string } }[] = [];
+if (video) {
+  notes.push({
+    text: '由 AI 依影片自動整理，可能有誤，以原影片為準。',
+    link: ivodUrl ? { href: ivodUrl, label: `到 ${sourceSiteName(article?.source)} 看原影片` } : undefined,
+  });
+}
+if (article?.source_note) notes.push({ text: article.source_note });
 ---
 
-<Base title={title} description={article?.teaser} back={true}>
+<Base
+  title={title}
+  description={article?.teaser}
+  back={true}
+  backHref={video ? '/videos' : undefined}
+  backLabel={video ? '回到影片' : undefined}
+  noindex={video}
+>
   {
     (!res || !res.ok) && (
       <div class="mx-auto max-w-6xl px-4 py-16 sm:px-6">
@@ -45,7 +63,7 @@ const retryHref = Astro.url.pathname;
           <div class="flex flex-wrap items-center gap-x-2.5 gap-y-1.5 text-sm">
             <a
               href={`/speaker/${encodeURIComponent(article.speaker)}?source=${article.source}`}
-              class="lift rounded-full bg-accent-soft px-3 py-1 text-[0.82rem] font-medium text-accent-ink"
+              class="lift rounded-full bg-accent-soft px-3 py-1 text-[0.82rem] font-medium wrap-anywhere text-accent-ink"
             >
               {article.speaker}
             </a>
@@ -60,7 +78,7 @@ const retryHref = Astro.url.pathname;
 
           {/* 有摘要卡就用卡片，沒有才退回第一段的導言：兩個都放會講同一件事兩遍 */}
           {article.brief ? (
-            <BriefCard brief={article.brief} />
+            <BriefCard brief={article.brief} source={article.source} />
           ) : (
             article.teaser && (
               <p class="prose-cn mt-5 border-l-2 border-accent/40 pl-4 text-[1.05rem] sm:text-[1.12rem]">
@@ -76,16 +94,20 @@ const retryHref = Astro.url.pathname;
                 <dd><PartyBadge party={article.party} full={true} /></dd>
               </div>
             )}
-            <div class="flex items-center gap-1.5">
-              <dt class="text-muted/60">會議</dt>
-              <dd class="text-ink-2">{article.meeting}</dd>
-            </div>
-            <div class="flex items-center gap-1.5">
-              <dt class="text-muted/60">影片長度</dt>
-              <dd class="tabular text-ink-2">
-                {humanDuration(article.duration_seconds)}（{mmss(article.duration_seconds)}）
-              </dd>
-            </div>
+            {article.meeting && (
+              <div class="flex items-center gap-1.5">
+                <dt class="text-muted/60">會議</dt>
+                <dd class="text-ink-2">{article.meeting}</dd>
+              </div>
+            )}
+            {article.duration_seconds > 0 && (
+              <div class="flex items-center gap-1.5">
+                <dt class="text-muted/60">影片長度</dt>
+                <dd class="tabular text-ink-2">
+                  {humanDuration(article.duration_seconds)}（{mmss(article.duration_seconds)}）
+                </dd>
+              </div>
+            )}
             <div class="flex items-center gap-1.5">
               <dt class="text-muted/60">重點段落</dt>
               <dd class="tabular text-ink-2">{slides.length} 段</dd>
@@ -103,7 +125,7 @@ const retryHref = Astro.url.pathname;
             </a>
           </dl>
 
-          {article.source_note && (
+          {notes.map((n) => (
             <p class="mt-5 flex items-start gap-2.5 rounded-lg border-l-2 border-accent/50 bg-surface px-4 py-3 text-[0.8rem] leading-relaxed text-muted">
               <svg
                 viewBox="0 0 24 24"
@@ -117,9 +139,21 @@ const retryHref = Astro.url.pathname;
                 <path d="M12 11v5" stroke-linecap="round" />
                 <circle cx="12" cy="7.8" r="0.9" fill="currentColor" stroke="none" />
               </svg>
-              <span>{article.source_note}</span>
+              <span>
+                {n.text}
+                {n.link && (
+                  <a
+                    href={n.link.href}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    class="ml-1 text-accent underline decoration-accent/40 underline-offset-4 hover:decoration-accent"
+                  >
+                    {n.link.label}
+                  </a>
+                )}
+              </span>
             </p>
-          )}
+          ))}
         </header>
 
         <!-- 逐段內容：完整敘述預設收合，這一列可以一次展開 -->
@@ -165,17 +199,28 @@ const retryHref = Astro.url.pathname;
         <!-- 後續導覽 -->
         <nav class="mt-12 flex flex-wrap gap-3 border-t border-line-soft pt-8 text-sm">
           <a
-            href={`/speaker/${encodeURIComponent(article.speaker)}`}
-            class="lift rounded-full border border-line bg-surface px-4 py-2 hover:border-accent hover:text-accent"
+            href={`/speaker/${encodeURIComponent(article.speaker)}?source=${article.source}`}
+            class="lift rounded-full border border-line bg-surface px-4 py-2 wrap-anywhere hover:border-accent hover:text-accent"
           >
-            看 {article.speaker} 的其他報導
+            看 {article.speaker} 的其他{video ? '影片' : '報導'}
           </a>
-          <a
-            href={`/?date=${encodeURIComponent(article.date)}`}
-            class="lift rounded-full border border-line px-4 py-2 text-muted hover:border-accent hover:text-accent"
-          >
-            看 {article.date} 的所有報導
-          </a>
+          {
+            video ? (
+              <a
+                href="/videos"
+                class="lift rounded-full border border-line px-4 py-2 text-muted hover:border-accent hover:text-accent"
+              >
+                看所有影片
+              </a>
+            ) : (
+              <a
+                href={`/?date=${encodeURIComponent(article.date)}`}
+                class="lift rounded-full border border-line px-4 py-2 text-muted hover:border-accent hover:text-accent"
+              >
+                看 {article.date} 的所有報導
+              </a>
+            )
+          }
         </nav>
       </article>
     )

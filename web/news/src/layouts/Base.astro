@@ -6,14 +6,22 @@ import SiteFooter from '../components/SiteFooter.astro';
 interface Props {
   title: string;
   description?: string;
-  /** 頁首要不要顯示回首頁的返回鍵 */
+  /** 頁首要不要顯示返回鍵 */
   back?: boolean;
+  /** 返回鍵回哪裡，預設回首頁；影片的頁面回 /videos */
+  backHref?: string;
+  backLabel?: string;
+  /** 不給搜尋引擎收錄：影片是別人的內容，只放在站上看 */
+  noindex?: boolean;
 }
 
 const {
   title,
   description = '立法院、臺中市議會與新北市議會質詢的每日重點整理：逐段摘要、原片時間戳、完整逐字稿。',
   back = false,
+  backHref,
+  backLabel,
+  noindex = false,
 } = Astro.props;
 
 const fullTitle = title ? `${title}｜質詢日報` : '質詢日報';
@@ -27,6 +35,7 @@ const fullTitle = title ? `${title}｜質詢日報` : '質詢日報';
     <title>{fullTitle}</title>
     <meta name="description" content={description} />
     <meta name="color-scheme" content="dark light" />
+    {noindex && <meta name="robots" content="noindex" />}
     <meta property="og:title" content={fullTitle} />
     <meta property="og:description" content={description} />
     <meta property="og:type" content="website" />
@@ -40,7 +49,7 @@ const fullTitle = title ? `${title}｜質詢日報` : '質詢日報';
       跳到主要內容
     </a>
 
-    <SiteHeader back={back} />
+    <SiteHeader back={back} backHref={backHref} backLabel={backLabel} />
 
     <main id="main" class="min-h-[60vh]">
       <slot />
