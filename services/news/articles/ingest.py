@@ -8,7 +8,7 @@ from __future__ import annotations
 import base64
 import logging
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
 from datetime import date, timedelta
@@ -16,7 +16,7 @@ from uuid import uuid4
 
 from django.core.files.base import ContentFile
 from django.core.files.storage import Storage
-from django.db import transaction
+from django.db import DatabaseError, transaction
 from django.db.models import Count, F, Q, QuerySet
 from django.utils import timezone
 
@@ -25,8 +25,10 @@ from .gpu_client import GpuApiClient, GpuApiError, JobField, JobFailed, JobStatu
 from .ivod_source import IvodClip, SourceUnavailable
 from .law_source import LawSource, LawUnavailable
 from .members_sync import link_article
-from .models import Article, ArticleSource, ArticleStatus, Slide, Topic
+from .models import COUNCIL_SOURCES, Article, ArticleSource, ArticleStatus, Slide, Topic
 from .profiles import attach_session
+from .youtube_source import (canonical_url, clean_speaker, clean_text, is_video_id, ivod_id_for, placeholder_title,
+                             slide_range, video_id_from_ivod_id)
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +43,14 @@ STALE_FACTOR = 2
 STUCK_JOB_FACTOR = 2
 
 RESUMABLE_STATUSES = frozenset({JobStatus.QUEUED, JobStatus.RUNNING, JobStatus.DONE})
+
+
+class ArticleDeleted(Exception):
+    """YouTube 影片在處理途中被下架（remove_video 刪了那一列）：GPU 的結果不能寫回去。
+
+    Model.save() 在列不見時會 INSERT 同一個 pk，下架的影片就會自己回到網站上。這不是失敗，也沒有地方
+    可以記錄（列已經不在了）：呼叫端把它算成「已下架」，結果丟掉。
+    """
 
 
 class DeckField(StrEnum):
@@ -104,11 +114,15 @@ class IngestReport:
     failed: int = 0
     skipped: int = 0
     pending: int = 0
+    # 處理途中被下架的影片（只有 YouTube 有 remove_video）：結果丟掉了，既不算完成也不算失敗
+    removed: int = 0
     errors: list[str] = field(default_factory=list)
 
     def __str__(self) -> str:
         summary = (f"發現 {self.discovered}、新增 {self.created}、"
                    f"完成 {self.processed}、失敗 {self.failed}、略過 {self.skipped}")
+        if self.removed:
+            summary += f"、已下架 {self.removed}"
         # 積壓要講出來：一天的上限是 20 篇，會期日可能有 50～100 段，剩下
         # 的若沒有人報告，就會無聲地一直排在那裡。
         return summary + (f"、仍待處理 {self.pending}" if self.pending else "")
@@ -186,18 +200,59 @@ def _upsert(clip: IvodClip, day: date) -> tuple[Article, bool]:
     return article, created
 
 
+def register_video(video_id: str, *, title: str, speaker: str, day: date,
+                   duration_seconds: int = 0) -> tuple[Article, bool]:
+    """登記一支手動加入的 YouTube 影片（add_video）。回傳 (文章, 這次是不是新建的)。
+
+    跟 _upsert 刻意分開：影片不是議會的片段。來源明確寫成 youtube；`meeting` 一律留空——非空的
+    會議名稱可能被 parse_session 解析成會期；也不掛會期、不對任期（沒有名冊，講者是頻道名稱，
+    頻道叫「王立」不該因為立法院有一位王立就掛上他的政黨）。
+
+    ivod_id 是 yt-<11 碼影片 id>，slug 是 <日期>-yt-<id>，ivod_url 一律存正規網址：同一支影片
+    用什麼寫法貼都是同一篇，GPU 的檢查點（以網址為鍵）正規化之後重試才接得回去。已經存在的
+    不動——標題、講者、日期都留著原樣，已完成的也不會被打回待處理。
+    """
+    if not is_video_id(video_id):
+        raise ValueError(f"不是 11 碼的影片 id：{video_id[:40]!r}")
+    ivod_id = ivod_id_for(video_id)
+    return Article.objects.get_or_create(
+        ivod_id=ivod_id,
+        defaults={
+            "slug": _slug(day.isoformat(), ivod_id),
+            # 標題與頻道名稱是上傳者寫的：控制字元、雙向覆寫與換行不進資料庫（見 clean_text）
+            "title": clean_text(title)[:300],
+            "speaker": clean_speaker(speaker),
+            "meeting": "",
+            "date": day,
+            "duration_seconds": max(0, duration_seconds),
+            "ivod_url": canonical_url(video_id),
+            "source": ArticleSource.YOUTUBE,
+            "status": ArticleStatus.PENDING,
+        },
+    )
+
+
 def process_pending(client: GpuApiClient, limit: int, timeout: float,
                     law_source: LawSource | None = None) -> IngestReport:
     """把待處理（與先前失敗）的文章送去 GPU 主機，一次一篇。
 
     失敗的會留在 failed 狀態並附上原因，下一次排程再試——立法院的逐字稿
     有時晚幾小時才出現，隔天重試通常就好了。
+
+    只處理議會的來源：YouTube 影片由 add_video 明確處理，不進夜間排程。一支兩小時的
+    影片會占住整個夜間批次，GPU 離線時還會白白燒掉它的重試次數；GPU 是使用者的桌機，
+    不該在沒人看的時候自己開一個長工作。
     """
-    queryset = (Article.objects
-                .filter(_claimable(timeout))
-                .filter(attempts__lt=MAX_ATTEMPTS)
-                .order_by("-date", "ivod_id")[:limit])
+    queryset = _backlog(timeout).order_by("-date", "ivod_id")[:limit]
     return _process(queryset, client, timeout, law_source=law_source)
+
+
+def _backlog(timeout: float) -> QuerySet:
+    """夜間排程要處理的積壓：議會的、可以接手的、還沒用完重試次數的。"""
+    return (Article.objects
+            .filter(source__in=COUNCIL_SOURCES)
+            .filter(_claimable(timeout))
+            .filter(attempts__lt=MAX_ATTEMPTS))
 
 
 def imageless(limit: int) -> QuerySet:
@@ -205,10 +260,10 @@ def imageless(limit: int) -> QuerySet:
 
     立法院的影片 CDN 會間歇性回 5xx——實測同一批片段前一小時還好好的，
     下一小時三個全部連不上。那種時候摘要照樣產得出來（逐字稿走的是另一個
-    端點），只有畫面會全缺。
+    端點），只有畫面會全缺。只看議會的文章：影片可能本來就沒有畫面（只有聲音的影片）。
     """
     return (Article.objects
-            .filter(status=ArticleStatus.READY)
+            .filter(status=ArticleStatus.READY, source__in=COUNCIL_SOURCES)
             .annotate(images=Count("slides", filter=~Q(slides__image="")))
             .filter(images=0)
             .order_by("-date", "ivod_id")[:limit])
@@ -232,16 +287,35 @@ def rerun_ready(client: GpuApiClient, limit: int, timeout: float) -> IngestRepor
 
     用在提示詞或模型改了、想讓舊文章也換成新寫法的時候。和補截圖一樣：
     手動指令、不降級、不搶所有權，文章在重跑期間繼續留在站上。
+    只重產議會的文章；YouTube 影片要重做用 add_video --rerun。
     """
     queryset = (Article.objects
-                .filter(status=ArticleStatus.READY)
+                .filter(status=ArticleStatus.READY, source__in=COUNCIL_SOURCES)
                 .order_by("-date", "ivod_id")[:limit])
     return _process(queryset, client, timeout, demote_on_failure=False, claim=False)
 
 
+def process_articles(articles_or_queryset: Article | Iterable[Article], client: GpuApiClient, timeout: float, *,
+                     demote_on_failure: bool = True, claim: bool = True,
+                     slides: tuple[int | None, int | None] | None = None) -> IngestReport:
+    """處理指定的幾篇（一篇、清單或 queryset）。add_video 用它：影片不進夜間排程，只有明確點名的才處理。
+
+    demote_on_failure 與 claim 的意義同 _process：重做已發佈的影片（add_video --rerun）要兩個都關，
+    影片才會在重跑期間留在站上。slides 是 (最少頁, 最多頁)，影片沒給就依它的長度算（見
+    youtube_source.slide_range）。不附法條來源：那是議會質詢的功能。
+
+    報告裡的「仍待處理」是夜間排程那份議會的積壓，跟這幾篇無關，呼叫端不要拿來說明它們。
+    """
+    if isinstance(articles_or_queryset, Article):
+        articles_or_queryset = [articles_or_queryset]
+    return _process(articles_or_queryset, client, timeout, demote_on_failure=demote_on_failure, claim=claim,
+                    slides=slides)
+
+
 def _process(queryset: QuerySet, client: GpuApiClient, timeout: float,
              demote_on_failure: bool = True, claim: bool = True,
-             law_source: LawSource | None = None) -> IngestReport:
+             law_source: LawSource | None = None,
+             slides: tuple[int | None, int | None] | None = None) -> IngestReport:
     """逐篇處理。
 
     demote_on_failure=False 時失敗只記錄原因、不動狀態：重跑已發佈文章的
@@ -259,7 +333,10 @@ def _process(queryset: QuerySet, client: GpuApiClient, timeout: float,
             report.skipped += 1
             continue
         try:
-            _process_one(article, client, timeout, law_source)
+            _process_one(article, client, timeout, law_source, slides)
+        except ArticleDeleted as e:
+            # 處理途中被下架：不是失敗，也沒有列可以記錄；結果已經丟掉
+            _record_removal(article, e, report)
         except (GpuApiError, JobFailed) as e:
             _record_failure(article, e, report, demote_on_failure)
             if isinstance(e, GpuApiError):
@@ -275,8 +352,7 @@ def _process(queryset: QuerySet, client: GpuApiClient, timeout: float,
             _record_failure(article, e, report, demote_on_failure)
         else:
             report.processed += 1
-    report.pending = (Article.objects.filter(_claimable(timeout))
-                      .filter(attempts__lt=MAX_ATTEMPTS).count())
+    report.pending = _backlog(timeout).count()
     return report
 
 
@@ -292,10 +368,50 @@ def _record_failure(article: Article, error: Exception, report: IngestReport,
         # 同一個失敗結論，永遠不重送。
         article.gpu_job_id = ""
         fields.append("gpu_job_id")
-    article.save(update_fields=fields)
+    if not _save_fields(article, fields):
+        # 列已經不在了（處理途中被 remove_video 下架）：沒有地方可以記這次失敗，記成已下架就好。
+        # 以前這裡再丟一次 DatabaseError，整批剩下的文章都不會被處理
+        _record_removal(article, error, report)
+        return
     report.failed += 1
     report.errors.append(f"{article.ivod_id}: {error}")
     logger.warning("文章 %s 處理失敗：%s", article.ivod_id, error)
+
+
+def _record_removal(article: Article, reason: object, report: IngestReport) -> None:
+    report.removed += 1
+    report.errors.append(f"{article.ivod_id}: 處理途中被下架（{reason}）")
+    logger.warning("文章 %s 在處理途中被下架，GPU 的結果已丟棄：%s", article.ivod_id, reason)
+
+
+def _vanished(article: Article) -> bool:
+    """YouTube 影片的資料列已經不在了（remove_video 刪的）。
+
+    只管影片：議會文章沒有下架指令，永遠是 False，連這個查詢都沒有——它們的行為逐位元組維持原樣。
+    """
+    return article.source == ArticleSource.YOUTUBE and not Article.objects.filter(pk=article.pk).exists()
+
+
+def _deleted(article: Article) -> ArticleDeleted:
+    return ArticleDeleted(f"{article.ivod_id} 的資料列已經不在了")
+
+
+def _save_fields(article: Article, fields: list[str]) -> bool:
+    """article.save(update_fields=fields)。回傳 False＝YouTube 影片的列已經不在（沒有存）。
+
+    先看一眼再存：列不見時 save() 的 UPDATE 沒有列可以更新（DatabaseError），在交易裡還會讓整個交易
+    報廢（needs_rollback）。看一眼和存之間被下架的機會很小，真的碰到的話再確認一次。
+    議會文章：不查、行為不變（DatabaseError 照舊往外丟）。
+    """
+    if _vanished(article):
+        return False
+    try:
+        article.save(update_fields=fields)
+    except DatabaseError:
+        if _vanished(article):
+            return False
+        raise
+    return True
 
 
 def _claimable(timeout: float):
@@ -330,9 +446,10 @@ def _claim(article: Article, timeout: float) -> bool:
 
 
 def _process_one(article: Article, client: GpuApiClient, timeout: float,
-                 law_source: LawSource | None = None) -> None:
+                 law_source: LawSource | None = None,
+                 slides: tuple[int | None, int | None] | None = None) -> None:
     """送一篇去 GPU 主機並等它跑完。呼叫前必須已經 _claim 成功。"""
-    job_id = _resume_or_submit(article, client, timeout)
+    job_id = _resume_or_submit(article, client, timeout, slides)
     result = client.wait(job_id, timeout=timeout,
                          on_progress=lambda job: logger.info(
                              "文章 %s：%s", article.ivod_id,
@@ -373,12 +490,17 @@ def attach_citations(article: Article, source: LawSource) -> int:
 def speech_hint_for(article: Article) -> str:
     """給語音辨識的專有名詞提示：議會名、會議名、講者姓名。Whisper 會優先用這些
     寫法（「楊啓邦」而不是同音的「楊啟邦」）。有逐字稿的來源 GPU 端用不到。"""
+    if article.source == ArticleSource.YOUTUBE:
+        # 影片沒有議會名與會議名：頻道名稱加標題（人名與主題用詞）。由存在資料庫的欄位組成，
+        # 每次重試都一樣——提示一變，GPU 上已存的逐字稿就失效、要重新辨識
+        return f"{article.speaker}。{article.title}"[:200]
     body = article.get_source_display()
     text = f"{body} {article.meeting}。發言者：{article.speaker}"
     return text[:200]
 
 
-def _resume_or_submit(article: Article, client: GpuApiClient, timeout: float) -> str:
+def _resume_or_submit(article: Article, client: GpuApiClient, timeout: float,
+                      slides: tuple[int | None, int | None] | None = None) -> str:
     """有上一輪留下、而且還可能有成果的工作就接回去，否則送一個新的。
 
     等待途中 Pi 的網路斷個幾十秒就會讓這一輪失敗，而 GPU 那邊其實還在跑
@@ -389,9 +511,17 @@ def _resume_or_submit(article: Article, client: GpuApiClient, timeout: float) ->
         logger.info("文章 %s 接回既有工作 %s", article.ivod_id, resumable)
         return resumable
 
-    job_id = client.submit(article.ivod_url, detailed=True, speech_hint=speech_hint_for(article))
+    if article.source == ArticleSource.YOUTUBE:
+        # GPU 預設要 8～15 頁：19 秒的影片只產得出 3 頁，會因「少於下限」失敗。依長度算
+        low, high = slides if slides is not None else slide_range(article.duration_seconds)
+        job_id = client.submit(article.ivod_url, detailed=True, min_slides=low, max_slides=high,
+                               speech_hint=speech_hint_for(article))
+    else:
+        job_id = client.submit(article.ivod_url, detailed=True, speech_hint=speech_hint_for(article))
     article.gpu_job_id = job_id
-    article.save(update_fields=["gpu_job_id", "updated_at"])
+    if not _save_fields(article, ["gpu_job_id", "updated_at"]):
+        # 送出之後、記下工作 id 之前，影片被下架了
+        raise _deleted(article)
     logger.info("文章 %s 已送出，工作 %s", article.ivod_id, job_id)
     return job_id
 
@@ -448,7 +578,14 @@ def save_result(article: Article, payload: dict) -> Article:
     留下孤兒檔比留下破圖便宜得多。
 
     新檔案寫進一個新的子資料夾，所以在交易提交之前，舊圖片仍然完好可用。
+
+    YouTube 影片：GPU 做的時候影片被下架（remove_video）的話，文章那一列已經不在，下面的 article.save()
+    會 INSERT 同一個 pk，把下架的影片連同新的截圖寫回來。所以在交易裡、任何寫入之前先確認那一列還在，
+    不在就丟 ArticleDeleted、什麼都不寫（SQLite 用 IMMEDIATE 交易，交易一開始就拿了寫入鎖，確認之後
+    別的行程刪不了這一列）。議會文章維持原樣。
     """
+    if _vanished(article):
+        raise _deleted(article)
     # 用欄位自己的 storage 而不是全域的 default_storage：override_settings
     # 或換過 storage 的部署，刪除才會落在正確的地方。
     old_files = [(s.image.storage, s.image.name) for s in article.slides.all() if s.image]
@@ -460,10 +597,12 @@ def save_result(article: Article, payload: dict) -> Article:
     forget_article(article)
     folder = f"{article.ivod_id}/{uuid4().hex[:8]}"
 
-    # 新北的講者是 Pi 依名冊過濾過的（拿掉議長、副議長與別黨團的召集人）；GPU 那邊沒有
-    # 名冊，標題用的是網站的原始名單。蓋過去的話，標題又會把主席列成講者。
-    if article.source != ArticleSource.NTPC or not article.title:
-        article.title = payload.get(DeckField.TITLE) or article.title
+    if not _keeps_registered_title(article):
+        title = payload.get(DeckField.TITLE) or article.title
+        if article.source == ArticleSource.YOUTUBE:
+            # GPU 從 yt-dlp 拿到的標題也是上傳者寫的；清完什麼都不剩就留著原本的（佔位）標題
+            title = clean_text(title) or article.title
+        article.title = title
     article.source_note = payload.get(DeckField.SOURCE_NOTE) or ""
     article.transcript_text = payload.get(DeckField.TRANSCRIPT) or ""
     article.brief = clean_brief(payload.get(DeckField.BRIEF))
@@ -483,12 +622,112 @@ def save_result(article: Article, payload: dict) -> Article:
     return article
 
 
+def _keeps_registered_title(article: Article) -> bool:
+    """登記時的標題比 GPU 回來的好的來源：處理完成後不換掉它。
+
+    新北的講者是 Pi 依名冊過濾過的（拿掉議長、副議長與別黨團的召集人）；GPU 那邊沒有名冊，
+    標題用的是網站的原始名單。蓋過去的話，標題又會把主席列成講者。
+    YouTube 影片的標題是登記時讀到的（或使用者用 --title 指定的），不會被 GPU 的標題換回去；
+    只有連標題都讀不到時登記的佔位標題，才換成 GPU 從影片拿到的標題。
+    """
+    if not article.title:
+        return False
+    if article.source == ArticleSource.NTPC:
+        return True
+    if article.source == ArticleSource.YOUTUBE:
+        return article.title != placeholder_title(video_id_from_ivod_id(article.ivod_id) or "")
+    return False
+
+
 def _delete_files(files: list[tuple[Storage, str]]) -> None:
     for storage, name in files:
         try:
             storage.delete(name)
         except OSError as e:  # noqa: PERF203 刪不掉只是留下孤兒檔，不該中斷
             logger.warning("刪不掉舊截圖 %s：%s", name, e)
+
+
+@dataclass
+class RemovalReport:
+    # 資料庫裡有沒有這篇（沒有的話只清檔案：上一次下架做到一半時，再跑一次就能收尾）
+    existed: bool = False
+    # 文章有幾段（連同截圖的記錄一起刪）
+    slides: int = 0
+    # 刪掉的檔案（dry-run 是會刪的）
+    files: list[str] = field(default_factory=list)
+    # 資料庫記著、卻不在這支影片的資料夾底下的檔名：不刪，只提醒
+    strays: list[str] = field(default_factory=list)
+    errors: list[str] = field(default_factory=list)
+
+
+def video_media_folder(ivod_id: str) -> str:
+    """影片的截圖資料夾（相對於 MEDIA_ROOT）：save_result 寫的是 articles/<ivod_id>/<批次>/NN.webp。"""
+    return f"articles/{ivod_id}"
+
+
+def remove_video(ivod_id: str, dry_run: bool = False) -> RemovalReport:
+    """下架一支 YouTube 影片：刪文章（連同段落），並刪它的截圖與整個 articles/<ivod_id>/ 資料夾。
+
+    管理頁刪文章不會刪檔案（Slide.image 只是個欄位），截圖網址還能用；而且把文章改回 FAILED 或
+    PENDING 沒有用——夜間排程會把它重做回來。所以要有明確的下架。
+
+    ivod_id 必須是 yt-<11 碼影片 id>（只含英數、底線、減號），才組得出資料夾——使用者打的東西
+    不直接拼進路徑。檔案一律走欄位自己的 storage API（先刪檔、再由深到淺刪資料夾），
+    不用 os 或 shutil 去碰路徑。資料夾連失敗的重試留下的孤兒檔一起清；文章已經不在也照清，所以
+    跑兩次是安全的。dry_run 只回報會刪什麼。
+    """
+    if video_id_from_ivod_id(ivod_id) is None:
+        raise ValueError(f"不是 yt-<11 碼影片 id>：{ivod_id[:40]!r}")
+    article = Article.objects.filter(ivod_id=ivod_id).first()
+    if article is not None and article.source != ArticleSource.YOUTUBE:
+        raise ValueError(f"{ivod_id} 不是 YouTube 影片（來源是{article.get_source_display()}），不處理")
+
+    report = RemovalReport(existed=article is not None)
+    storage = Slide._meta.get_field("image").storage
+    folder = video_media_folder(ivod_id)
+    named: list[str] = []
+    if article is not None:
+        slides = list(article.slides.all())
+        report.slides = len(slides)
+        named = [slide.image.name for slide in slides if slide.image]
+    report.strays = [name for name in named if not name.startswith(folder + "/")]
+    in_folder = [name for name in named if name.startswith(folder + "/")]
+    found, folders = _walk(storage, folder)
+    report.files = sorted(set(in_folder) | set(found))
+    if dry_run:
+        return report
+
+    if article is not None:
+        with transaction.atomic():
+            article.delete()
+    for name in report.files:
+        _remove(storage, name, report)
+    # 由深到淺：資料夾空了才刪得掉
+    for directory in reversed(folders):
+        _remove(storage, directory, report)
+    return report
+
+
+def _walk(storage: Storage, root: str) -> tuple[list[str], list[str]]:
+    """root 底下所有檔案與資料夾（資料夾含 root 自己，上層在前）。root 不存在就是空的。"""
+    try:
+        directories, files = storage.listdir(root)
+    except (FileNotFoundError, NotADirectoryError):
+        return [], []
+    found, folders = [f"{root}/{name}" for name in files], [root]
+    for name in directories:
+        inner_files, inner_folders = _walk(storage, f"{root}/{name}")
+        found += inner_files
+        folders += inner_folders
+    return found, folders
+
+
+def _remove(storage: Storage, name: str, report: RemovalReport) -> None:
+    try:
+        storage.delete(name)
+    except OSError as e:
+        report.errors.append(f"刪不掉 {name}：{e}")
+        logger.warning("下架時刪不掉 %s：%s", name, e)
 
 
 def _save_slide(article: Article, raw: dict, folder: str, index: int) -> None:

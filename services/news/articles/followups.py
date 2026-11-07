@@ -36,8 +36,8 @@ from django.utils import timezone
 
 from .gpu_client import GpuApiClient, GpuApiError, JobFailed
 from .members_sync import SPEAKER_SEPARATOR
-from .models import (Article, ArticleSource, ArticleStatus, FollowUp, FollowUpEvaluation,
-                     FollowUpLabel, Membership, Session, Slide)
+from .models import (COUNCIL_SOURCES, Article, ArticleSource, ArticleStatus, FollowUp,
+                     FollowUpEvaluation, FollowUpLabel, Membership, Session, Slide)
 from .topics import EvaluationAborted, base_articles
 
 logger = logging.getLogger(__name__)
@@ -354,8 +354,9 @@ def ask_at(brief: object, index: int) -> Ask | None:
 
 
 def is_base(article: Article) -> bool:
-    """跟 topics.base_articles 同一個定義：已完成、單獨發言、有摘要卡。"""
+    """跟 topics.base_articles 同一個定義：議會的、已完成、單獨發言、有摘要卡。"""
     return (article.status == ArticleStatus.READY and article.brief is not None
+            and article.source in COUNCIL_SOURCES
             and SPEAKER_SEPARATOR not in (article.speaker or ""))
 
 

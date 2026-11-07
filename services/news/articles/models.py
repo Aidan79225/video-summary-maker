@@ -17,6 +17,14 @@ class ArticleSource(models.TextChoices):
     LY = "ly", "立法院"
     TCCC = "tccc", "臺中市議會"
     NTPC = "ntpc", "新北市議會"
+    # 使用者手動加入的影片（add_video）：不是議會，沒有名冊、會期、側寫
+    YOUTUBE = "youtube", "YouTube"
+
+
+# 議會的來源：人物側寫、議題分類、追問、會期、人物名單都只認這幾個。
+# 用白名單而不是「排除 youtube」：下次再加一個非議會的來源時，不會又漏掉一處。
+COUNCIL_SOURCES = (ArticleSource.LY, ArticleSource.TCCC, ArticleSource.NTPC)
+COUNCIL_CHOICES = [(source.value, source.label) for source in COUNCIL_SOURCES]
 
 
 class Person(models.Model):
@@ -46,7 +54,7 @@ class Membership(models.Model):
     """
 
     person = models.ForeignKey(Person, related_name="memberships", on_delete=models.CASCADE)
-    source = models.CharField(max_length=16, choices=ArticleSource.choices, db_index=True)
+    source = models.CharField(max_length=16, choices=COUNCIL_CHOICES, db_index=True)
     # 來源給的編號：立法院是歷屆立法委員編號（跨屆穩定）、臺中是官網的 cno、
     # 新北是官網的 C（跨屆穩定）
     external_id = models.CharField(max_length=64, blank=True, db_index=True)
@@ -94,7 +102,7 @@ class Session(models.Model):
     也沒有結構化來源。每晚重算時更新。
     """
 
-    source = models.CharField(max_length=16, choices=ArticleSource.choices, db_index=True)
+    source = models.CharField(max_length=16, choices=COUNCIL_CHOICES, db_index=True)
     # 屆次的數字（"11"），給頁面分組用
     term = models.CharField(max_length=16)
     # 立法院「第11屆第5會期」（臨時會併入它所屬的會期）；議會「第4屆第8次定期會」
@@ -119,8 +127,9 @@ class Article(models.Model):
     """
 
     ivod_id = models.CharField(max_length=32, unique=True, db_index=True)
-    # 哪個議會。ivod_id 這個名字是歷史包袱——現在是「來源給的識別碼」，
-    # 臺中片段寫成 tccc-<ano>；改欄位名要動 API、前端與既有資料，不值得。
+    # 哪個來源（議會或 YouTube）。ivod_id 這個名字是歷史包袱——現在是「來源給的識別碼」，
+    # 臺中片段寫成 tccc-<ano>、新北寫成 ntpc-<檔案 key>、YouTube 影片寫成 yt-<11 碼影片 id>
+    # （14 字，放得進 32）；改欄位名要動 API、前端與既有資料，不值得。
     source = models.CharField(max_length=16, choices=ArticleSource.choices,
                               default=ArticleSource.LY, db_index=True)
     # 講者「當時」的政黨（來源給的全名；聯合質詢多黨用頓號分隔）。之後換黨不回溯。
@@ -148,6 +157,9 @@ class Article(models.Model):
     # 前端退回只用第一段當導言的樣子。存 JSON 而不拆表：它是一個整體、
     # 一起換掉、不會被單獨查詢。
     brief = models.JSONField(null=True, blank=True, default=None)
+    # 影片裡有哪些人在講話、各自是誰（YouTube 影片第二部分：用聲音區分說話的人，名字要有證據
+    # 才寫）。議會的文章是一個人質詢，沒有這個概念，一律是空的；現在也還沒有程式會寫它。
+    speakers = models.JSONField(default=list, blank=True)
 
     status = models.CharField(max_length=16, choices=ArticleStatus.choices,
                               default=ArticleStatus.PENDING, db_index=True)
@@ -280,7 +292,7 @@ class TopicLabel(models.Model):
 class TopicEvaluation(models.Model):
     """一次評估、一個來源的成績。某來源的議題指標只用最新一筆 passed 的 classifier。"""
 
-    source = models.CharField(max_length=16, choices=ArticleSource.choices, db_index=True)
+    source = models.CharField(max_length=16, choices=COUNCIL_CHOICES, db_index=True)
     classifier = models.CharField(max_length=200)
     labeled = models.PositiveIntegerField()
     correct = models.PositiveIntegerField()
