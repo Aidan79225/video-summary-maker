@@ -60,9 +60,11 @@ class RecordingClient:
     def cancel(self, job_id):
         self._known_jobs.pop(job_id, None)
 
-    def submit(self, url, detailed=True, min_slides=None, max_slides=None, speech_hint=None):
+    def submit(self, url, detailed=True, min_slides=None, max_slides=None, speech_hint=None,
+               speaker_mode=None, speaker_count=None):
         self.submits.append({"url": url, "detailed": detailed, "min_slides": min_slides,
-                             "max_slides": max_slides, "speech_hint": speech_hint})
+                             "max_slides": max_slides, "speech_hint": speech_hint,
+                             "speaker_mode": speaker_mode, "speaker_count": speaker_count})
         if isinstance(self._error, GpuApiError):
             raise self._error
         return f"job-{len(self.submits)}"
@@ -95,7 +97,10 @@ class ShapeClient:
 
 
 def _video(video_id=ZOO, **kw):
-    kw = {"title": "Me at the zoo", "speaker": "jawed", "day": date(2005, 4, 24), "duration_seconds": 19} | kw
+    """登記一支影片。這個檔案測的是第一部分的單人流程：既有的影片都是 --speakers 1 做的（遷移 0015 也這樣填），
+    所以預設 speaker_count=1；多人流程在 test_speaker_ingest.py。"""
+    kw = {"title": "Me at the zoo", "speaker": "jawed", "day": date(2005, 4, 24), "duration_seconds": 19,
+          "speaker_count": 1} | kw
     return register_video(video_id, **kw)[0]
 
 

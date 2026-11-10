@@ -120,9 +120,15 @@ uv run python manage.py run_scheduler --backfill-days 0 # 不要回補
 使用者手動貼網址加進來的 YouTube 影片，來源代碼 `youtube`，跟立法院、臺中、新北並列，但**不當成議會**：不進每晚排程，也不算人物側寫、議題分類、追問、會期、人物名單。網站上的專屬頁面是 `/videos`。Pi 上怎麼跑（`sudo docker exec …`、背景執行、旗標表）見根目錄 README 的「YouTube 手動加入」；設計與每個決定的理由見 `docs/superpowers/specs/2026-10-31-youtube-videos-design.md`。
 
 ```bash
-uv run python manage.py add_video 'https://www.youtube.com/watch?v=jNQXAC9IVRw' --dry-run   # 只預檢，什麼都不寫
-uv run python manage.py add_video 'https://www.youtube.com/watch?v=jNQXAC9IVRw' --speakers 1
-uv run python manage.py add_video 'https://www.youtube.com/watch?v=jNQXAC9IVRw' --speakers 1 --rerun   # 重做已發佈的（影片留在站上）
+uv run python manage.py add_video 'https://www.youtube.com/watch?v=jNQXAC9IVRw' --dry-run   # 只預檢，什麼都不寫、不問 GPU
+uv run python manage.py add_video 'https://www.youtube.com/watch?v=jNQXAC9IVRw'              # 預設：自動區分說話的人（多人影片）
+uv run python manage.py add_video 'https://www.youtube.com/watch?v=jNQXAC9IVRw' --speakers 3 # 固定 3 位（連線進來的聲音也算一位；2～20）
+uv run python manage.py add_video 'https://www.youtube.com/watch?v=jNQXAC9IVRw' --speakers 1 # 確定整支影片只有一個人：跳過區分，跟第一部分一樣
+uv run python manage.py add_video 'https://www.youtube.com/watch?v=jNQXAC9IVRw' --rerun      # 重做已發佈的（影片留在站上；說話者模式以這次的指令為準）
+uv run python manage.py label_video jNQXAC9IVRw                                  # 印說話者對照表（每位附幾句話與可以跳到那一秒的連結）
+uv run python manage.py label_video jNQXAC9IVRw --name S1=黃國昌 --role S1=主持人 --name S2=王小明
+uv run python manage.py label_video jNQXAC9IVRw --merge S3=S1                    # S3 和 S1 其實是同一個人
+uv run python manage.py label_video jNQXAC9IVRw --audit 5 --seed 7               # 抽查 5 個重點：誰說的、依據、連結
 uv run python manage.py remove_video yt-jNQXAC9IVRw --dry-run   # 下架：刪文章與截圖檔案
 uv run python manage.py remove_video yt-jNQXAC9IVRw --force     # 緊急下架：不等進行中的 GPU 工作（它做完的結果會被丟棄）
 ```
@@ -146,13 +152,50 @@ uv run python manage.py remove_video yt-jNQXAC9IVRw --force     # 緊急下架�
 | `meeting` | 一律空：非空的會議名稱可能被 `parse_session` 解析成會期 |
 | `date` | 直播開始（或上傳）當下的**台北時間**日期；影片頁的日期帶太平洋時區，台北白天上傳的會差一天 |
 | `party`、`membership`、`session` | 空：不對任期、不掛會期（頻道叫「王立」不會借到立法院那位王立的政黨） |
-| `speakers` | 空清單：影片裡有哪些人在講話（區分講者的功能還在做，現在沒有程式會寫它） |
+| `speakers` | 多人影片：說話者清單（見下一節）；單人模式（`--speakers 1`）與議會是空清單 |
+| `diarization` | 說話者區分結果的摘要（狀態、警告、引擎與模型版本、人數…）；沒有區分過（議會、單人模式）是 `NULL` |
+| `speaker_count` | `NULL`＝自動區分（新登記影片的預設）、`1`＝操作者聲明單人、`2` 以上＝固定人數；議會忽略。唯讀，要改用 `add_video --rerun --speakers` |
+| `Slide.points` | 多人影片每一頁每個重點是誰說的：`{speaker, turn, start, text, evidence}`；其他是空清單 |
 
-**`--speakers 1` 是區分講者完成之前的安全閥。** 現在的管線會把一支影片的全部話寫成同一個「講者」說的，指令又沒辦法事先知道有幾個人在講話，所以沒有 `--speakers 1` 就拒絕登記與送出；`--dry-run` 與「已經發佈」這種什麼都不會送的結果不受影響。
+### 多人影片：誰說了什麼
+
+程式在 `articles/speaker_result.py`（結果的檢查與白名單清理）、`speakers.py`（記號換成名字）、`speaker_labels.py` 與 `speaker_sheet.py`（`label_video` 與對照表）。
+
+**預設就是多人影片**：不加 `--speakers`，`add_video` 把影片當成可能有好幾個人在講話，請 GPU 主機用聲音區分說話的人，每個重點都標明是誰說的。正確區分「誰說了什麼」是這個功能最重要的品質，**寧可整支失敗，也不把話安給錯的人**：任何一個環節對不上，文章就不發佈，絕不退回成單人的「講者」。
+
+| `--speakers` | 意義 | `Article.speaker_count` |
+|---|---|---|
+| 省略（預設） | 自動區分，人數由 GPU 判斷 | `NULL` |
+| `2`～`20` | 固定人數（連線進來的聲音也算一位）；GPU 回的結果必須回報同一個人數 | 那個數字 |
+| `1` | 操作者聲明整支影片只有一個人：跳過區分，沿用第一部分的單人流程（`speakers` 存空清單） | `1` |
+
+- **指令列決定每一次新的送出**：省略 `--speakers` 就是自動區分，`--rerun` 或重試一支原本是單人（`1`）的影片也一樣；模式有變時會印「說話者模式：…（之前是：…）」。GPU 上還在跑（或已跑完、可以接回）的工作自己帶著送出時的模式，不能悄悄換掉：明確給了不一樣的 `--speakers` 會被拒絕（省略不算），要改請等它做完再 `--rerun`。
+- **先問 GPU 做不做得到**：要送多人工作之前，`add_video` 先 `GET /capabilities`，要求 `speaker_diarization` 是 `true` 而且 `speaker_contract` 是 `1`。沒有這個端點（舊版 GPU 主機）、回傳格式不對、版本不同、連不上，都在登記之前就停下來並說明原因：資料庫完全沒動，也沒有耗掉重試次數。`--dry-run`、`--speakers 1`、接回舊工作不問；一次加好幾支影片只問一次。
+- `--speakers 1` 但標題或頻道名稱有「專訪、訪談、對談、座談、圓桌、來賓、podcast」：照樣執行，但會警告那多半不只一個人。
+
+**結果落地之前先過 `check_speaker_result`**（`save_result` 在動資料庫與檔案之前呼叫；不合契約就丟 `JobFailed`：文章不發佈、重跑時舊內容原封不動、下次重試仍然要求多人區分）。全部成立才通過：
+
+- 結果自己說 `speaker_mode` 是 `diarize`（舊版 GPU 的單人或逐句標記格式會說明「GPU 很可能還沒更新」）、`video_id` 是這支影片的；
+- `diarization.status` 是 `ok` 或 `warn`、至少找到一位，`requested_speakers` 跟我們送出的一樣（自動是 `null`）；
+- `speakers` 1～12 位、編號 `S1`… 不重複、`kind` 是 `participant` 或 `minor`、至少一位 `participant`；
+- 每一頁至少一個重點；重點的說話者必須是列出來的 **participant**（只講了幾句的「其他聲音」與無法判斷的段落不能被引用），同一個發言段落不能被標成兩個人；
+- 逐字稿每一行是 `mm:ss [[Sn]]：內容`；每頁條列的第 i 項記號必須就是第 i 個重點的說話者，完整敘述裡的記號順序必須對得上重點；
+- 所有數字有限且在範圍內（NaN、無限大、布林、10^9 都拒絕）；所有文字先過 `clean_text` 再檢查（零寬字元夾出來的 `[[` 也擋得到），重點與條列的內容不能有 `[[` 或 `]]`；
+- GPU 的摘要卡一律不收（`brief` 存 `NULL`：摘要卡的「要求與回應」不分說話者，會把主持人的前提寫成來賓的數字）。
+
+存進去的是清理過的白名單版本，不認得的鍵一律丟掉。單人影片（`--speakers 1`）反過來：結果不該長得像多人結果（`check_single_result`），否則同樣不發佈。
+
+**資料與顯示**：`Article.speakers` 是 GPU 回報的 `id`、`label`（中性的「發言者 A」）、`kind`、`seconds`、`turns`、`first_seen`、`last_seen`、`samples`、`flags`，加上 Pi 自己的 `name`、`role`、`basis`（`none` 或 `operator`）、`merged_into`。逐字稿、條列、完整敘述裡存的永遠是 `[[S1]]` 這樣的記號，**名字從來不寫進文字**：API 讀取時才把記號換成名字（有名字用名字，沒有就是標籤；`merged_into` 跟到底，有環不會無限迴圈；`S0` 顯示「（無法判斷）」，不認得的編號顯示「（未知發言者）」）。用 callback 換，名字裡的 `$1`、`A.*B`、反斜線加數字不會被當成樣板；換完仍殘留的 `[[` 或 `]]` 一律拿掉，不會漏到網頁上；`teaser` 先換再截斷。只有 YouTube 影片而且有說話者清單的文章才換，議會與單人影片的文字一個字都不碰，回應只多了 `speakers: []`、`diarization: null`、`points: []` 這些中性預設值。
+
+**名字只由操作者設定，程式不猜**（`label_video`，不碰 GPU）：GPU 只知道「這是同一個聲音」，不知道那個人是誰。`add_video` 做完會印說話者對照表（每位的編號、標籤、發言時間與次數、幾句話與 `&t=` 連結）、GPU 的警告（人數對不上、無法歸屬的比例偏高、其他聲音太多、只找到一個人）與下一步；聽過、確定了才用 `label_video <影片> --name S1=黃國昌 --role S1=主持人`。影片可以是 slug、11 碼影片 id 或網址。名字最多 40 字、角色最多 20 字，先過 `clean_text`，不能含 `[[`、`]]`、冒號、換行，不能長得像說話者編號；兩位說話者不能顯示成同一個字（真的是同一個人用 `--merge S3=S1`：只併一層，主要發言者不能併進其他聲音，被併的編號沒有自己的名字）。每一項先驗證完才套用，有一項不對就整批都不套用。`--audit N [--seed S]` 抽 N 個重點（種子印出來，同一批可以再抽）：第幾頁、誰說的、依據的原話、跳到前 3 秒的連結。**驗證有沒有安對人唯一可靠的辦法是點進去聽。**
+
+**重跑（`add_video --rerun`）不保留名字與併法**：重跑之後說話者編號可能全部重新排，把舊名字掛到新編號上等於安錯人；指令在重跑之前先印出會丟掉的設定。同一道理，`label_video` 沒有版本檢查，編號是你看到那份對照表時的編號：重跑做完要重新看過對照表再取名字（設定完會印出被改的說話者與一句例子，方便對一下）。
+
+**admin**：`speaker_count` 唯讀；說話者清單、區分摘要、每個重點是誰說的都不在表單裡，名字與併法只能用 `label_video`。
 
 **議會的範圍用白名單擋**（`models.COUNCIL_SOURCES`），不用「排除 youtube」，下次再加一個非議會的來源時不會又漏掉：`topics.base_articles()`（分類、抽樣、評估、追問都從它來）與 `followups.is_base()`、`topics` 與 `profiles` 裡逐來源的迴圈、`profiles.parse_session`、人物側寫的「沒有會期」查詢、`ingest.process_pending`／`imageless`／`rerun_ready`、API 沒給 `source` 時的預設範圍。`Membership`、`Session`、`TopicEvaluation` 的 `choices` 也只列議會，管理頁不會出現「YouTube」的任期。影片只由 `add_video` 處理：一支兩小時的影片會占住夜間批次，GPU 離線時還會白白燒掉它的重試次數。
 
-### 部署這一版之後
+### 部署第一版之後（0014）
 
 **整個 stack 一起重新部署**（`migrate` 在容器啟動時跑），等 api healthy、web 重建完成**之後**才跑 `add_video`；兩個映像之間沒有先後。GPU 主機這一版不需要更新，但第一次真的加影片之前，要在 GPU 主機做一次煙霧測試，確認容器裡的 yt-dlp 抓得到 YouTube（先短的 `jNQXAC9IVRw`，再長的 `f4r2yWk4LV0`）：失敗時 `add_video` 會把錯誤原樣顯示。
 
@@ -163,6 +206,20 @@ uv run python manage.py add_video 'https://www.youtube.com/watch?v=jNQXAC9IVRw' 
 ```
 
 等待 GPU 的時間用 `GPU_JOB_TIMEOUT_SECONDS`，指令沒有 `--timeout`：夜間批次用同一個數字判斷「卡住」，指令等得比它久，夜間會把還在跑的工作取消掉。長影片要在 `api` 與 `scheduler` 兩個容器都調大這個環境變數。
+
+### 部署多人影片這一版之後（0015）
+
+**順序：先更新 GPU 主機，再更新 Pi。** 舊版 Pi 不帶任何說話者的鍵，更新過的 GPU 主機照舊走單人流程，所以 GPU 先更新是安全的；反過來，新版 Pi 對舊版 GPU 主機的 `add_video` 會被能力檢查擋下來（「GPU 服務還沒更新到支援多人區分的版本」），預設的多人影片一支都加不進去（`--speakers 1` 照常可以）。
+
+1. GPU 主機：更新程式與說話者區分需要的套件和模型，重啟摘要 API；`GET /capabilities` 要回 `speaker_diarization: true` 與 `speaker_contract: 1`。
+2. Pi：整個 stack 一起重新部署（`migrate` 在容器啟動時跑）。先備份資料庫檔案：0015 對 `articles_article` 加 `speaker_count` 與 `diarization`、對 `articles_slide` 加 `points`，SQLite 加欄位會把這兩張表各重建一次，重建期間寫入會短暫被鎖住。**既有的資料列 `speaker_count` 一律填 1**（既有的影片全都是 `--speakers 1` 做的，行為不變；議會的資料列忽略這個欄位），新登記的影片預設 `NULL`＝自動區分。
+3. 長影片要在 `api` 與 `scheduler` 兩個容器都把 `GPU_JOB_TIMEOUT_SECONDS` 調大（例如 `5400`）：區分說話者比單人流程慢，夜間批次用同一個數字判斷「卡住」。
+4. 驗證：先 `add_video <短影片> --dry-run`（不問 GPU），再真的加一支兩個人講話的短影片，看對照表、用 `label_video <影片> --audit 5` 點連結聽幾個重點，確定沒有安錯人之後再加其他影片。
+
+```bash
+uv run python manage.py migrate    # 0015：Article.speaker_count（既有的列填 1）、Article.diarization、Slide.points
+uv run python manage.py makemigrations --check --dry-run   # 要乾淨
+```
 
 ## 人物側寫（投入量、具體度）
 
@@ -565,7 +622,7 @@ uv run python manage.py eval_bill_topics
 |---|---|
 | `GET /api/health` | 文章數（`articles`，含 YouTube 影片）與最新日期（`latest_date`，**只算議會的文章**）。`latest_date` 是監控夜間匯入有沒有停擺的訊號，手動加的影片（日期可以是「今天」或 `--date` 打的任何一天）不能讓它看起來是新的 |
 | `GET /api/articles?date=&speaker=&q=&source=&party=&session=&solo=&has_brief=&topic=&page=&page_size=` | 已完成的文章清單。`session`（會期 id）、`solo=1`（只要單獨發言）、`has_brief=1`（只要有摘要卡）、`topic`（領域代碼，或 `any`＝哪個領域都可以）是側寫的證據篩選：證據網址查出來的篇數等於指標的 n。`topic` 只認各來源通過評估的那個分類器分出來的領域；打錯的代碼回 422。**省略 `source` 時只回議會的來源**，YouTube 影片要 `source=youtube`（`ly`、`tccc`、`ntpc`、`youtube`，其他回 422）；影片依加入的時間排（新的在前），不依它的上傳日期 |
-| `GET /api/articles/{slug}` | 單篇，含摘要卡（`brief`：一句話、關鍵數字、要求與回應；GPU 端產不出來時為 `null`）、每段的條列與完整敘述、完整逐字稿；`speakers` 是影片裡的講者（現在永遠是空清單） |
+| `GET /api/articles/{slug}` | 單篇，含摘要卡（`brief`：一句話、關鍵數字、要求與回應；GPU 端產不出來時為 `null`）、每段的條列與完整敘述、完整逐字稿。多人影片多三樣：`speakers`（每位的 `id`、`label`、`name`、`role`、`display`、`kind`、`seconds`、`turns`、`basis`、`flags`）、`diarization`（`status`、`warnings`、`requested_speakers`、`found_speakers`）與每段的 `points`（`speaker`、`display`、`start`、`text`）；文字裡的 `[[S1]]` 在這裡換成名字（`display`）。議會與單人影片是 `speakers: []`、`diarization: null`、`points: []`，文字一個字不變 |
 | `GET /api/speakers?source=` | 委員與篇數（省略 `source` 只算議會；`source=youtube` 列頻道）；`person_id` 是同來源、同名任期所屬的人（查無任期為 `null`，頻道永遠是 `null`） |
 | `GET /api/people/{person_id}/profile?source=&session=` | 人物側寫：一個會期的投入量與具體度，每項附 n、百分位、同儕人數與證據網址（網站的相對路徑）。那個來源有通過的議題評估時多一個 `topics` 區塊：`distribution`（12 個領域都列，依篇數由多到少、同數依領域表的順序；`share` 是 0～100）、`classifier`（`name`、`accuracy` 是 0～1、`labeled`、`evaluated_at`）。最後永遠有一個 `followup` 區塊（見「人物側寫：追問率」）。省略 `source` 用他最近一個有統計的會期的來源；省略 `session` 用他有發言的最近一個會期。沒有統計回 404。立法院同步過院內紀錄的會期多一個 `chamber` 區塊（見上面「院內紀錄」；議案分類與議題分類都通過時多一張 `proposal_alignment`，見「提案與質詢一致率」）；只算過院內紀錄的會期不給投入量與具體度 |
 | `GET /api/people/{person_id}/records?session=&kind=` | 院內紀錄的證據清單（院會、委員會會議、主提案、連署、三讀、記名表決、黨團有多數的表決、跨黨投票），每筆附議事網連結；筆數等於對應指標的 n 或值。主提案清單在議案分類通過時每件標出領域（`topic`）並附 `bill_classifier` |
@@ -627,7 +684,11 @@ articles/
 ├─ models.py        實體：Article / Slide / Person / Membership / Session / ProfileStat / Topic / TopicLabel / TopicEvaluation / LyMeeting / LyBill / LyVote / BillTopic / BillTopicLabel / BillTopicEvaluation / FollowUp / FollowUpLabel / FollowUpEvaluation
 ├─ ivod_source.py   adapter：立法院開放資料
 ├─ youtube_source.py adapter：YouTube 的網址解析、oEmbed 與影片頁、預檢、頁數範圍（標準函式庫）
-├─ gpu_client.py    adapter：GPU 主機上的摘要 API
+├─ gpu_client.py    adapter：GPU 主機上的摘要 API（含 `/capabilities`）
+├─ speakers.py      [[Sn]] 記號換成名字、併人、給 API 的顯示規則（不碰資料庫）
+├─ speaker_result.py 多人結果的白名單清理與 check_speaker_result（落地前的契約檢查）
+├─ speaker_labels.py label_video 的規則：名字、角色、併人、清除（全有或全無）
+├─ speaker_sheet.py 說話者對照表、GPU 警告、重跑會丟掉的設定（add_video 與 label_video 共用）
 ├─ ingest.py        use case：發現 → 處理 → 落地（相依都用注入的）
 ├─ profiles.py      use case：會期解析、人物側寫指標的計算與快取
 ├─ topics.py        use case：政策領域、分類、標註集與評估、上線條件、委員會職掌
@@ -639,6 +700,7 @@ articles/
 └─ management/commands/
    ├─ ingest_ivod.py    composition root：從 settings 組出 adapter 再注入
    ├─ add_video.py      手動加入 YouTube 影片
+   ├─ label_video.py    替多人影片的說話者取名字、併人、抽查（不碰 GPU）
    ├─ remove_video.py   下架 YouTube 影片（文章與截圖檔案）
    ├─ compute_profiles.py
    ├─ sync_ly_records.py
@@ -662,3 +724,5 @@ articles/
 ```bash
 uv run python manage.py test articles
 ```
+
+多人影片的契約範例 `articles/tests/fixtures/speaker_contract_v1.json` 與 GPU 端 `tests/slidebox_api/fixtures/speaker_contract_v1.json` 必須是同一份：兩邊的測試各自拿它當對方會送來／收到的樣子。兩個目錄在同一個 checkout 裡時，`test_speaker_contract` 會比對（換行符號不算分歧）；只有後端時跳過。所有測試都用假的 GPU 客戶端，不碰網路。

@@ -353,11 +353,21 @@ class ApiScopeTests(TestCase):
     def test_a_council_article_detail_has_an_empty_speakers_list_too(self):
         self.assertEqual(self.client.get(f"/api/articles/{_council().slug}").json()["speakers"], [])
 
-    def test_the_stored_speakers_come_back_as_they_are(self):
+    def test_the_stored_speakers_come_back_in_the_api_shape_with_their_name_unchanged(self):
+        """第一版：存什麼回什麼。多人版：每個說話者固定回同一組欄位（缺的補上中性預設值），名字原樣不動。"""
         video = _video()
         Article.objects.filter(pk=video.pk).update(speakers=[{"id": "S1", "name": "甲"}])
         self.assertEqual(self.client.get(f"/api/articles/{video.slug}").json()["speakers"],
-                         [{"id": "S1", "name": "甲"}])
+                         [{"id": "S1", "label": "", "name": "甲", "role": "", "display": "甲", "kind": "participant",
+                           "seconds": 0.0, "turns": 0, "basis": "none", "flags": []}])
+
+    def test_an_old_style_speaker_list_of_plain_strings_is_not_shown(self):
+        """舊版留下的一串字串不是說話者清單：不能讓 API 當掉，也不拿它當名字顯示。"""
+        video = _video()
+        Article.objects.filter(pk=video.pk).update(speakers=["講者", "來賓"])
+        res = self.client.get(f"/api/articles/{video.slug}")
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json()["speakers"], [])
 
     def test_the_speaker_list_is_council_only_unless_asked(self):
         _council("甲")

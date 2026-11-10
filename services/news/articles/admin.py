@@ -16,6 +16,9 @@ from .profiles import compute_profiles
 class SlideInline(admin.TabularInline):
     model = Slide
     extra = 0
+    # 每個重點是誰說的（多人影片）不給人在表單裡手改：改錯一個編號就是把話安到別人頭上。
+    # exclude 之後表單不含這一欄，存檔也不會動到它
+    exclude = ("points",)
 
 
 @admin.register(Article)
@@ -24,15 +27,18 @@ class ArticleAdmin(admin.ModelAdmin):
                     "updated_at")
     list_filter = ("status", "source", "session", "party", "date", "speaker")
     search_fields = ("ivod_id", "speaker", "title", "transcript_text", "error")
-    # 失敗原因與 GPU 工作編號是給人看的診斷資訊，不該在 admin 裡被改掉
-    readonly_fields = ("error", "gpu_job_id", "attempts", "created_at", "updated_at",
+    # 失敗原因與 GPU 工作編號是給人看的診斷資訊，不該在 admin 裡被改掉。
+    # speaker_count（影片的說話者模式：空＝自動區分、1＝單人、2 以上＝固定人數）也唯讀：它決定 GPU 工作怎麼送、
+    # 結果怎麼驗，要改用 add_video --rerun --speakers。說話者清單（speakers、diarization）整個不放進表單，
+    # 名字與併法只能用 label_video 改
+    readonly_fields = ("error", "gpu_job_id", "attempts", "speaker_count", "created_at", "updated_at",
                        "published_at")
     # 會期可以手動改：每晚的重算只替「還沒掛會期」的文章掛，不會蓋掉人改過的
     autocomplete_fields = ("membership", "session")
     fieldsets = (
         (None, {"fields": ("source", "ivod_id", "slug", "title", "speaker", "party", "membership",
                            "meeting", "session", "date", "duration_seconds", "ivod_url")}),
-        ("處理狀態", {"fields": ("status", "attempts", "error", "gpu_job_id",
+        ("處理狀態", {"fields": ("status", "attempts", "error", "gpu_job_id", "speaker_count",
                                  "created_at", "updated_at", "published_at")}),
         ("內容", {"classes": ("collapse",),
                   "fields": ("source_note", "brief", "transcript_text")}),

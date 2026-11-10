@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from django.db import models
 
+from .speakers import has_structured_speakers, render_placeholders
+
 TEASER_LENGTH = 120
 
 
@@ -157,9 +159,18 @@ class Article(models.Model):
     # 前端退回只用第一段當導言的樣子。存 JSON 而不拆表：它是一個整體、
     # 一起換掉、不會被單獨查詢。
     brief = models.JSONField(null=True, blank=True, default=None)
-    # 影片裡有哪些人在講話、各自是誰（YouTube 影片第二部分：用聲音區分說話的人，名字要有證據
-    # 才寫）。議會的文章是一個人質詢，沒有這個概念，一律是空的；現在也還沒有程式會寫它。
+    # 影片裡有哪些人在講話、各自是誰（YouTube 影片：用聲音區分說話的人）。每一項是 GPU 回報的
+    # {id、label、kind、seconds、turns、first_seen、last_seen、samples、flags}，加上 Pi 自己的
+    # {name、role、basis、merged_into}：名字只由操作者透過 label_video 設定，GPU 從來不給名字。
+    # 議會的文章是一個人質詢、單人模式的影片也沒有這個概念，一律是空清單。
     speakers = models.JSONField(default=list, blank=True)
+    # 這支影片的說話者區分結果摘要（status、warnings、requested_speakers、found_speakers…，見
+    # speaker_result.clean_diarization）；沒有區分過（議會、單人模式）是 None。
+    diarization = models.JSONField(null=True, blank=True, default=None)
+    # YouTube：1＝操作者明確聲明單人（跳過區分）；None＝預設的多人、人數由 GPU 自動判斷；
+    # 2 以上＝指定人數。議會的來源忽略此欄位。migration 0015 對既有的資料列填 1（既有的影片
+    # 全都是 --speakers 1 做的）；新登記的影片用模型預設 None，也就是多人模式。
+    speaker_count = models.PositiveIntegerField(null=True, blank=True, default=None)
 
     status = models.CharField(max_length=16, choices=ArticleStatus.choices,
                               default=ArticleStatus.PENDING, db_index=True)
@@ -189,10 +200,21 @@ class Article(models.Model):
         return value.strip() if isinstance(value, str) else ""
 
     @property
+    def structured_speakers(self) -> list[dict]:
+        """多人影片的說話者清單；議會的文章與單人影片是空清單。
+
+        API 只對有這份清單的文章換 [[Sn]] 記號：議會與單人影片的文字從來不碰（逐位元組維持原樣）。
+        """
+        if self.source == ArticleSource.YOUTUBE and has_structured_speakers(self.speakers):
+            return self.speakers
+        return []
+
+    @property
     def teaser(self) -> str:
         """導言優先用摘要卡的一句話：它講的是整段質詢要什麼。
 
         沒有卡片時退回第一段的完整敘述——條列太零碎，當導言讀起來不像新聞。
+        多人影片先把 [[Sn]] 換成名字再截斷：先截斷的話，剛好切在記號中間會把「[[S」漏到網頁上。
         """
         if self.one_liner:
             return self.one_liner
@@ -200,6 +222,9 @@ class Article(models.Model):
         if first is None:
             return ""
         text = first.detail or "；".join(first.bullets)
+        speakers = self.structured_speakers
+        if speakers:
+            text = render_placeholders(text, speakers)
         return text[:TEASER_LENGTH]
 
     @property
@@ -321,6 +346,9 @@ class Slide(models.Model):
     bullets = models.JSONField(default=list)
     detail = models.TextField(blank=True)
     timestamp = models.FloatField(default=0.0)
+    # 多人影片：這一段的每個重點是誰說的、出自哪一個發言段落（{speaker、turn、start、text、evidence}）。
+    # bullets 與 detail 裡的 [[S1]] 只是版面用的記號；說話的人以這裡為準。議會與單人影片是空清單。
+    points = models.JSONField(default=list, blank=True)
     image = models.FileField(upload_to="articles/", blank=True)
 
     class Meta:

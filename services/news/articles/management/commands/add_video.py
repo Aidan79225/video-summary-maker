@@ -1,14 +1,21 @@
 """手動加入 YouTube 影片：預檢 → 登記 → 送去 GPU 主機摘要 → 發佈到網站的「影片」頁。
 
-    python manage.py add_video 'https://www.youtube.com/watch?v=jNQXAC9IVRw' --speakers 1
-    python manage.py add_video 'https://youtu.be/jNQXAC9IVRw' --speakers 1 --dry-run   # 只預檢，什麼都不寫
-    python manage.py add_video '網址' --speakers 1 --title '自己取的標題' --speaker '頻道的固定寫法' --date 2026-10-30
-    python manage.py add_video '網址' --speakers 1 --rerun          # 重做已發佈的影片（影片留在站上）
-    python manage.py add_video '網址一' '網址二' --speakers 1
-    python manage.py add_video '網址' --speakers 1 --allow-unverified   # 影片頁讀不到、或缺了檢查要用的旗標時照樣處理（檢查不了的由你負責）
+    python manage.py add_video 'https://www.youtube.com/watch?v=jNQXAC9IVRw'
+    python manage.py add_video 'https://youtu.be/jNQXAC9IVRw' --dry-run   # 只預檢，什麼都不寫
+    python manage.py add_video '網址' --speakers 3        # 知道有幾個人講話就指定（2～20）；省略＝自動判斷
+    python manage.py add_video '網址' --speakers 1        # 確定從頭到尾只有一個人（跳過說話者區分）
+    python manage.py add_video '網址' --title '自己取的標題' --speaker '頻道的固定寫法' --date 2026-10-30
+    python manage.py add_video '網址' --rerun             # 重做已發佈的影片（影片留在站上）
+    python manage.py add_video '網址一' '網址二'
+    python manage.py add_video '網址' --allow-unverified   # 影片頁讀不到、或缺了檢查要用的旗標時照樣處理（檢查不了的由你負責）
 
 網址一定要加單引號：沒加的話，bash 會在 `&` 截斷，後面的參數變成背景工作。第一行永遠先印出解析出的
 影片 id 與正規網址，截斷了一眼就看得出來。
+
+預設會用聲音區分影片裡說話的人，每一句話、每個重點都記下是誰說的（編號 S1、S2…，網站上先顯示「發言者 A」
+這種中性稱呼）。做完會印一張對照表，每位說話者附幾句代表的話和可以直接跳到那一秒的連結；聽一下確定是誰，
+再用 label_video 取名字。誰說的絕對不能安錯人：GPU 的結果不合規格就整支影片當作失敗，不會發佈，更不會退回去
+把全部的話安給同一位「講者」。GPU 主機還沒更新、或不支援區分時，在登記之前就停下來。
 
 影片不進每晚排程，只由這個指令處理。已經存在的影片會說清楚結果：已發佈、失敗（重設次數重跑）、
 GPU 上還有做完或在跑的工作（接回去）、別人正在處理（說還要幾分鐘）。等待時間用
@@ -19,6 +26,7 @@ GPU_JOB_TIMEOUT_SECONDS，不開放更長的 --timeout：夜間批次用同一�
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from datetime import date, timedelta
 
@@ -26,7 +34,7 @@ from django.conf import settings
 from django.core.management.base import BaseCommand, CommandError
 from django.utils import timezone
 
-from articles.gpu_client import GpuApiClient, GpuApiError, JobField
+from articles.gpu_client import SPEAKER_CONTRACT, GpuApiClient, GpuApiError, JobField
 from articles.ingest import (
     MAX_ATTEMPTS,
     RESUMABLE_STATUSES,
@@ -35,6 +43,8 @@ from articles.ingest import (
     register_video,
 )
 from articles.models import Article, ArticleStatus
+from articles.speaker_sheet import next_step_lines, rerun_loss_note, sheet_lines
+from articles.speakers import conversation_hint
 from articles.youtube_source import (
     MetadataUnavailable,
     PreflightOptions,
@@ -52,12 +62,9 @@ from articles.youtube_source import (
     slide_range,
 )
 
-SPEAKERS_VALVE = (
-    "影片裡常常不只一個人在講話，指令沒辦法事先知道；而現在的摘要流程會把全部的話都寫成同一個「講者」說的，"
-    "訪談、對談、連線的影片會把話安到錯的人頭上。\n"
-    "確定這支影片從頭到尾只有一個人在講話的話，加上 --speakers 1 再執行一次。\n"
-    "有多個人講話的影片先不要加：用聲音區分說話的人的功能還在做。"
-)
+MAX_SPEAKERS_OPTION = 20
+# --speakers 只收阿拉伯數字：int() 連 "１"（全形）、"٣"、"1_0"、"+3" 都吞，打錯的值會變成別的人數
+_SPEAKERS_VALUE = re.compile(r"[0-9]{1,3}")
 
 REMOVED_WHILE_PROCESSING = (
     "這支影片在處理途中被下架了（remove_video）：GPU 做完的結果已經丟棄，沒有寫回資料庫，網站上不會出現。\n"
@@ -77,6 +84,8 @@ class Registration:
 
 class Command(BaseCommand):
     help = "手動加入 YouTube 影片：預檢、登記、送去 GPU 主機摘要，完成後出現在網站的「影片」頁"
+    # 這次執行問過 GPU「能不能區分說話者」的結果：None＝還沒問；""＝可以；其他＝不行的原因
+    _diarization_problem: str | None = None
 
     def create_parser(self, *args, **kwargs):
         # 開頭是「-」的單獨影片 id 不會被當成選項
@@ -104,18 +113,16 @@ class Command(BaseCommand):
         parser.add_argument("--max-minutes", type=int, default=180, help="長度上限（分鐘），預設 180")
         parser.add_argument("--min-slides", type=int, help="最少幾頁（預設依長度算，見設計文件）")
         parser.add_argument("--max-slides", type=int, help="最多幾頁（預設依長度算）")
-        parser.add_argument("--speakers", help="聲明「這支影片只有一個人講話」：現在只接受 1。"
-                                               "沒有它，指令會拒絕登記與送出（區分講者的功能還在做）")
+        parser.add_argument("--speakers", help=f"說話者人數（1～{MAX_SPEAKERS_OPTION}）。省略＝自動區分說話的人、"
+                                               "人數由 GPU 判斷（預設）；2 以上＝固定人數（連線進來的聲音也算一位）；"
+                                               "1＝確定整支影片只有一個人在講話，跳過區分")
 
     def handle(self, *args, **options) -> None:
         refs = self._parse_urls(options["urls"])
         self._check_options(options, len(refs))
         timeout = settings.GPU_JOB_TIMEOUT_SECONDS
-        if not options["dry_run"] and options["speakers"] is None:
-            # 在登記、送出任何東西之前：dry-run 與「已發佈」這種什麼都不會送的結果不受影響
-            if any(self._would_process(ref, options, timeout) for ref in refs):
-                raise CommandError(SPEAKERS_VALVE)
-
+        # GPU 能不能區分說話者，整個指令只問一次（問不到的結果也記著，批次裡後面的影片不再各自等一次逾時）
+        self._diarization_problem: str | None = None
         client = GpuApiClient(settings.GPU_API_BASE, settings.GPU_API_KEY)
         failures = []
         for ref in refs:
@@ -165,9 +172,22 @@ class Command(BaseCommand):
             slide_range(0, options["min_slides"], options["max_slides"])
         except ValueError as e:
             raise CommandError(str(e)) from e
-        if options["speakers"] is not None and options["speakers"].strip() != "1":
-            raise CommandError("--speakers 現在只接受 1（聲明這支影片只有一個人在講話）。"
-                               "有多個人講話的影片先不要加：用聲音區分說話的人的功能還在做。")
+        if options["speakers"] is not None:
+            self._speakers_option(options)
+
+    @staticmethod
+    def _speakers_option(options) -> int:
+        """--speakers 的整數（呼叫前它不是 None）。不是 1～20 的整數就拒絕，不猜。"""
+        text = options["speakers"].strip()
+        if not _SPEAKERS_VALUE.fullmatch(text) or not 1 <= int(text) <= MAX_SPEAKERS_OPTION:
+            raise CommandError(f"--speakers 要是 1～{MAX_SPEAKERS_OPTION} 的整數（1＝只有一個人在講話，"
+                               f"2 以上＝固定人數；省略就是自動判斷），不是 {text[:40]!r}")
+        return int(text)
+
+    @classmethod
+    def _speaker_count(cls, options) -> int | None:
+        """這次要用的說話者模式：None＝自動區分（省略 --speakers）、1＝單人、2 以上＝固定人數。"""
+        return cls._speakers_option(options) if options["speakers"] is not None else None
 
     @staticmethod
     def _override_date(options) -> date:
@@ -185,16 +205,69 @@ class Command(BaseCommand):
         else:
             self._add_existing(article, options, client, timeout)
 
-    def _would_process(self, ref: VideoRef, options, timeout: float) -> bool:
-        """這個網址會不會登記或送出東西（--speakers 1 的安全閥只擋這種）。"""
-        article = Article.objects.filter(ivod_id=ref.ivod_id).first()
-        if article is None:
-            return True
-        if article.status == ArticleStatus.READY:
-            return bool(options["rerun"])
-        if article.status == ArticleStatus.PROCESSING and not article.gpu_job_id:
-            return self._stale(article, timeout)
-        return True
+    # --- GPU 能不能區分說話者 ---
+
+    def _require_diarization(self, client) -> None:
+        """多人模式要送出之前，先確認 GPU 主機做得到；做不到就停下來，說明原因。
+
+        在登記之前、在重新送出（搶下處理權、耗掉一次重試）之前問：被擋下來時資料庫完全沒動。
+        舊版 GPU 沒有這個端點、或能力不符，絕對不能把多人影片當單人送去——那會把每句話安到同一個人頭上。
+        """
+        if self._diarization_problem is None:
+            self._diarization_problem = self._probe(client)
+        if self._diarization_problem:
+            raise CommandError(self._diarization_problem)
+
+    @staticmethod
+    def _probe(client) -> str:
+        """問 GPU 主機的能力；回傳不能用的原因，可以就是空字串。"""
+        try:
+            capabilities = client.capabilities()
+        except GpuApiError as e:
+            return f"沒有登記、也沒有送出：問不到 GPU 主機能不能區分說話者。{e}"
+        if not isinstance(capabilities, dict):
+            return "沒有登記、也沒有送出：GPU 主機回的能力資料不是預期的格式（它可能還沒更新到支援多人區分的版本）"
+        if capabilities.get("speaker_diarization") is not True:
+            reason = clean_text(str(capabilities.get("reason") or ""))[:200] or "GPU 沒有說明原因"
+            return (f"沒有登記、也沒有送出：GPU 主機現在不能區分說話者（{reason}）。"
+                    "等它準備好再試；只有一個人講話的影片可以加 --speakers 1。")
+        contract = capabilities.get("speaker_contract")
+        if isinstance(contract, bool) or not isinstance(contract, int) or contract != SPEAKER_CONTRACT:
+            shown = clean_text(str(contract))[:40] if contract is not None else "沒有回報"
+            return (f"沒有登記、也沒有送出：GPU 主機的說話者區分介面版本（{shown}）和這一邊（{SPEAKER_CONTRACT}）"
+                    "不一樣；請把 GPU 主機和 Pi 更新到同一版（先更新 GPU 主機，再更新 Pi）。")
+        return ""
+
+    def _settle_speakers(self, article: Article, options, client, *, resuming: bool) -> None:
+        """要接回舊工作或送新工作之前，定下這支影片這次的說話者模式。
+
+        接回 GPU 上還在跑（或已跑完）的工作時，模式是那個工作送出時決定的，不能悄悄換掉：明確給了不同的
+        --speakers 就拒絕（省略不算要求換）。要送新工作時以這次的指令為準（省略＝自動區分），而且多人模式要
+        先確認 GPU 做得到。這裡任何一步擋下來，資料庫都還沒動過。
+        """
+        wanted = self._speaker_count(options)
+        if resuming:
+            if options["speakers"] is not None and wanted != article.speaker_count:
+                raise CommandError(
+                    f"GPU 工作 {article.gpu_job_id} 是以「{_mode_text(article.speaker_count)}」送出的，"
+                    f"不能用 --speakers {wanted} 接回去；等它完成之後再用 --rerun 改模式。")
+            return
+        if wanted != 1:
+            self._require_diarization(client)
+        if article.speaker_count != wanted:
+            self.stdout.write(f"說話者模式：{_mode_text(wanted)}（之前是：{_mode_text(article.speaker_count)}）")
+            Article.objects.filter(pk=article.pk).update(speaker_count=wanted)
+            article.speaker_count = wanted
+
+    def _warn_single(self, options, title: str, channel: str) -> None:
+        """明確用了 --speakers 1，標題或頻道名稱卻像訪談、對談：提醒一聲（照樣執行）。"""
+        if options["speakers"] is None or self._speaker_count(options) != 1:
+            return
+        word = conversation_hint(title, channel)
+        if word:
+            self.stderr.write(
+                f"  ! 標題或頻道名稱裡有「{word}」，這支影片多半不只一個人在講話；--speakers 1 會把整支影片的話"
+                "都安給同一位講者。確定只有一個人的話可以不理這則；否則拿掉 --speakers 1，讓它自動區分說話的人。")
 
     # --- 新的影片 ---
 
@@ -212,16 +285,22 @@ class Command(BaseCommand):
         registration = self._registration(ref, meta, options, warnings)
         # 頁數範圍在登記之前就算：選項互相矛盾要在寫進資料庫之前就說
         slides = self._slides(registration.duration_seconds, options)
-        self._describe(registration, slides)
+        speakers = self._speaker_count(options)
+        self._describe(registration, slides, speakers)
         for warning in registration.warnings:
             self.stderr.write(f"  ! {warning}")
+        self._warn_single(options, registration.title, registration.speaker)
         if options["dry_run"]:
             self.stdout.write(f"會登記成 /article/{registration.day}-{ref.ivod_id}，再送去 GPU 摘要。\n"
                               "（--dry-run：沒有寫入資料庫，也沒有呼叫 GPU）")
             return
 
+        # 多人模式：GPU 做不到就在登記之前停下來（資料庫完全沒動）
+        if speakers != 1:
+            self._require_diarization(client)
         article, _ = register_video(ref.video_id, title=registration.title, speaker=registration.speaker,
-                                    day=registration.day, duration_seconds=registration.duration_seconds)
+                                    day=registration.day, duration_seconds=registration.duration_seconds,
+                                    speaker_count=speakers)
         self.stdout.write(f"已登記：/article/{article.slug}（處理完成才會出現在網站上）")
         self._run(article, client, timeout, slides)
 
@@ -250,7 +329,8 @@ class Command(BaseCommand):
         speaker = clean_speaker(options["speaker"] or meta.channel) or "YouTube"
         return Registration(title, speaker, day, meta.duration_seconds, tuple(notes))
 
-    def _describe(self, registration: Registration, slides: tuple[int | None, int | None]) -> None:
+    def _describe(self, registration: Registration, slides: tuple[int | None, int | None],
+                  speakers: int | None) -> None:
         self.stdout.write(f"  標題：{registration.title}")
         self.stdout.write(f"  頻道（講者）：{registration.speaker}")
         self.stdout.write(f"  日期：{registration.day}（台北時間）")
@@ -258,6 +338,7 @@ class Command(BaseCommand):
         low, high = slides
         self.stdout.write("  頁數：" + (f"{low or '預設'}～{high or '預設'} 頁" if (low or high)
                                      else "GPU 的預設（8～15 頁）"))
+        self.stdout.write(f"  說話者：{_mode_text(speakers)}")
 
     def _slides(self, duration_seconds: int, options) -> tuple[int | None, int | None]:
         try:
@@ -273,15 +354,25 @@ class Command(BaseCommand):
             self.stderr.write("  ! 這支影片已經登記過了：標題、講者、日期不會改（要改請到 admin 的文章頁）")
         slides = self._slides(article.duration_seconds, options)
         dry = options["dry_run"]
+        # GPU 上留著的工作還能不能接回去：還沒問過是 None（只有帶著工作 id 的才需要問）
+        alive: bool | None = None
 
         if article.status == ArticleStatus.READY:
             if not options["rerun"]:
                 self.stdout.write(f"已發佈在 {path}（影片頁 /videos）。要重做加上 --rerun；重做時影片會留在網站上。")
+                if options["speakers"] is not None and self._speaker_count(options) != article.speaker_count:
+                    self.stderr.write(f"  ! 這支影片目前是「{_mode_text(article.speaker_count)}」；"
+                                      "--speakers 要加 --rerun 重做才會生效")
                 return
             self.stdout.write(f"已發佈在 {path}；--rerun：重新送去 GPU 摘要，過程中影片留在網站上。")
+            self._warn_single(options, article.title, article.speaker)
             if dry:
+                self._dry_mode(article, options)
                 self._dry_footer()
                 return
+            alive = self._job_alive(article, client)
+            self._settle_speakers(article, options, client, resuming=alive)
+            self._announce_rerun(article)
             self._touch(article)
             self._run(article, client, timeout, slides, demote=False, claim=False)
             return
@@ -292,7 +383,10 @@ class Command(BaseCommand):
                 if dry:
                     self._dry_footer("（--dry-run 不問 GPU，所以不知道那個工作能不能接回去）")
                     return
-                if self._resumable(article, client):
+                alive = self._resumable(article, client)
+                if alive:
+                    self._warn_single(options, article.title, article.speaker)
+                    self._settle_speakers(article, options, client, resuming=True)
                     self._touch(article)
                     self._run(article, client, timeout, slides, demote=True, claim=False)
                     return
@@ -315,14 +409,34 @@ class Command(BaseCommand):
         else:
             self.stdout.write("已登記但還沒處理完，重新處理。")
 
+        self._warn_single(options, article.title, article.speaker)
         if dry:
+            self._dry_mode(article, options)
             self._dry_footer()
             return
+        if alive is None:
+            alive = self._job_alive(article, client)
+        # 說話者模式在動資料庫之前定下來（多人模式 GPU 做不到、或接回的工作模式不同，都在這裡停）
+        self._settle_speakers(article, options, client, resuming=alive)
         # 人為重跑不是自動重試：MAX_ATTEMPTS 擋的是夜間排程的無限重試。gpu_job_id 留著，
         # 還沒死的 GPU 工作就接回去（管理頁的「重新排隊」會把它清掉，幾十分鐘的成品就丟了）
         Article.objects.filter(pk=article.pk).update(status=ArticleStatus.PENDING, error="", attempts=0)
         article.refresh_from_db()
         self._run(article, client, timeout, slides)
+
+    def _dry_mode(self, article: Article, options) -> None:
+        """--dry-run：這次的說話者模式與重跑會丟掉的設定（不問 GPU，所以不知道它能不能區分）。"""
+        wanted = self._speaker_count(options)
+        change = "" if article.speaker_count == wanted else f"（之前是：{_mode_text(article.speaker_count)}）"
+        self.stdout.write(f"說話者模式：{_mode_text(wanted)}{change}")
+        if article.status == ArticleStatus.READY:
+            self._announce_rerun(article)
+
+    def _announce_rerun(self, article: Article) -> None:
+        """重跑之前先說：操作者取的名字、併起來的編號不會保留（重跑後編號可能全變，舊名字掛上去會安錯人）。"""
+        note = rerun_loss_note(article)
+        if note:
+            self.stdout.write(f"  注意：{note}")
 
     @staticmethod
     def _stale(article: Article, timeout: float) -> bool:
@@ -337,6 +451,16 @@ class Command(BaseCommand):
         原本的 STALE_FACTOR × 逾時一過，守衛就放行，工作做完又把剛下架的影片寫回來。
         """
         Article.objects.filter(pk=article.pk).update(updated_at=timezone.now())
+
+    def _job_alive(self, article: Article, client) -> bool:
+        """文章記著的 GPU 工作還能接回去嗎？沒有記著工作就不必問。（不印東西。）"""
+        if not article.gpu_job_id:
+            return False
+        try:
+            job = client.job(article.gpu_job_id)
+        except GpuApiError as e:
+            raise CommandError(f"問不到 GPU 主機上那個工作的狀態：{e}\nGPU 主機開著、摘要 API 在跑的時候再執行一次。") from e
+        return job is not None and job.get(JobField.STATUS) in RESUMABLE_STATUSES
 
     def _resumable(self, article: Article, client) -> bool:
         """GPU 上那個工作做完了或還在跑嗎？不必等到「卡住」的時間才接回去。"""
@@ -376,6 +500,28 @@ class Command(BaseCommand):
         self.stdout.write("  影片頁 /videos")
         if article.source_note:
             self.stdout.write(f"  來源註記：{article.source_note}")
+        self._speaker_sheet(article)
+
+    def _speaker_sheet(self, article: Article) -> None:
+        """多人影片做完：印說話者對照表（含 GPU 的警告）和下一步。單人影片沒有說話者，什麼都不印。"""
+        lines = sheet_lines(article)
+        if not lines:
+            return
+        self.stdout.write("")
+        for line in lines:
+            self.stdout.write(line)
+        self.stdout.write("")
+        for line in next_step_lines(article):
+            self.stdout.write(line)
+
+
+def _mode_text(count: int | None) -> str:
+    """說話者模式的白話：None＝自動、1＝單人、其他＝固定人數。"""
+    if count is None:
+        return "自動區分說話的人（人數由 GPU 判斷）"
+    if count == 1:
+        return "只有一個人（--speakers 1，跳過說話者區分）"
+    return f"固定 {count} 位說話者（--speakers {count}）"
 
 
 def _clock(seconds: int) -> str:

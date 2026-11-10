@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from datetime import date as date_type
 from datetime import datetime
-from typing import Any, Literal
+from typing import Literal
 from urllib.parse import quote
 
 from django.db.models import Max, Q
@@ -15,6 +15,7 @@ from ninja import NinjaAPI, Query, Schema
 from . import bill_topics, chamber, followups, profiles, topics
 from .models import (COUNCIL_SOURCES, Article, ArticleSource, ArticleStatus, BillTopicEvaluation,
                      FollowUpEvaluation, Membership, Person, ProfileStat, Session, TopicEvaluation)
+from .speakers import diarization_view, point_views, render_placeholders, speaker_views
 
 api = NinjaAPI(title="議會質詢摘要 API", version="1.0", urls_namespace="news")
 
@@ -31,6 +32,14 @@ _MAX_PAGE_SIZE = 50
 _MAX_PAGE = 10_000
 
 
+class PointOut(Schema):
+    """多人影片一頁裡的一個重點：誰說的（display 已經是名字或中性標籤）、在影片的第幾秒、說了什麼。"""
+    speaker: str
+    display: str
+    start: float
+    text: str
+
+
 class SlideOut(Schema):
     index: int
     title: str
@@ -38,6 +47,8 @@ class SlideOut(Schema):
     detail: str
     timestamp: float
     image_url: str | None
+    # 只有多人影片有；議會與單人影片是空清單
+    points: list[PointOut] = []
 
 
 class LawSourceOut(Schema):
@@ -89,14 +100,46 @@ class ArticleCardOut(Schema):
     slide_count: int
 
 
+class VideoSpeakerOut(Schema):
+    """多人影片裡的一位說話者。
+
+    不叫 SpeakerOut：那個名字已經是 /speakers（發言者清單）的回應。
+    display 是版面上實際顯示的字：操作者取的名字，沒有就是 GPU 給的中性標籤（「發言者 A」）；
+    被併掉的編號跟著併進去的那位走。basis 是 operator 才代表名字有人確認過，none 代表還只是中性標籤。
+    """
+    id: str
+    label: str
+    name: str
+    role: str
+    display: str
+    # participant＝主要發言者；minor＝只講了幾句的其他聲音
+    kind: str
+    seconds: float
+    turns: int
+    # none＝沒有人確認過身分；operator＝操作者用 label_video 設定的
+    basis: str
+    flags: list[str]
+
+
+class DiarizationOut(Schema):
+    """說話者區分的結果摘要（給網頁顯示「區分可能不準」的提示）。"""
+    # ok 或 warn
+    status: str
+    warnings: list[str]
+    requested_speakers: int | None
+    found_speakers: int
+
+
 class ArticleDetailOut(ArticleCardOut):
     source_note: str
     transcript_text: str
     # 沒有摘要卡就是 null：前端退回只用導言的版面
     brief: BriefOut | None
     slides: list[SlideOut]
-    # 影片裡的講者（YouTube 影片第二部分才會有內容）；議會的文章與還沒區分講者的影片是空清單
-    speakers: list[Any] = []
+    # 影片裡的說話者（多人影片才有）；議會的文章與單人影片是空清單
+    speakers: list[VideoSpeakerOut] = []
+    # 說話者區分的結果；議會的文章與單人影片是 null
+    diarization: DiarizationOut | None = None
 
 
 class ArticleListOut(Schema):
@@ -411,21 +454,34 @@ def list_articles(request, date: date_type | None = None, speaker: str | None = 
 
 @api.get("/articles/{slug}", response=ArticleDetailOut)
 def article_detail(request, slug: str) -> dict:
+    """一篇文章。多人影片（有說話者清單的）在這裡把文字裡的 [[Sn]] 換成名字：
+
+    資料庫裡存的永遠是 [[Sn]]，名字只在讀取時換——操作者用 label_video 取名、併人之後不必重跑 GPU。
+    議會的文章與單人影片沒有說話者清單，文字原封不動（逐位元組跟以前一樣），只多了中性的預設值
+    （speakers: []、diarization: null、每頁 points: []）。
+    """
     article = get_object_or_404(
         Article.objects.prefetch_related("slides"), slug=slug, status=ArticleStatus.READY)
     data = _card(article)
+    roster = article.structured_speakers
+
+    def shown(text: str) -> str:
+        return render_placeholders(text, roster) if roster else text
+
     data.update({
         "source_note": article.source_note,
-        "transcript_text": article.transcript_text,
+        "transcript_text": shown(article.transcript_text),
         "brief": article.brief,
-        "speakers": list(article.speakers or []),
+        "speakers": speaker_views(roster),
+        "diarization": diarization_view(article.diarization) if roster else None,
         "slides": [{
             "index": s.index,
             "title": s.title,
-            "bullets": list(s.bullets or []),
-            "detail": s.detail,
+            "bullets": [shown(b) for b in s.bullets or []],
+            "detail": shown(s.detail),
             "timestamp": s.timestamp,
             "image_url": s.image.url if s.image else None,
+            "points": point_views(s.points, roster) if roster else [],
         } for s in article.slides.all()],
     })
     return data
