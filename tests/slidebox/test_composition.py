@@ -105,6 +105,98 @@ def test_the_pipeline_has_a_rewriter_wired_in():
     assert isinstance(usecase._rewriter, CurrentSettingsSlideRewriter)
 
 
+def test_the_forwarding_conversation_summarizer_takes_exactly_what_the_port_declares():
+    """攔的 bug：port 的參數多一個，轉發層沒跟上——要到第一個窗送出去才炸 TypeError，
+    而那時整份語音辨識與說話者區分已經做完了。Ollama 那一層也一樣。"""
+    from slidebox.composition import CurrentSettingsConversationSummarizer
+    from slidebox.domain.ports import ConversationSummarizer
+    from slidebox.infrastructure.ollama_conversation import OllamaConversationSummarizer
+
+    port = list(inspect.signature(ConversationSummarizer.summarize_window).parameters)
+    assert list(inspect.signature(CurrentSettingsConversationSummarizer.summarize_window).parameters) == port
+    assert list(inspect.signature(OllamaConversationSummarizer.summarize_window).parameters) == port
+
+
+def test_the_multi_speaker_adapters_take_exactly_what_their_ports_declare():
+    from slidebox.domain.ports import SpeechDiarizer, WordTranscriber
+    from slidebox.infrastructure.pyannote_diarizer import PyannoteSpeakerDiarizer
+    from slidebox.infrastructure.whisper_transcriber import FasterWhisperTranscriber
+
+    def names(function):
+        return list(inspect.signature(function).parameters)
+
+    assert names(FasterWhisperTranscriber.transcribe_words) == names(WordTranscriber.transcribe_words)
+    assert names(PyannoteSpeakerDiarizer.diarize) == names(SpeechDiarizer.diarize)
+    assert names(PyannoteSpeakerDiarizer.available) == names(SpeechDiarizer.available)
+    for attribute in ("engine", "version", "model", "fingerprint"):
+        assert isinstance(getattr(PyannoteSpeakerDiarizer, attribute), property)
+
+
+def test_the_conversation_forwarder_uses_the_settings_of_the_moment_and_passes_everything_on():
+    from slidebox.composition import CurrentSettingsConversationSummarizer
+
+    built: list[tuple] = []
+    received: list[tuple] = []
+
+    class FakeImpl:
+        def __init__(self, host, model, num_ctx):
+            built.append((host, model, num_ctx))
+
+        def summarize_window(self, *args):
+            received.append(args)
+            return ("slides",)
+
+    settings = Settings(output_dir="OUT", model="a")
+    forwarder = CurrentSettingsConversationSummarizer(settings, factory=FakeImpl)
+    settings.model = "b"                                        # 建好之後換模型：下一個窗就要用新的
+    progress, cancelled = (lambda frac, status: None), (lambda: False)
+
+    assert forwarder.summarize_window("[T3] S1：甲", 3, 7, 1, 2, "上次的問題", progress, cancelled) == ("slides",)
+    assert built == [(settings.ollama_host, "b", settings.num_ctx)]
+    assert received == [("[T3] S1：甲", 3, 7, 1, 2, "上次的問題", progress, cancelled)]
+
+
+def test_the_pipeline_has_the_multi_speaker_parts_wired_in():
+    from slidebox.composition import CurrentSettingsConversationSummarizer, build_usecase
+    from slidebox.infrastructure.pyannote_diarizer import PyannoteSpeakerDiarizer
+    from slidebox.usecases.conversation import DEFAULT_CHUNK_CHARS
+
+    usecase = build_usecase(Settings(output_dir="OUT"))
+    assert isinstance(usecase._diarizer, PyannoteSpeakerDiarizer)
+    assert isinstance(usecase._conversation, CurrentSettingsConversationSummarizer)
+    assert usecase._chunk_chars == DEFAULT_CHUNK_CHARS
+    # 單人與多人共用同一個 Whisper：模型約 40 秒才載入完，載兩份是浪費顯示卡記憶體
+    assert usecase._word_transcriber is usecase._transcriber
+
+
+def test_the_chunk_size_and_the_diarizer_can_be_injected():
+    from slidebox.composition import build_usecase
+
+    sentinel = object()
+    usecase = build_usecase(Settings(output_dir="OUT"), diarizer=sentinel, chunk_chars=3000)
+    assert usecase._diarizer is sentinel and usecase._chunk_chars == 3000
+
+
+def test_building_the_pipeline_does_not_import_the_heavy_diarization_libraries():
+    """攔的 bug：組裝時就 import torch／pyannote——Pi 與沒裝 diarization 群組的 GPU 映像會連啟動都失敗，
+    而且單人工作也要多等幾十秒。"""
+    import subprocess
+    import sys
+
+    code = (
+        "import sys;"
+        "sys.path.insert(0, 'src');"
+        "sys.modules['torch'] = None; sys.modules['pyannote'] = None; sys.modules['pyannote.audio'] = None;"
+        "from slidebox.composition import build_usecase;"
+        "from slidebox.domain.entities import Settings;"
+        "build_usecase(Settings(output_dir='OUT'));"
+        "print('ok')"
+    )
+    result = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, cwd=_repo_root())
+    assert result.returncode == 0, result.stderr[-800:]
+    assert "ok" in result.stdout
+
+
 def test_a_new_taipei_url_reaches_the_new_taipei_gateways():
     """攔的 bug：漏接或接反新北分支時網址會被送進 yt-dlp，錯誤訊息是無關的
     「Unsupported URL」，而且字幕、截圖、音訊三條路要各自接對才會動。"""

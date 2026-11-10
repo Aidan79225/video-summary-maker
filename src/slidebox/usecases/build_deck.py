@@ -11,11 +11,22 @@ import os
 import re
 from dataclasses import replace
 
-from ..domain.entities import Brief, Deck, DeckResult, SectionClips, Settings, Slide, Transcript
+from ..domain.entities import (
+    Brief,
+    Deck,
+    DeckResult,
+    DiarizerOutput,
+    SectionClips,
+    Settings,
+    Slide,
+    Transcript,
+    WordTranscript,
+)
 from ..domain.errors import (
     DiarizationUnavailable,
     NoSubtitlesAvailable,
     OperationCancelled,
+    SpeechRecognitionFailed,
     SubtitleDownloadFailed,
     SubtitleTrackFailed,
     SummarizerOutputInvalid,
@@ -26,6 +37,7 @@ from ..domain.ports import (
     BriefWriter,
     CancelCheck,
     Checkpoints,
+    ConversationSummarizer,
     DeckRenderer,
     FrameExtractor,
     ProgressCallback,
@@ -35,6 +47,7 @@ from ..domain.ports import (
     SlideRewriter,
     Summarizer,
     VideoSectionGateway,
+    WordTranscriber,
 )
 from .brief import ground_brief, validate_brief
 from .chapters import (
@@ -44,7 +57,26 @@ from .chapters import (
     full_transcript,
     validate_slides,
 )
+from .conversation import DEFAULT_CHUNK_CHARS, allocate_slides, chunk_turns, format_window
+from .diarized_pipeline import (
+    assemble,
+    check_reliability,
+    conversation_fingerprint,
+    diarization_fingerprint,
+    source_note,
+    summarize_windows,
+    totals,
+    words_fingerprint,
+)
 from .naming import deck_folder_name
+from .speakers import (
+    assign_speakers,
+    build_turns,
+    diarization_report,
+    normalize_turns,
+    summarize_speakers,
+    transcript_lines,
+)
 
 # 詳細模式下每頁輸出約略會用掉的字元（150～300 字的敘述加上標題條列，
 # 取上緣）。輸出與提示共用 num_ctx，所以要從預算裡先扣掉。
@@ -88,9 +120,16 @@ class BuildDeckUseCase:
         brief_writer: BriefWriter | None = None,
         rewriter: SlideRewriter | None = None,
         checkpoints: Checkpoints | None = None,
+        word_transcriber: WordTranscriber | None = None,
+        conversation: ConversationSummarizer | None = None,
+        chunk_chars: int = DEFAULT_CHUNK_CHARS,
     ):
         # 做完的貴步驟存起來，停了可以接著做；None 時每次都從頭來（測試多半這樣用）
         self._checkpoints = checkpoints
+        # 多人模式（speaker_mode="diarize"）才用到這三個；單人與議會的路徑碰都不碰
+        self._word_transcriber = word_transcriber
+        self._conversation = conversation
+        self._chunk_chars = chunk_chars
         self._audio = audio
         self._transcriber = transcriber
         self._diarizer = diarizer
@@ -116,12 +155,17 @@ class BuildDeckUseCase:
         有字幕的來源用不到。
 
         speaker_mode："single"（預設，議會與 --speakers 1）走下面這條字幕／語音摘要的路徑，
-        行為與多人模式加進來之前完全相同；"diarize" 是另一條路徑，不經過這裡。
+        行為與多人模式加進來之前完全相同；"diarize" 走 _execute_diarized，不經過下面的單人路徑。
+        speaker_count：只有 diarize 用得到——None 是自動判斷人數，否則是固定的人數（2 以上）。
         """
+        if speaker_mode == "diarize":
+            return self._execute_diarized(
+                url, settings, progress, is_cancelled, speech_hint, speaker_count)
         if speaker_mode != "single":
-            # 多人模式的流程還沒接上。在那之前一律拒絕：絕不能默默走下面的單人路徑，
-            # 那會把多位說話者全寫成「講者」——寧可失敗，也不能寫錯是誰說的。
-            raise DiarizationUnavailable("多人模式尚未實作；不會退回單人的寫法，工作中止")
+            # 不認得的模式一律拒絕：絕不能默默走下面的單人路徑，那會把多位說話者全寫成「講者」——
+            # 寧可失敗，也不能寫錯是誰說的。
+            raise DiarizationUnavailable(
+                f"不支援的說話者模式「{speaker_mode}」，只有 single 與 diarize；不會退回單人的寫法，工作中止")
         cb: ProgressCallback = progress or (lambda frac, status: None)
         cancelled: CancelCheck = is_cancelled or (lambda: False)
 
@@ -182,9 +226,118 @@ class BuildDeckUseCase:
                     # 放棄的卡片（None）不存：下次再試一次
                     ck.save_brief(settings.output_dir, url, brief_fp, brief)
 
-        out_dir = os.path.join(
-            settings.output_dir, deck_folder_name(transcript.title, transcript.video_id)
-        )
+        return self._publish(
+            url, settings, cb, check, cancelled, video_title=transcript.title,
+            video_id=transcript.video_id, slides=slides, note=note,
+            transcript_text=transcript_text, brief=brief)
+
+    def _execute_diarized(
+        self,
+        url: str,
+        settings: Settings,
+        progress: ProgressCallback | None,
+        is_cancelled: CancelCheck | None,
+        speech_hint: str | None,
+        speaker_count: int | None,
+    ) -> DeckResult:
+        """多人模式（speaker_mode="diarize"）：只靠聲音，不看字幕。
+
+        下載音訊（一次）→ 說話者區分 → 語音辨識（每個字帶時間）→ 把字對到說話者 → 分段 →
+        一個窗一個窗地請模型寫「引用第幾段＋沒有主詞的重點」→ 程式逐點檢查、說話者由被引用的
+        那一段查出來 → 排成投影片 → 與單人模式共用的收尾（片段、截圖、HTML）。
+
+        鐵則：模型不決定誰說了什麼，也看不到姓名；不可靠就失敗（AttributionUnreliable、
+        DiarizationUnavailable…），**絕不退回單人的「講者」寫法**，也絕不發佈。不寫質詢卡
+        （brief=None）、不用第一人稱改寫（檢查已經禁止第一人稱）。
+        """
+        cb: ProgressCallback = progress or (lambda frac, status: None)
+        cancelled: CancelCheck = is_cancelled or (lambda: False)
+
+        def check() -> None:
+            if cancelled():
+                raise OperationCancelled()
+
+        if speaker_count is not None and (not isinstance(speaker_count, int) or speaker_count < 2):
+            raise ValueError("多人模式的 speaker_count 要不指定（自動判斷人數），或是 2 以上的整數")
+        parts = (self._audio, self._diarizer, self._word_transcriber, self._conversation)
+        if any(part is None for part in parts):
+            raise DiarizationUnavailable(
+                "多人模式需要音訊下載、說話者區分、語音辨識與對談摘要，這個組裝沒有提供其中一項；工作中止")
+        # 先問可不可以（便宜，不載入模型）：不行就在下載任何東西之前失敗
+        usable, reason = self._diarizer.available()
+        if not usable:
+            raise DiarizationUnavailable(reason or "說話者區分目前無法使用")
+
+        cb(0.0, "多人模式：說話者由聲音區分…")
+        ck = self._checkpoints
+        diarization_fp = diarization_fingerprint(self._diarizer.fingerprint, speaker_count)
+        words_fp = words_fingerprint(settings.whisper_model, speech_hint)
+        diarized, words = self._listen(
+            url, settings, cb, check, cancelled, speech_hint, speaker_count, diarization_fp, words_fp,
+            ck.load_diarization(settings.output_dir, url, diarization_fp) if ck else None,
+            ck.load_words(settings.output_dir, url, words_fp) if ck else None)
+
+        check()
+        cb(_P_SUBTITLES, "對齊說話者…")
+        turns = build_turns(assign_speakers(words.words, normalize_turns(diarized.turns)))
+        speakers = summarize_speakers(turns)
+        # 明顯不可靠（要求 2 人卻只找到 1 人、發言者超過 8 人、沒有任何發言者）就在這裡 raise：
+        # 還沒花任何一次模型呼叫
+        report = diarization_report(
+            turns, speakers, engine=self._diarizer.engine, version=self._diarizer.version,
+            model=self._diarizer.model, fingerprint=self._diarizer.fingerprint,
+            requested_speakers=speaker_count, overlap_seconds=diarized.overlap_seconds)
+
+        allocations = allocate_slides(
+            chunk_turns(turns, speakers, self._chunk_chars), settings.min_slides, settings.max_slides)
+        plan = [(a.min_slides, a.max_slides, format_window(a.window, speakers)) for a in allocations]
+        conversation_fp = conversation_fingerprint(settings, self._chunk_chars, plan)
+        saved = ck.load_conversation(settings.output_dir, url, conversation_fp) if ck else None
+        if saved is not None:
+            slides, proposed = saved
+            cb(_P_SUMMARY, "沿用上次整理好的對談重點")
+        else:
+            outcomes = summarize_windows(
+                self._conversation, allocations, turns, speakers,
+                self._scaled(cb, _P_SUBTITLES, _P_SUMMARY), check, cancelled)
+            check_reliability(outcomes)
+            slides = assemble(outcomes)
+            proposed = totals(outcomes)[0]
+            trimmed = sum(o.trimmed_pages for o in outcomes)
+            if trimmed:
+                cb(None, f"有 {trimmed} 頁超出頁數上限，只留前面的頁")
+            if ck:
+                ck.save_conversation(settings.output_dir, url, conversation_fp, slides, proposed)
+        report = replace(report, proposed_points=proposed,
+                         kept_points=sum(len(s.points) for s in slides))
+
+        return self._publish(
+            url, settings, cb, check, cancelled, video_title=words.title, video_id=words.video_id,
+            slides=slides, note=source_note(report), transcript_text=transcript_lines(turns),
+            brief=None, extra={"speaker_mode": "diarize", "speakers": speakers, "diarization": report})
+
+    def _publish(
+        self,
+        url: str,
+        settings: Settings,
+        cb: ProgressCallback,
+        check,
+        cancelled: CancelCheck,
+        *,
+        video_title: str,
+        video_id: str,
+        slides: tuple[Slide, ...],
+        note: str,
+        transcript_text: str,
+        brief: Brief | None,
+        extra: dict | None = None,
+    ) -> DeckResult:
+        """單人與多人共用的收尾：下載片段 → 抽幀 → 組成 Deck → 輸出 HTML → 清存檔 → 完成訊息。
+
+        extra 是多人模式才有的 Deck 欄位（speaker_mode、speakers、diarization）；單人不傳，
+        Deck 就維持預設值，與多人模式加進來之前完全相同。
+        """
+        out_dir = os.path.join(settings.output_dir, deck_folder_name(video_title, video_id))
         clips_dir = os.path.join(out_dir, "_clips")
         try:
             check()
@@ -203,21 +356,86 @@ class BuildDeckUseCase:
 
         check()
         cb(_P_FRAMES, "產生 HTML…")
-        deck = Deck(source_url=url, video_title=transcript.title, slides=slides,
-                    source_note=note, transcript_text=transcript_text, brief=brief)
+        deck = Deck(source_url=url, video_title=video_title, slides=slides,
+                    source_note=note, transcript_text=transcript_text, brief=brief, **(extra or {}))
         html_path = os.path.join(out_dir, "slides.html")
         self._renderer.render(deck, html_path)
 
         result = DeckResult(deck=deck, html_path=html_path, screenshot_problem=screenshot_problem)
-        if ck:
+        if self._checkpoints:
             # 只在整份成功之後清：失敗或取消時留著，下次接著做
-            ck.clear(settings.output_dir, url)
+            self._checkpoints.clear(settings.output_dir, url)
         # 截圖失敗的原因與來源註記都放進最後一則狀態：中途的提示會被後續狀態蓋掉
         done = f"完成，共 {len(slides)} 頁{result.missing_images_note}"
         cb(1.0, done + (f"（{note}）" if note else ""))
         return result
 
     # --- 內部 ---
+
+    def _listen(
+        self,
+        url: str,
+        settings: Settings,
+        cb: ProgressCallback,
+        check,
+        cancelled: CancelCheck,
+        speech_hint: str | None,
+        speaker_count: int | None,
+        diarization_fp: str,
+        words_fp: str,
+        diarized: DiarizerOutput | None,
+        words: WordTranscript | None,
+    ) -> tuple[DiarizerOutput, WordTranscript]:
+        """多人模式的「聽」：說話者區分與語音辨識（每個字帶時間），共用同一份音訊、只下載一次。
+
+        diarized／words 是上一次存下來的（沒有就是 None）；兩份都有就完全不下載音訊。做完的
+        每一份各自立刻存檔：下一步失敗或被取消時，這一份不必再做。音訊在 finally 裡清掉。
+        沒偵測到語音是失敗，不存、不發佈。
+        """
+        if diarized is not None:
+            cb(None, "沿用上次的說話者區分")
+        if words is not None:
+            cb(None, "沿用上次的語音辨識")
+        if diarized is not None and words is not None:
+            return diarized, words
+
+        ck = self._checkpoints
+        audio_dir = os.path.join(settings.output_dir, ".slidebox_audio_tmp")
+
+        def speech_cb(frac: float | None, status: str) -> None:
+            # 同單人的語音路徑：進度條顯示忙碌，百分比寫進文字，不讓條子倒退
+            cb(None, status if frac is None else f"{status} {frac:.0%}")
+
+        try:
+            check()
+            cb(None, "下載音訊…")
+            # 先清空：上一次若在 finally 之前就中斷，留下的 .part 會被 yt-dlp 續傳
+            self._audio.cleanup(audio_dir)
+            try:
+                clip = self._audio.download_audio(url, audio_dir, speech_cb, cancelled)
+            except NoSubtitlesAvailable as e:
+                # 音訊 gateway 的失敗訊息是為「沒有字幕之後」寫的；多人模式根本沒找過字幕
+                raise SpeechRecognitionFailed(_speech_reason(e)) from e
+            check()
+            if diarized is None:
+                diarized = self._diarizer.diarize(
+                    clip.path, clip.duration, speaker_count, speech_cb, cancelled)
+                if ck:
+                    ck.save_diarization(settings.output_dir, url, diarization_fp, diarized)
+                check()
+            if words is None:
+                spoken, language = self._word_transcriber.transcribe_words(
+                    clip.path, clip.duration, speech_cb, cancelled, speech_hint)
+                if not spoken:
+                    raise SpeechRecognitionFailed("沒有偵測到語音，無法區分誰說了什麼")
+                words = WordTranscript(video_id=clip.video_id, title=clip.title,
+                                       duration=clip.duration, language=language,
+                                       words=tuple(spoken))
+                if ck:
+                    ck.save_words(settings.output_dir, url, words_fp, words)
+        finally:
+            self._audio.cleanup(audio_dir)
+        return diarized, words
 
     def _fetch_transcript(
         self,
