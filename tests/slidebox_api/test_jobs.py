@@ -4,7 +4,7 @@ from __future__ import annotations
 import pytest
 
 from slidebox.domain.entities import FollowUpPair, TopicLabel
-from slidebox_api.jobs import JobKind, JobStatus, JobStore
+from slidebox_api.jobs import Job, JobKind, JobStatus, JobStore, SpeakerMode
 
 
 def _store() -> JobStore:
@@ -278,3 +278,11 @@ def test_every_kind_of_job_is_capped(kind):
     for _ in range(5):
         _finished(store, store.submit("u", kind=kind, followup=PAIR))
     assert store.get(first.id) is None
+
+
+def test_a_job_built_without_a_mode_is_a_single_speaker_job():
+    """攔的 bug：Job 的預設值改成 diarize，沒帶欄位的呼叫端（議會、新聞服務）就會悄悄開始跑說話者區分。"""
+    job = Job(id="x", url="u")
+    assert job.speaker_mode == SpeakerMode.SINGLE and job.speaker_count is None
+    submitted = JobStore().submit("u")
+    assert submitted.speaker_mode == SpeakerMode.SINGLE and submitted.speaker_count is None
