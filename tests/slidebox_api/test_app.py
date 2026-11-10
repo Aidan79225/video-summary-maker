@@ -72,7 +72,8 @@ def test_capabilities_reports_when_diarization_is_not_configured(kit):
     body = client.get("/capabilities").json()
 
     assert body == {"speaker_diarization": False,
-                    "reason": "GPU 尚未提供多人說話者區分能力"}
+                    "reason": "GPU 尚未提供多人說話者區分能力",
+                    "speaker_contract": 1}
 
 
 def test_diarization_capability_and_fixed_speaker_count_are_forwarded():

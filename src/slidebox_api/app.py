@@ -19,6 +19,7 @@ from pydantic import BaseModel, Field
 from slidebox.domain.entities import FollowUpPair, TopicLabel
 
 from .jobs import Job, JobKind, JobStore, SpeakerMode
+from .payload import SPEAKER_CONTRACT
 from .runner import JobWorker
 
 MAX_SLIDES = 50
@@ -99,6 +100,8 @@ class HealthView(BaseModel):
 class CapabilitiesView(BaseModel):
     speaker_diarization: bool
     reason: str = ""
+    # 結果契約的版本：新聞服務只認它懂的版本，不一致就不派多人的工作（寧可拒絕，不猜）
+    speaker_contract: int = SPEAKER_CONTRACT
 
 
 def _view(job: Job, include_result: bool = True) -> JobView:
@@ -153,7 +156,13 @@ def create_app(
     def capabilities() -> CapabilitiesView:
         if probe_speaker_diarization is None:
             return CapabilitiesView(speaker_diarization=False, reason="GPU 尚未提供多人說話者區分能力")
-        available, reason = probe_speaker_diarization()
+        try:
+            available, reason = probe_speaker_diarization()
+        except Exception as e:  # noqa: BLE001 檢查壞掉也要答得出「不行」與原因，不是 500
+            # 只講例外的種類，不帶訊息：訊息裡可能有路徑或 token
+            return CapabilitiesView(
+                speaker_diarization=False,
+                reason=f"檢查多人說話者區分能力時出錯（{type(e).__name__}）")
         return CapabilitiesView(speaker_diarization=available, reason=reason)
 
     @app.post("/jobs", status_code=202, dependencies=[Depends(require_key)])
@@ -213,6 +222,14 @@ def _validate_deck(request: JobRequest) -> None:
         raise HTTPException(status_code=422, detail="diarize 模式的 speaker_count 要省略或至少是 2")
 
 
+def _reject_speaker_fields(request: JobRequest) -> None:
+    """說話者模式只屬於摘要工作。分類與追問判斷帶了就是送錯地方：默默忽略的話，
+    送的人會以為那個工作是照多人模式做的。"""
+    if request.speaker_mode != SpeakerMode.SINGLE or request.speaker_count is not None:
+        raise HTTPException(
+            status_code=422, detail="speaker_mode 與 speaker_count 只有摘要工作可以指定")
+
+
 def _validate_url(url: str) -> None:
     # 這個網址會被交給 yt-dlp。限定 scheme 才不會讓 file:// 之類的東西
     # 變成讀取 GPU 主機本機檔案的管道。
@@ -228,6 +245,7 @@ def _validate_topic(request: JobRequest) -> None:
     """
     if request.url:
         _validate_url(request.url)
+    _reject_speaker_fields(request)
     if not request.text.strip():
         raise HTTPException(status_code=422, detail="分類工作必須帶 text")
     labels = request.labels
@@ -263,6 +281,7 @@ def _validate_followup(request: JobRequest) -> None:
     """
     if request.url:
         _validate_url(request.url)
+    _reject_speaker_fields(request)
     if not request.request.strip():
         raise HTTPException(status_code=422, detail="追問工作必須帶 request")
     if not request.card.strip():

@@ -4,8 +4,10 @@ from __future__ import annotations
 import base64
 import html
 import os
+from collections.abc import Callable
 
 from ..domain.entities import Brief, Deck, Slide
+from ..usecases.conversation import render_placeholders
 
 _CSS = """
 :root { color-scheme: light dark; }
@@ -80,13 +82,18 @@ def _data_uri(path: str | None) -> str | None:
     return f"data:image/webp;base64,{payload}"
 
 
-def _render_slide(slide: Slide) -> str:
+def _as_written(text: str) -> str:
+    return text
+
+
+def _render_slide(slide: Slide, show: Callable[[str], str] = _as_written) -> str:
     # 標題與條列來自 LLM，而 LLM 讀的是任何人都能上傳的 YouTube 字幕。
     # 不跳脫等於把第三方內容當程式碼執行。
+    # show 是「給人看的樣子」：多人模式把 [[Sn]] 換成標籤，要在跳脫之前換，換進去的字也一併跳脫。
     title = html.escape(slide.title)
-    bullets = "".join(f"<li>{html.escape(b)}</li>" for b in slide.bullets)
+    bullets = "".join(f"<li>{html.escape(show(b))}</li>" for b in slide.bullets)
     # detail 同樣來自模型讀的第三方字幕，一樣要跳脫
-    detail = (f'<p class="detail">{html.escape(slide.detail)}</p>'
+    detail = (f'<p class="detail">{html.escape(show(slide.detail))}</p>'
               if slide.detail.strip() else "")
     uri = _data_uri(slide.image_path)
     image = (
@@ -134,12 +141,17 @@ class HtmlDeckRenderer:
         # 內容來源（例如「由語音辨識產生」）跟著成品走——HTML 會被分享與重看
         source = (f'<p class="source">{html.escape(deck.source_note)}</p>'
                   if deck.source_note else "")
-        body = _render_brief(deck.brief) + "".join(_render_slide(s) for s in deck.slides)
+        # 多人模式的文字裡是 [[Sn]] 代號（API 的成品也是這樣交出去）；桌面程式沒有操作者填的名字，
+        # 只顯示程式給的標籤。單人與議會的文字可能剛好含有 [[S1]]，那是內容，一個字都不動。
+        diarized = deck.speaker_mode == "diarize"
+        show = (lambda text: render_placeholders(text, deck.speakers)) if diarized else _as_written
+        heading = "完整逐字稿（語音辨識，依說話者分段）" if diarized else "完整逐字稿（字幕原文）"
+        body = _render_brief(deck.brief) + "".join(_render_slide(s, show) for s in deck.slides)
         # 逐字稿預設收合：它比投影片長一個數量級，攤開就把成品推到螢幕外。
         # 用 <pre> 保留換行——每行開頭的時間是使用者找位置的唯一線索。
         transcript = (
-            '<details class="transcript"><summary>完整逐字稿（字幕原文）</summary>'
-            f"<pre>{html.escape(deck.transcript_text)}</pre></details>"
+            f'<details class="transcript"><summary>{heading}</summary>'
+            f"<pre>{html.escape(show(deck.transcript_text))}</pre></details>"
             if deck.transcript_text.strip() else ""
         )
         document = (

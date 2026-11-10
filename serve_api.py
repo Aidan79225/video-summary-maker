@@ -13,6 +13,14 @@
     SLIDEBOX_MODEL           Ollama 模型（摘要、議題分類與追問判斷共用），預設同桌面 app
     SLIDEBOX_OLLAMA_HOST     Ollama 位址，預設 http://localhost:11434
     SLIDEBOX_WHISPER_DEVICE  語音辨識裝置：auto（預設）／cpu／cuda
+
+多人說話者區分（speaker_mode=diarize）用的設定，細節見 README 的「多人說話者模式」：
+
+    HUGGINGFACE_TOKEN             Hugging Face 的 token（唯讀即可）；沒設就不提供多人模式
+    SLIDEBOX_DIARIZER             設成 off 可關掉多人模式（預設 pyannote）
+    SLIDEBOX_DIARIZATION_DEVICE   說話者區分的裝置：auto（預設）／cpu／cuda；
+                                  驅動與映像的 CUDA 版本不合時用 cpu
+    SLIDEBOX_CHUNK_CHARS          多人對談切窗的字數預算（1000–20000，預設 6000）
 """
 import os
 import sys
@@ -29,6 +37,7 @@ from slidebox.infrastructure.ollama_summarizer import (
     OllamaFollowUpJudge,
     OllamaTopicClassifier,
 )
+from slidebox.usecases.conversation import CHUNK_CHARS_ENV, parse_chunk_chars
 from slidebox_api.app import create_app
 from slidebox_api.jobs import JobKind, JobStore
 from slidebox_api.runner import (
@@ -83,7 +92,9 @@ def build_executor(settings: Settings) -> ByKindExecutor:
     # use case 只建一次：它會連帶建立語音辨識器，模型載入要 40 秒並佔著
     # VRAM，每個工作重建一次等於每次重付。
     diarizer = build_diarizer()
-    deck = SlideboxExecutor(build_usecase(settings, diarizer=diarizer), settings)
+    chunk_chars = parse_chunk_chars(os.environ.get(CHUNK_CHARS_ENV))
+    deck = SlideboxExecutor(
+        build_usecase(settings, diarizer=diarizer, chunk_chars=chunk_chars), settings)
     # 分類器的 host、num_ctx 與預設模型在這裡就取值定下來：SlideboxExecutor 會
     # 把摘要工作指定的模型寫進共用的 settings，分類不能跟著它變。num_ctx 跟
     # 摘要同一個，Ollama 才不會在兩種工作之間重新載入模型。

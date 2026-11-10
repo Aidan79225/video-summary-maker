@@ -1,0 +1,182 @@
+{
+  "_comment": "Contract v1 between the GPU summary API (src/slidebox_api) and the Pi news service (services/news). Canonical example. GPU side: deck_payload() of a fixed Deck must reproduce `result` exactly. Pi side: save_result()/check_speaker_result() must accept `result`; the API substitution tests use it too. Keep the two copies byte-identical.",
+  "capabilities": {
+    "speaker_diarization": true,
+    "reason": "",
+    "speaker_contract": 1
+  },
+  "request": {
+    "url": "https://www.youtube.com/watch?v=abcdefghijk",
+    "detailed": true,
+    "min_slides": 2,
+    "max_slides": 6,
+    "speech_hint": "示範頻道 少子化對談",
+    "speaker_mode": "diarize",
+    "speaker_count": null
+  },
+  "result": {
+    "video_id": "abcdefghijk",
+    "source_url": "https://www.youtube.com/watch?v=abcdefghijk",
+    "title": "少子化對談",
+    "source_note": "由語音辨識產生，說話者由聲音自動區分；標籤可能有誤，未經人工確認",
+    "transcript_text": "00:05 [[S1]]：今天我們來談少子化，先請教您怎麼看目前的補助政策？\n00:14 [[S2]]：現金補助有幫助，但不能只靠現金，托育資源更重要。\n00:31 [[S1]]：那公共托育現在有什麼不足？\n00:38 [[S2]]：名額不夠，很多家長排不到，排了兩年也沒有消息。\n01:02 [[S3]]：我想補充，我們社區就是這樣。\n01:09 [[S1]]：謝謝，那預算要怎麼編才夠？\n01:16 [[S2]]：至少要把公共托育的名額加倍，還要提高保母的薪資。",
+    "brief": null,
+    "speaker_mode": "diarize",
+    "speakers": [
+      {
+        "id": "S1",
+        "label": "發言者 A",
+        "kind": "participant",
+        "seconds": 301.5,
+        "turns": 41,
+        "first_seen": 5.0,
+        "last_seen": 702.3,
+        "samples": [
+          {
+            "start": 5.0,
+            "text": "今天我們來談少子化，先請教您怎麼看目前的補助政策？"
+          },
+          {
+            "start": 31.0,
+            "text": "那公共托育現在有什麼不足？"
+          },
+          {
+            "start": 69.0,
+            "text": "謝謝，那預算要怎麼編才夠？"
+          }
+        ],
+        "flags": []
+      },
+      {
+        "id": "S2",
+        "label": "發言者 B",
+        "kind": "participant",
+        "seconds": 388.0,
+        "turns": 39,
+        "first_seen": 14.0,
+        "last_seen": 708.9,
+        "samples": [
+          {
+            "start": 14.0,
+            "text": "現金補助有幫助，但不能只靠現金，托育資源更重要。"
+          },
+          {
+            "start": 38.0,
+            "text": "名額不夠，很多家長排不到，排了兩年也沒有消息。"
+          },
+          {
+            "start": 76.0,
+            "text": "至少要把公共托育的名額加倍，還要提高保母的薪資。"
+          }
+        ],
+        "flags": []
+      },
+      {
+        "id": "S3",
+        "label": "其他聲音 1",
+        "kind": "minor",
+        "seconds": 22.4,
+        "turns": 2,
+        "first_seen": 62.0,
+        "last_seen": 410.2,
+        "samples": [
+          {
+            "start": 62.0,
+            "text": "我想補充，我們社區就是這樣。"
+          }
+        ],
+        "flags": []
+      }
+    ],
+    "diarization": {
+      "engine": "pyannote.audio",
+      "version": "4.0.7",
+      "model": "pyannote/speaker-diarization-community-1",
+      "fingerprint": "0123456789abcdef",
+      "status": "ok",
+      "warnings": [],
+      "requested_speakers": null,
+      "found_speakers": 2,
+      "minor_speakers": 1,
+      "speech_seconds": 711.9,
+      "unassigned_ratio": 0.012,
+      "overlap_ratio": 0.031,
+      "proposed_points": 5,
+      "kept_points": 5
+    },
+    "slides": [
+      {
+        "index": 1,
+        "title": "補助政策與托育名額",
+        "bullets": [
+          "[[S1]]：詢問目前補助政策的成效",
+          "[[S2]]：現金補助有幫助，但托育資源更重要",
+          "[[S1]]：追問公共托育現在有什麼不足",
+          "[[S2]]：公共托育名額不夠，家長排了兩年沒有消息"
+        ],
+        "detail": "[[S1]]：詢問目前補助政策的成效。 [[S2]]：現金補助有幫助，但托育資源更重要。 [[S1]]：追問公共托育現在有什麼不足。 [[S2]]：公共托育名額不夠，家長排了兩年沒有消息。",
+        "timestamp": 5.0,
+        "image_base64": null,
+        "image_media_type": null,
+        "points": [
+          {
+            "speaker": "S1",
+            "turn": 0,
+            "start": 5.0,
+            "text": "詢問目前補助政策的成效",
+            "evidence": "先請教您怎麼看目前的補助政策"
+          },
+          {
+            "speaker": "S2",
+            "turn": 1,
+            "start": 14.0,
+            "text": "現金補助有幫助，但托育資源更重要",
+            "evidence": "現金補助有幫助，但不能只靠現金，托育資源更重要"
+          },
+          {
+            "speaker": "S1",
+            "turn": 2,
+            "start": 31.0,
+            "text": "追問公共托育現在有什麼不足",
+            "evidence": "那公共托育現在有什麼不足"
+          },
+          {
+            "speaker": "S2",
+            "turn": 3,
+            "start": 38.0,
+            "text": "公共托育名額不夠，家長排了兩年沒有消息",
+            "evidence": "名額不夠，很多家長排不到，排了兩年也沒有消息"
+          }
+        ]
+      },
+      {
+        "index": 2,
+        "title": "預算怎麼編",
+        "bullets": [
+          "[[S1]]：詢問預算要怎麼編才夠",
+          "[[S2]]：主張把公共托育的名額加倍，並提高保母的薪資"
+        ],
+        "detail": "[[S1]]：詢問預算要怎麼編才夠。 [[S2]]：主張把公共托育的名額加倍，並提高保母的薪資。",
+        "timestamp": 69.0,
+        "image_base64": null,
+        "image_media_type": null,
+        "points": [
+          {
+            "speaker": "S1",
+            "turn": 5,
+            "start": 69.0,
+            "text": "詢問預算要怎麼編才夠",
+            "evidence": "那預算要怎麼編才夠"
+          },
+          {
+            "speaker": "S2",
+            "turn": 6,
+            "start": 76.0,
+            "text": "主張把公共托育的名額加倍，並提高保母的薪資",
+            "evidence": "至少要把公共托育的名額加倍，還要提高保母的薪資"
+          }
+        ]
+      }
+    ]
+  }
+}

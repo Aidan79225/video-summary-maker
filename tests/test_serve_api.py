@@ -59,3 +59,75 @@ def test_a_followup_job_runs_with_the_services_model_host_and_context(tmp_path, 
     assert sent["url"] == "http://gpu:11434/api/chat"
     assert sent["body"]["model"] == "qwen3.5:9b"
     assert sent["body"]["options"]["num_ctx"] == 16384
+
+
+# --- 多人說話者區分的組裝 ---
+
+FAKE_TOKEN = "hf_FAKEtokenForTestsOnly0123456789"
+
+
+@pytest.fixture
+def clean_env(monkeypatch, tmp_path):
+    """服務在組裝時讀環境變數：先清掉開發機上可能有的設定，測試才不看機器。"""
+    for name in ("HUGGINGFACE_TOKEN", "SLIDEBOX_DIARIZER", "SLIDEBOX_DIARIZATION_DEVICE",
+                 "SLIDEBOX_CHUNK_CHARS", "SLIDEBOX_API_KEY"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("SLIDEBOX_API_OUTPUT_DIR", str(tmp_path))
+    return monkeypatch
+
+
+def _deck_usecase(executor):
+    return executor._executors[JobKind.DECK]._usecase
+
+
+def test_the_chunk_size_comes_from_the_environment(tmp_path, clean_env):
+    from slidebox.usecases.conversation import DEFAULT_CHUNK_CHARS
+
+    assert _deck_usecase(serve_api.build_executor(_settings(tmp_path)))._chunk_chars == DEFAULT_CHUNK_CHARS
+    clean_env.setenv("SLIDEBOX_CHUNK_CHARS", "3000")
+    assert _deck_usecase(serve_api.build_executor(_settings(tmp_path)))._chunk_chars == 3000
+
+
+@pytest.mark.parametrize("raw", ["abc", "", "999", "20001", "-5", "3000.5"])
+def test_a_chunk_size_that_makes_no_sense_means_the_default(tmp_path, clean_env, raw):
+    """攔的 bug：打錯一個環境變數就讓每一支多人影片切出怪窗（太小＝模型沒有上下文，太大＝塞爆 num_ctx）。"""
+    from slidebox.usecases.conversation import DEFAULT_CHUNK_CHARS
+
+    clean_env.setenv("SLIDEBOX_CHUNK_CHARS", raw)
+    assert _deck_usecase(serve_api.build_executor(_settings(tmp_path)))._chunk_chars == DEFAULT_CHUNK_CHARS
+
+
+def test_the_capability_probe_is_the_very_diarizer_the_jobs_use(tmp_path, clean_env):
+    """攔的 bug：/capabilities 與實際工作各建一個 diarizer——端點說「可以」，工作卻用另一個設定去跑。"""
+    executor = serve_api.build_executor(_settings(tmp_path))
+    assert executor.speaker_capabilities == _deck_usecase(executor)._diarizer.available
+
+
+def test_without_a_token_the_service_says_so_and_still_serves_everything_else(clean_env):
+    from fastapi.testclient import TestClient
+
+    client = TestClient(serve_api.build())
+    body = client.get("/capabilities").json()
+
+    assert body["speaker_diarization"] is False
+    assert "HUGGINGFACE_TOKEN" in body["reason"]
+    assert body["speaker_contract"] == 1
+    assert client.get("/health").json()["ok"] is True
+
+
+def test_the_kill_switch_turns_the_capability_off_with_a_reason(clean_env):
+    from fastapi.testclient import TestClient
+
+    clean_env.setenv("HUGGINGFACE_TOKEN", FAKE_TOKEN)
+    clean_env.setenv("SLIDEBOX_DIARIZER", "off")
+    body = TestClient(serve_api.build()).get("/capabilities").json()
+    assert body["speaker_diarization"] is False and "SLIDEBOX_DIARIZER=off" in body["reason"]
+
+
+def test_the_token_never_appears_in_anything_the_service_says_about_itself(clean_env):
+    from fastapi.testclient import TestClient
+
+    clean_env.setenv("HUGGINGFACE_TOKEN", FAKE_TOKEN)
+    client = TestClient(serve_api.build())
+    for path in ("/capabilities", "/health", "/jobs"):
+        assert FAKE_TOKEN not in client.get(path).text, path
