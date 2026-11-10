@@ -2,6 +2,7 @@
 不安裝 pyannote、不下載模型、不碰 Hugging Face。"""
 from __future__ import annotations
 
+import math
 import os
 import re
 import sys
@@ -155,7 +156,7 @@ def test_an_unknown_engine_setting_is_a_configuration_error_not_a_silent_default
     diarizer = make(mode=value)
     available, reason = diarizer.available()
     if value.strip().lower() == "off":
-        assert not available and "off" in reason
+        assert not available and "關閉" in reason          # 是「關掉了」，不是「寫錯了」
     else:
         assert not available and "SLIDEBOX_DIARIZER" in reason
 
@@ -392,6 +393,12 @@ def test_overlap_counts_distinct_speakers_not_overlapping_pieces_of_the_same_spe
     assert output.overlap_seconds == pytest.approx(1.0)
 
 
+def test_turns_that_only_touch_are_not_an_overlap():
+    """A 說到 4.0、B 從 4.0 開始：接得很緊，但沒有同時出聲；同一位的連續兩段也一樣。"""
+    full = Annotation((0.0, 4.0, "A"), (4.0, 8.0, "B"), (8.0, 9.0, "B"), (9.0, 10.0, "A"))
+    assert run(make(Pipeline(full=full))).overlap_seconds == 0.0
+
+
 def test_without_the_exclusive_annotation_the_full_one_is_used_for_both():
     pipeline = Pipeline()
     result = SimpleNamespace(speaker_diarization=pipeline.full)
@@ -583,12 +590,13 @@ def test_the_token_is_not_in_the_reason_or_the_progress_text():
 
 
 class FakeTensor:
-    def __init__(self, data):
+    def __init__(self, data, shape=None):
         self.data = data
-        self.shape = (1, len(data))
+        self.shape = shape if shape is not None else (len(data),)
 
     def unsqueeze(self, axis):
-        return FakeTensor(self.data)
+        assert axis == 0
+        return FakeTensor(self.data, (1, *self.shape))
 
 
 class TorchWithNumpy:
@@ -697,3 +705,201 @@ def test_real_ffmpeg_decodes_a_generated_tone(tmp_path):
     assert 15000 < len(samples) < 17500                      # 1 秒、16 kHz
     assert 0.05 < float(abs(samples).max()) <= 1.0           # 有聲音（lavfi 的 sine 預設只有 1/8 振幅）、沒有爆音
     assert float(abs(samples[4000:12000]).mean()) > 0.02     # 中段是持續的音，不是只有一個尖峰
+
+
+# --- 補強：對照 mutation 的結果補上的防線（每一個都對應一個曾經沒人守的改動） ---
+
+
+def _clean_settings_env(monkeypatch):
+    for name in (mod.TOKEN_ENV, mod.MODE_ENV, mod.DEVICE_ENV):
+        monkeypatch.delenv(name, raising=False)
+
+
+def _from_environment():
+    return PyannoteSpeakerDiarizer(spec_finder=lambda name: object(), clock=Clock())
+
+
+def test_the_token_comes_from_the_environment_and_surrounding_blanks_are_ignored(monkeypatch):
+    """攔的 bug：token 填在環境變數（.env.gpu → compose）卻沒讀進來，/capabilities 永遠說沒設定。"""
+    _clean_settings_env(monkeypatch)
+    assert _from_environment().available()[0] is False
+    monkeypatch.setenv(mod.TOKEN_ENV, "  " + TOKEN + "  ")
+    assert _from_environment().available() == (True, "")
+
+
+def test_blank_settings_mean_the_defaults(monkeypatch):
+    """攔的 bug：留空的設定（例如 `SLIDEBOX_DIARIZER=`）被當成「寫錯的設定值」，多人模式永遠不能用。"""
+    _clean_settings_env(monkeypatch)
+    monkeypatch.setenv(mod.TOKEN_ENV, TOKEN)
+    monkeypatch.setenv(mod.MODE_ENV, "")
+    monkeypatch.setenv(mod.DEVICE_ENV, "  ")
+    assert _from_environment().available() == (True, "")
+
+
+def test_settings_are_case_insensitive(monkeypatch):
+    """攔的 bug：SLIDEBOX_DIARIZER=OFF 沒當成關掉、SLIDEBOX_DIARIZATION_DEVICE=CPU 被拒絕。"""
+    _clean_settings_env(monkeypatch)
+    monkeypatch.setenv(mod.TOKEN_ENV, TOKEN)
+    monkeypatch.setenv(mod.DEVICE_ENV, "CPU")
+    assert _from_environment().available() == (True, "")
+    monkeypatch.setenv(mod.MODE_ENV, "OFF")
+    available, reason = _from_environment().available()
+    assert not available and "關閉" in reason
+
+
+def test_a_package_lookup_that_raises_a_value_error_also_means_not_installed():
+    """find_spec 在 __spec__ 是 None 的時候丟的是 ValueError，不是 ImportError。"""
+
+    def broken(name):
+        raise ValueError("pyannote.audio.__spec__ is None")
+
+    diarizer = PyannoteSpeakerDiarizer(token=TOKEN, device="cpu", mode="pyannote", spec_finder=broken)
+    available, reason = diarizer.available()
+    assert not available and "pyannote.audio" in reason
+
+
+def test_the_fingerprint_formula_is_pinned():
+    """指紋是存檔的鍵（引擎、版本、模型）：公式一改，所有存檔都對不上——要改就是有意的。"""
+    assert make(version="4.0.7", model="m1").fingerprint == "bb473b952417aabb"
+
+
+def test_a_version_lookup_that_raises_means_no_version():
+    def broken():
+        raise RuntimeError("metadata is corrupt")
+
+    diarizer = PyannoteSpeakerDiarizer(token=TOKEN, version_finder=broken, spec_finder=lambda name: object())
+    assert diarizer.version == "" and re.fullmatch(r"[0-9a-f]{16}", diarizer.fingerprint)
+
+
+def test_the_installed_version_is_read_from_the_package_metadata(monkeypatch):
+    import importlib.metadata as metadata
+
+    monkeypatch.setattr(metadata, "version", lambda name: "9.9.9")
+    assert mod._installed_version() == "9.9.9"
+
+    def missing(name):
+        raise metadata.PackageNotFoundError(name)
+
+    monkeypatch.setattr(metadata, "version", missing)
+    assert mod._installed_version() == ""
+
+
+def test_a_cancel_that_arrives_while_the_model_loads_stops_before_decoding():
+    state = {"cancel": False}
+    decoded = []
+    pipeline = Pipeline()
+
+    def factory(name, token):
+        state["cancel"] = True                      # 載入模型的時候使用者按了取消
+        return pipeline
+
+    diarizer = make(pipeline, factory=factory, loader=lambda path, cancelled: decoded.append(path) or dict(WAVE))
+    with pytest.raises(OperationCancelled):
+        run(diarizer, cancelled=lambda: state["cancel"])
+    assert decoded == [] and pipeline.calls == []
+
+
+def test_a_cancel_that_arrives_while_decoding_stops_before_the_pipeline_runs():
+    state = {"cancel": False}
+
+    def loader(path, cancelled):
+        state["cancel"] = True                      # 解碼音訊的時候使用者按了取消
+        return dict(WAVE)
+
+    diarizer = make(loader=loader)
+    with pytest.raises(OperationCancelled):
+        run(diarizer, cancelled=lambda: state["cancel"])
+    assert diarizer.pipeline.calls == []
+
+
+def test_a_cancel_raised_inside_the_pipeline_is_not_turned_into_a_failure():
+    with pytest.raises(OperationCancelled):
+        run(make(Pipeline(error=OperationCancelled())))
+
+
+def test_the_overlap_is_rounded_to_milliseconds():
+    full = Annotation((0.0, 2.0, "A"), (1.0001234, 3.0, "B"))
+    assert run(make(Pipeline(full=full))).overlap_seconds == 1.0
+
+
+def test_progress_counts_voices_not_turns():
+    exclusive = Annotation((0.0, 1.0, "A"), (1.0, 2.0, "B"), (2.0, 3.0, "A"), (3.0, 4.0, "A"))
+    seen = []
+    run(make(Pipeline(exclusive=exclusive, full=exclusive)), progress=seen)
+    assert "2 個聲音" in seen[-1][1]
+
+
+def test_our_own_terms_not_accepted_message_is_not_wrapped_as_a_load_crash():
+    """攔的 bug：我們自己丟的「請先接受條款」被當成意外的載入失敗再包一層，訊息變成含糊的推論。"""
+    with pytest.raises(DiarizationUnavailable) as error:
+        run(make(factory=lambda name, token: None))
+    assert str(error.value).startswith("無法載入")
+
+
+def test_the_device_the_model_ended_up_on_is_announced():
+    for device in ("cuda", "cpu"):
+        seen = []
+        run(make(device=device), progress=seen)
+        assert any(f"已載入（{device}）" in status for _, status in seen)
+
+
+def test_an_explicit_cuda_without_a_graphics_card_fails_instead_of_quietly_using_the_cpu():
+    class NoCuda(Pipeline):
+        def to(self, device):
+            self.moved.append(device)
+            if device == "device:cuda":
+                raise RuntimeError("Torch not compiled with CUDA enabled")
+            return self
+
+    pipeline = NoCuda()
+    diarizer = make(pipeline, device="cuda", torch=FakeTorch(cuda=False))
+    with pytest.raises(DiarizationUnavailable, match="SLIDEBOX_DIARIZATION_DEVICE=cpu"):
+        run(diarizer)
+    assert pipeline.moved == ["device:cuda"]
+
+
+def test_the_fallback_to_the_cpu_never_puts_the_token_in_the_progress_text():
+    class Leaky(Pipeline):
+        def to(self, device):
+            self.moved.append(device)
+            if device == "device:cuda":
+                raise RuntimeError(f"cannot move: token {TOKEN} was rejected")
+            return self
+
+    seen = []
+    run(make(Leaky(), device="auto", torch=FakeTorch(cuda=True)), progress=seen)
+    text = "\n".join(status for _, status in seen)
+    assert "CPU" in text and TOKEN not in text and "***" in text
+
+
+def test_error_text_is_one_short_line():
+    """攔的 bug：底層錯誤動輒數百字、含換行，原樣塞進狀態列與工作失敗訊息。"""
+    pipeline = Pipeline(error=RuntimeError("first line\n" + "x" * 500))
+    with pytest.raises(DiarizationUnavailable) as error:
+        run(make(pipeline))
+    text = str(error.value)
+    assert "\n" not in text and "first line" in text and "x" * 300 not in text and "…" in text
+
+
+def test_an_exclusive_annotation_without_the_full_one_serves_for_the_overlap_too():
+    pipeline = Pipeline()
+    result = SimpleNamespace(exclusive_speaker_diarization=pipeline.exclusive)
+    pipeline.__class__ = type("P", (Pipeline,), {"__call__": lambda self, audio, hook=None, **kw: result})
+    output = run(make(pipeline))
+    assert [t.speaker for t in output.turns] == ["SPEAKER_00", "SPEAKER_01"]
+    assert output.overlap_seconds == 0.0
+
+
+def test_infinite_tracks_are_ignored_and_labels_are_always_text():
+    exclusive = Annotation((0.0, math.inf, "A"), (math.nan, 3.0, "A"), (5.0, 6.0, 0))
+    output = run(make(Pipeline(exclusive=exclusive, full=exclusive)))
+    assert output.turns == (SpeakerTurn(5.0, 6.0, "0"),)
+
+
+def test_an_odd_trailing_byte_of_pcm_is_dropped():
+    import numpy as np
+
+    pcm = np.array([0, 16384], dtype="<i2").tobytes() + b"\x01"
+    wave = mod.decode_waveform("in.webm", lambda: False, TorchWithNumpy,
+                               popen=popen_returning(pcm), ffmpeg_exe="ffmpeg")
+    assert wave["waveform"].shape == (1, 2)
