@@ -267,3 +267,140 @@ def test_the_stored_files_are_compact_arrays_not_one_object_per_word(tmp_path):
     assert isinstance(stored[0], list) and len(stored) == 20000
     assert os.path.getsize(path) < 20000 * 40
     assert store.load_words(str(tmp_path), URL, "w") == many
+
+
+# --- 補強：對照 mutation 的結果補上的防線（每一個都對應一個曾經沒人守的改動） ---
+
+INF = float("inf")
+GOOD_DIARIZATION_FILE = {"turns": [[0.0, 1.0, "A"]], "overlap_seconds": 0.0}
+GOOD_WORDS_FILE = {"video_id": "v", "title": "t", "duration": 10.0, "language": "zh",
+                   "words": [[0.0, 1.0, "字", 0, 1.0]]}
+GOOD_CONVERSATION_FILE = {"slides": [GOOD_SLIDE], "proposed": 1}
+
+
+def _without(data, key):
+    return {k: v for k, v in data.items() if k != key}
+
+
+def _plant(tmp_path, stage, data):
+    """直接寫一個存檔（模擬舊版本寫的或被改過的檔案），回傳 store。"""
+    store = JsonCheckpointStore()
+    store.save_diarization(str(tmp_path), URL, "seed", DIARIZATION)     # 先建好資料夾
+    folder = next(p for p, _, names in os.walk(tmp_path) if "diarization.json" in names)
+    with open(os.path.join(folder, f"{stage}.json"), "w", encoding="utf-8") as f:
+        json.dump({"url": URL, "fingerprint": "fp", "data": data}, f)
+    return store
+
+
+def test_the_planted_files_used_below_are_loadable_as_they_are(tmp_path):
+    """下面每個「壞檔」都只改一個地方；沒改的時候要讀得回來，才證明它是因為那一處被擋。"""
+    for stage, load, data in (
+        ("diarization", "load_diarization", GOOD_DIARIZATION_FILE),
+        ("words", "load_words", GOOD_WORDS_FILE),
+        ("conversation", "load_conversation", GOOD_CONVERSATION_FILE),
+    ):
+        store = _plant(tmp_path / stage, stage, data)
+        assert getattr(store, load)(str(tmp_path / stage), URL, "fp") is not None, stage
+
+
+@pytest.mark.parametrize("stage,load,data", [
+    # 缺欄位：不是「用預設值補上」，而是整份當作沒有（欄位少了就是壞檔或別的版本寫的）
+    ("diarization", "load_diarization", _without(GOOD_DIARIZATION_FILE, "overlap_seconds")),
+    ("words", "load_words", _without(GOOD_WORDS_FILE, "duration")),
+    ("words", "load_words", _without(GOOD_WORDS_FILE, "language")),
+    ("conversation", "load_conversation", _without(GOOD_CONVERSATION_FILE, "proposed")),
+    # 時間是無限大：不是有限數字就不可信
+    ("diarization", "load_diarization", {"turns": [[0.0, INF, "A"]], "overlap_seconds": 0.0}),
+    ("diarization", "load_diarization", {"turns": [[-INF, 1.0, "A"]], "overlap_seconds": 0.0}),
+    ("diarization", "load_diarization", {"turns": [[0.0, 1.0, "A"]], "overlap_seconds": INF}),
+    ("words", "load_words", {**GOOD_WORDS_FILE, "duration": INF}),
+    ("words", "load_words", {**GOOD_WORDS_FILE, "words": [[0.0, INF, "字", 0, 1.0]]}),
+    ("words", "load_words", {**GOOD_WORDS_FILE, "words": [[NAN, 1.0, "字", 0, 1.0]]}),
+    ("words", "load_words", {**GOOD_WORDS_FILE, "words": [[0.0, 1.0, "字", 0, NAN]]}),
+    ("conversation", "load_conversation", {"slides": [{**GOOD_SLIDE, "timestamp": INF}], "proposed": 1}),
+    ("conversation", "load_conversation",
+     {"slides": [{**GOOD_SLIDE, "points": [{**GOOD_POINT, "start": NAN}]}], "proposed": 1}),
+    ("conversation", "load_conversation",
+     {"slides": [{**GOOD_SLIDE, "points": [{**GOOD_POINT, "start": INF}]}], "proposed": 1}),
+    # 好的和壞的混在一起：一個壞的就整份不能用，不是「還有好的就算了」
+    ("words", "load_words", {**GOOD_WORDS_FILE, "words": [[0.0, 1.0, "字", 0, 1.0], [1.0, NAN, "字", 0, 1.0]]}),
+    ("words", "load_words", {**GOOD_WORDS_FILE, "words": [[0.0, 1.0, "字", 0, 1.0], [1.0, 2.0, "字", 0, NAN]]}),
+    ("conversation", "load_conversation",
+     {"slides": [GOOD_SLIDE, {**GOOD_SLIDE, "index": 2, "points": []}], "proposed": 5}),
+    ("conversation", "load_conversation",
+     {"slides": [{**GOOD_SLIDE, "points": [GOOD_POINT, {**GOOD_POINT, "start": NAN}]}], "proposed": 5}),
+    # 欄位型別不對：說話者代號不是字串（5 是真值，不擋就會當成說話者 5 讀進來）
+    ("words", "load_words", {**GOOD_WORDS_FILE, "words": [[0.0, 1.0, 5, 0, 1.0]]}),
+    ("words", "load_words", {**GOOD_WORDS_FILE, "video_id": 5}),
+    ("words", "load_words", {**GOOD_WORDS_FILE, "title": None}),
+    ("words", "load_words", {**GOOD_WORDS_FILE, "language": 5}),
+    ("conversation", "load_conversation",
+     {"slides": [{**GOOD_SLIDE, "points": [{**GOOD_POINT, "speaker": 5}]}], "proposed": 1}),
+    ("conversation", "load_conversation",
+     {"slides": [{**GOOD_SLIDE, "points": [{**GOOD_POINT, "text": 5}]}], "proposed": 1}),
+    ("conversation", "load_conversation",
+     {"slides": [{**GOOD_SLIDE, "points": [{**GOOD_POINT, "evidence": None}]}], "proposed": 1}),
+    ("conversation", "load_conversation", {"slides": [{**GOOD_SLIDE, "title": 5}], "proposed": 1}),
+    ("conversation", "load_conversation", {"slides": [{**GOOD_SLIDE, "detail": 5}], "proposed": 1}),
+    ("conversation", "load_conversation", {"slides": [{**GOOD_SLIDE, "bullets": [5]}], "proposed": 1}),
+])
+def test_a_stored_file_that_is_incomplete_or_not_to_be_trusted_is_treated_as_missing(tmp_path, stage, load, data):
+    """攔的 bug：讀檔時缺欄位被預設值補上（少了 proposed 就當 999、少了 overlap 就當 0），
+    或欄位型別不對、時間是無限大、混了一個壞的就照樣讀進來——下次接著用的是一份不可信的結果。"""
+    store = _plant(tmp_path, stage, data)
+    assert getattr(store, load)(str(tmp_path), URL, "fp") is None
+
+
+@pytest.mark.parametrize("turns", [
+    (SpeakerTurn(0.0, INF, "A"),),
+    (SpeakerTurn(-INF, 1.0, "A"),),
+    (SpeakerTurn(0.0, 1.0, "A"), SpeakerTurn(2.0, INF, "B")),
+])
+def test_a_diarization_with_infinite_times_is_never_saved(tmp_path, turns):
+    store = JsonCheckpointStore()
+    store.save_diarization(str(tmp_path), URL, "d", DiarizerOutput(turns, 0.0))
+    store.save_diarization(str(tmp_path), URL, "d", DiarizerOutput(DIARIZATION.turns, INF))
+    assert store.load_diarization(str(tmp_path), URL, "d") is None
+    assert _files(tmp_path) == []
+
+
+@pytest.mark.parametrize("transcript", [
+    WordTranscript("v", "t", 10.0, "zh", (Word(0.0, 1.0, "字", 0, 1.0), Word(1.0, NAN, "字", 0, 1.0))),
+    WordTranscript("v", "t", 10.0, "zh", (Word(0.0, 1.0, "字", 0, 1.0), Word(NAN, 2.0, "字", 0, 1.0))),
+    WordTranscript("v", "t", 10.0, "zh", (Word(0.0, 1.0, "字", 0, 1.0), Word(1.0, 2.0, "字", 0, NAN))),
+    WordTranscript("v", "t", 10.0, "zh", (Word(0.0, 1.0, "字", 0, 1.0), Word(1.0, INF, "字", 0, 1.0))),
+    WordTranscript("v", "t", INF, "zh", (Word(0.0, 1.0, "字", 0, 1.0),)),
+    WordTranscript("v", "t", NAN, "zh", (Word(0.0, 1.0, "字", 0, 1.0),)),
+])
+def test_words_with_one_unusable_value_are_never_saved(tmp_path, transcript):
+    """一個壞的字就整份不存：不是「還有好的字就算了」。"""
+    store = JsonCheckpointStore()
+    store.save_words(str(tmp_path), URL, "w", transcript)
+    assert store.load_words(str(tmp_path), URL, "w") is None
+    assert _files(tmp_path) == []
+
+
+@pytest.mark.parametrize("slides", [
+    (Slide(1, "補助政策", ("a",), INF, points=POINTS),),
+    (Slide(1, "補助政策", ("a",), 5.0, points=(Point("S1", 0, NAN, "詢問成效", "請教成效"),)),),
+    (Slide(1, "補助政策", ("a",), 5.0, points=(Point("S1", 0, INF, "詢問成效", "請教成效"),)),),
+    (Slide(1, "補助政策", ("a",), 5.0, points=(Point("", 0, 5.0, "詢問成效", "請教成效"),)),),
+    (*SLIDES, Slide(2, "第二頁", ("a",), NAN, points=POINTS)),
+])
+def test_a_conversation_with_one_unusable_value_is_never_saved(tmp_path, slides):
+    store = JsonCheckpointStore()
+    store.save_conversation(str(tmp_path), URL, "c", slides, 9)
+    assert store.load_conversation(str(tmp_path), URL, "c") is None
+    assert _files(tmp_path) == []
+
+
+def test_whole_number_times_are_stored_like_any_other_number(tmp_path):
+    """攔的 bug：影片長度常常是整數（下載器給的 duration 就是），「不是 float 就不存」會讓這支影片的
+    語音辨識永遠存不下來，每次重跑都要從頭聽一遍。"""
+    store, out = JsonCheckpointStore(), str(tmp_path)
+    words = WordTranscript("v", "t", 3600, "zh", (Word(0, 1, "字", 0, 1),))
+    turns = DiarizerOutput((SpeakerTurn(0, 2, "A"),), 0)
+    store.save_words(out, URL, "w", words)
+    store.save_diarization(out, URL, "d", turns)
+    assert store.load_words(out, URL, "w") == words
+    assert store.load_diarization(out, URL, "d") == turns

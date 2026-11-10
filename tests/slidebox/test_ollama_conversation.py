@@ -246,6 +246,12 @@ def test_the_json_is_found_inside_fences_prose_and_thinking_leftovers(wrap):
     assert mod.parse_conversation_response(wrap(GOOD_REPLY)) == mod.parse_conversation_response(GOOD_REPLY)
 
 
+def test_a_thinking_block_that_spans_several_lines_is_removed_whole():
+    """攔的 bug：思考殘留跨好幾行時只去掉同一行內的部分，裡面的草稿 JSON 被當成答案讀走。"""
+    wrapped = '<think>\n先想一下。\n草稿：{"slides": []}\n再檢查一次。\n</think>\n' + GOOD_REPLY
+    assert mod.parse_conversation_response(wrapped) == mod.parse_conversation_response(GOOD_REPLY)
+
+
 @pytest.mark.parametrize("payload", [
     "", "   \n", "這不是 JSON", "{\"slides\": [", "[]", "[{\"title\": \"x\"}]", "42", "null",
     "{}", "{\"slides\": {}}", "{\"slides\": \"x\"}", "{\"pages\": []}",
@@ -253,6 +259,19 @@ def test_the_json_is_found_inside_fences_prose_and_thinking_leftovers(wrap):
 def test_a_reply_without_a_slides_array_is_invalid(payload):
     with pytest.raises(SummarizerOutputInvalid):
         mod.parse_conversation_response(payload)
+
+
+@pytest.mark.parametrize("payload", [None, 42, b'{"slides": []}', ["slides"], {"slides": []}])
+def test_a_reply_that_is_not_text_is_invalid(payload):
+    """攔的 bug：串流層出了狀況給的不是字串，卻在 .strip() 才以 AttributeError 當掉，而不是「這個窗無效」。"""
+    with pytest.raises(SummarizerOutputInvalid, match="不是文字"):
+        mod.parse_conversation_response(payload)
+
+
+def test_an_unparsable_reply_keeps_the_parsers_complaint_for_the_operator():
+    """工作失敗訊息要讓人看得出模型回了什麼樣的東西，而不只是「不是合法的 JSON」。"""
+    with pytest.raises(SummarizerOutputInvalid, match="Expecting value"):
+        mod.parse_conversation_response("抱歉，我無法整理這段對談。")
 
 
 def test_an_empty_slides_array_is_a_valid_reply_that_the_checks_will_reject():
@@ -283,7 +302,10 @@ def test_clear_spellings_of_the_same_turn_number_are_accepted(given, expected):
     assert slides[0].points[0].turn == expected and type(slides[0].points[0].turn) is int
 
 
-@pytest.mark.parametrize("given", [12.5, True, False, None, "abc", "12a", "T", [12], {"n": 12}, "第12段"])
+@pytest.mark.parametrize("given", [
+    12.5, True, False, None, "abc", "12a", "T", [12], {"n": 12}, "第12段",
+    "-3", "+3", "T-3",                          # 帶正負號的不是「明確的同一個編號」：編號沒有負的
+])
 def test_anything_else_is_left_as_it_is_for_the_checks_to_reject(given):
     slides = mod.parse_conversation_response(_reply({"title": "t", "points": [{"turn": given, "text": "x", "context": []}]}))
     assert slides[0].points[0].turn == given and type(slides[0].points[0].turn) is type(given)
