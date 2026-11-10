@@ -37,7 +37,6 @@ from ..domain.ports import (
     VideoSectionGateway,
 )
 from .brief import ground_brief, validate_brief
-from .speakers import attach_speakers
 from .chapters import (
     clamp_timestamps,
     first_person_problems,
@@ -114,7 +113,15 @@ class BuildDeckUseCase:
         speaker_count: int | None = None,
     ) -> DeckResult:
         """speech_hint：走語音辨識時給辨識器的專有名詞提示（講者姓名、機關名）；
-        有字幕的來源用不到。"""
+        有字幕的來源用不到。
+
+        speaker_mode："single"（預設，議會與 --speakers 1）走下面這條字幕／語音摘要的路徑，
+        行為與多人模式加進來之前完全相同；"diarize" 是另一條路徑，不經過這裡。
+        """
+        if speaker_mode != "single":
+            # 多人模式的流程還沒接上。在那之前一律拒絕：絕不能默默走下面的單人路徑，
+            # 那會把多位說話者全寫成「講者」——寧可失敗，也不能寫錯是誰說的。
+            raise DiarizationUnavailable("多人模式尚未實作；不會退回單人的寫法，工作中止")
         cb: ProgressCallback = progress or (lambda frac, status: None)
         cancelled: CancelCheck = is_cancelled or (lambda: False)
 
@@ -123,17 +130,13 @@ class BuildDeckUseCase:
                 raise OperationCancelled()
 
         ck = self._checkpoints
-        transcript_fp = _fingerprint(settings.subtitle_langs, settings.whisper_model, speech_hint or "",
-                                     speaker_mode, speaker_count)
+        transcript_fp = _fingerprint(settings.subtitle_langs, settings.whisper_model, speech_hint or "")
         saved = ck.load_transcript(settings.output_dir, url, transcript_fp) if ck else None
         if saved is not None:
             transcript, note = saved
             cb(_P_SUBTITLES, "沿用上次取得的逐字稿")
         else:
             transcript, note = self._fetch_transcript(url, settings, cb, check, cancelled, speech_hint)
-            if speaker_mode == "diarize":
-                transcript, note = self._add_speaker_labels(
-                    url, transcript, note, settings, cb, check, cancelled, speaker_count)
             if ck:
                 ck.save_transcript(settings.output_dir, url, transcript_fp, transcript, note)
 
@@ -201,8 +204,7 @@ class BuildDeckUseCase:
         check()
         cb(_P_FRAMES, "產生 HTML…")
         deck = Deck(source_url=url, video_title=transcript.title, slides=slides,
-                    source_note=note, transcript_text=transcript_text, brief=brief,
-                    speakers=transcript.speakers)
+                    source_note=note, transcript_text=transcript_text, brief=brief)
         html_path = os.path.join(out_dir, "slides.html")
         self._renderer.render(deck, html_path)
 
@@ -214,33 +216,6 @@ class BuildDeckUseCase:
         done = f"完成，共 {len(slides)} 頁{result.missing_images_note}"
         cb(1.0, done + (f"（{note}）" if note else ""))
         return result
-
-    def _add_speaker_labels(
-        self, url: str, transcript: Transcript, note: str, settings: Settings,
-        cb: ProgressCallback, check, cancelled, speaker_count: int | None,
-    ) -> tuple[Transcript, str]:
-        """下載一次音訊交給 diarizer，再把匿名 speaker 套回現有逐字稿。"""
-        if self._audio is None:
-            raise DiarizationUnavailable("多人模式需要音訊下載器，但 GPU 沒有設定")
-        if self._diarizer is None:
-            raise DiarizationUnavailable("GPU 尚未部署說話者區分模型；請更新 GPU 主機後再試")
-        audio_dir = os.path.join(settings.output_dir, ".slidebox_audio_tmp")
-        try:
-            check()
-            cb(None, "下載音訊供說話者區分…")
-            self._audio.cleanup(audio_dir)
-            clip = self._audio.download_audio(url, audio_dir, cb, cancelled)
-            check()
-            turns = self._diarizer.diarize(
-                clip.path, clip.duration, speaker_count, cb, cancelled)
-            cues, speakers, uncertain = attach_speakers(transcript.cues, turns)
-            warnings = [note, f"由聲音區分說話者（{len(speakers)} 人）；名稱為匿名標籤"]
-            if uncertain:
-                warnings.append(
-                    f"有 {uncertain} 段聲音重疊或無法安全歸人，逐字稿標為「多位說話者／未辨識」")
-            return replace(transcript, cues=cues, speakers=speakers), "；".join(x for x in warnings if x)
-        finally:
-            self._audio.cleanup(audio_dir)
 
     # --- 內部 ---
 

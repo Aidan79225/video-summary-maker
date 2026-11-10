@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import pytest
 
-from slidebox.domain.entities import Brief, Cue, KeyNumber, Settings, Slide, SpeakerTurn, Transcript
+from slidebox.domain.entities import Brief, Cue, KeyNumber, Settings, Slide, Transcript
 from slidebox.domain.errors import (
     NoSubtitlesAvailable,
     SubtitleDownloadFailed,
@@ -239,7 +239,7 @@ def test_cancel_during_frame_attachment_still_cleans_up():
 # --- 沒有字幕時改用語音辨識 ---
 
 
-def _build_speech(subs=None, audio=None, transcriber=None, diarizer=None, summ=None, rend=None):
+def _build_speech(subs=None, audio=None, transcriber=None, summ=None, rend=None):
     return BuildDeckUseCase(
         subs or FakeSubtitleGateway(fail=True),
         summ or FakeSummarizer([make_slides(3)]),
@@ -248,29 +248,7 @@ def _build_speech(subs=None, audio=None, transcriber=None, diarizer=None, summ=N
         rend or FakeRenderer(),
         audio=audio or FakeAudioGateway(),
         transcriber=transcriber or FakeTranscriber(),
-        diarizer=diarizer,
     )
-
-
-class FakeDiarizer:
-    def diarize(self, audio_path, duration, speaker_count, progress, is_cancelled):
-        assert audio_path == "OUT/_audio/audio.webm"
-        assert speaker_count is None
-        return (
-            SpeakerTurn(0.0, 4.0, "說話者 1"),
-            SpeakerTurn(30.0, 34.0, "說話者 2"),
-        )
-
-
-def test_diarization_labels_the_transcript_and_deck_without_guessing_names():
-    summ = FakeSummarizer([make_slides(3)])
-    result = _build_speech(summ=summ, diarizer=FakeDiarizer()).execute(
-        "URL", _settings(), speaker_mode="diarize"
-    )
-
-    assert result.deck.speakers == ("說話者 1", "說話者 2")
-    assert "[說話者 1]" in summ.compressed[0]
-    assert "[說話者 2]" in summ.compressed[0]
 
 
 def test_missing_subtitles_fall_back_to_speech():
