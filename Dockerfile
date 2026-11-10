@@ -2,6 +2,8 @@
 # 模型不在這個映像裡：Ollama 是另一個容器（見 compose.gpu.yaml），這裡只透過 HTTP 連它。
 # 語音辨識（faster-whisper）用顯示卡（compose 給了 gpus: all；沒有 GPU 會自動退回 CPU），
 # 模型檔快取在 /root/.cache/huggingface 這個 volume。
+# YouTube 多人說話者區分（pyannote.audio，--group diarization）帶進 PyTorch 與它的 CUDA 函式庫，
+# 映像會大很多、第一次建置要下載很久；它的模型也快取在同一個 volume，第一次用多人模式時才下載。
 FROM ghcr.io/astral-sh/uv:python3.13-bookworm-slim
 
 WORKDIR /app
@@ -25,7 +27,10 @@ ENV LD_LIBRARY_PATH=/app/.venv/lib/python3.13/site-packages/nvidia/cublas/lib:/a
 COPY serve_api.py ./
 COPY src ./src
 
+# PYTHONPATH：serve_api.py 自己把 src 加進搜尋路徑，但 `python -m slidebox_api.diarize_check`
+# 這種直接叫模組的用法不會，沒有它在容器裡會找不到 slidebox／slidebox_api。
 ENV PATH="/app/.venv/bin:$PATH" \
+    PYTHONPATH=/app/src \
     SLIDEBOX_API_HOST=0.0.0.0 \
     SLIDEBOX_API_OUTPUT_DIR=/data/output
 

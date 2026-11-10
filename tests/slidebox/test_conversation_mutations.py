@@ -22,7 +22,6 @@ from slidebox.usecases import conversation
 from slidebox.usecases.conversation import Window
 
 from .conversation_support import GOOD, SPEAKERS, TURNS, TWO, at, problems_of, run, with_anchors
-from .speaker_fixtures import make_speakers, make_turns
 
 
 def nothing(*_args, **_kwargs):

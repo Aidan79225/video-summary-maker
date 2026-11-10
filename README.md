@@ -273,8 +273,8 @@ uv run --group api serve_api.py
 | 端點 | 說明 |
 |---|---|
 | `GET /health` | Ollama 是否連得上、目前忙不忙 |
-| `GET /capabilities` | GPU 是否已載入 YouTube 多人說話者區分模型 |
-| `POST /jobs` | `{url, detailed, min_slides, max_slides, speaker_mode, speaker_count}` → `202 {id}`（議題分類與追問判斷工作見下） |
+| `GET /capabilities` | GPU 能不能做 YouTube 多人說話者區分（`speaker_diarization`，不能時 `reason` 說明原因），以及成品格式的契約版本（`speaker_contract`，目前是 `1`）；和 `/health` 一樣不需要 API key |
+| `POST /jobs` | `{url, detailed, min_slides, max_slides, speaker_mode, speaker_count}` → `202 {id}`（議題分類與追問判斷工作見下；多人說話者模式見〈多人說話者模式〉） |
 | `GET /jobs/{id}` | 進度與結果（`kind` 是工作種類） |
 | `DELETE /jobs/{id}` | 取消 |
 
@@ -342,9 +342,114 @@ curl http://localhost:8800/health   # ollama_reachable 要是 true
 
 - Ollama 容器直接掛 Windows 上已經下載好的模型（`OLLAMA_MODELS_DIR`），不必再抓一次；跑這一套時把原生的 Ollama 關掉，否則兩份模型會一起佔 VRAM
 - 容器裡的 ffmpeg 用 Debian 的套件，不用 imageio-ffmpeg 附的靜態檔（後者在容器裡讀立法院的 HLS 串流會 segfault）
-- 語音辨識用顯示卡（映像裝了 cuBLAS／cuDNN；載不起來自動退回 CPU），模型快取在 `whisper-cache` volume；成品在 `summary-output` volume
+- 語音辨識用顯示卡（映像裝了 cuBLAS／cuDNN；載不起來自動退回 CPU），模型快取在 `whisper-cache` volume（YouTube 多人模式的說話者區分模型也放在這裡，只下載一次）；成品在 `summary-output` volume
 - 對區網開放是預設（容器一定綁 0.0.0.0），所以 `SLIDEBOX_API_KEY` 是必填
 - 桌面 app（`slides.py`）不在容器裡，照常原生執行
+
+### 多人說話者模式（`speaker_mode: "diarize"`）
+
+對談、訪談、座談這類不只一個人說話的 YouTube 影片，要的是「**誰說了什麼**」。字幕沒有說話者，所以這個模式**不用字幕**：
+
+1. 下載音訊，用聲音區分說話者（pyannote.audio，模型 `pyannote/speaker-diarization-community-1`）
+2. 語音辨識（faster-whisper，每個字都帶時間）
+3. 程式依時間把每個字歸給當時在說話的人，再把同一個人連續說的話合成一段一段的發言。被兩位以上同時蓋住、換人點不在自然的停頓或句尾上、附近沒有說話者的字，一律標成「無法判斷」
+4. 語言模型只做一件事：把**已經歸好人的發言**改寫成重點，每個重點都要引用它根據的那段發言。這個重點是誰說的，由程式從被引用的那段發言查出來，不是模型寫的；程式再逐點檢查（引用要在這一窗內、只能引用主要發言者、內容要有那段話的依據、數字與否定要一致、不能用代名詞或第一人稱…），沒過的重點直接丟掉
+
+**誰說了什麼由程式決定，模型不決定。** 模型看不到影片標題、頻道、說明欄，也看不到任何名字或職稱，只看到 `[T12] S1：……` 這樣的匿名代號（請求裡的 `speech_hint` 只給語音辨識當提示，不給語言模型）。成品裡的說話者是程式給的中性標籤：「發言者 A」「發言者 B」，只出現一下的聲音叫「其他聲音 1」，沒把握的叫「無法判斷」。**不猜真人姓名，也不退回單人模式的「講者」寫法**。標籤只在同一支影片裡有意義，另一支影片的「發言者 A」不是同一個人。
+
+寧可失敗也不亂歸人。底下任何一種情況，工作都會失敗、什麼都不發佈（`GET /jobs/{id}` 的 `error` 以例外名稱開頭）：
+
+| 情況 | 例外 |
+|---|---|
+| 沒有 `HUGGINGFACE_TOKEN`、沒裝 pyannote、被 `SLIDEBOX_DIARIZER=off` 關掉、模型載入失敗（包括沒接受條款）。能力檢查就不過的，在**下載任何東西之前**就失敗 | `DiarizationUnavailable` |
+| 音訊下載失敗、語音辨識失敗，或沒有偵測到語音 | `SpeechRecognitionFailed` |
+| 聲音區分的結果不可靠：一位主要發言者都沒有；指定 2 人以上卻只找到 1 位；主要發言者超過 8 位。或是模型的重點被程式檢查丟掉超過四分之一、某一段對談一頁都留不下來 | `AttributionUnreliable`（訊息帶數字，看得出是哪一種） |
+
+這些門檻（8 位、四分之一，以及對齊用的 0.3／1.5／2 秒等）都是**暫定值**，要拿實際的影片校正。不致命但可疑的情況（人數與指定不符、超過四分之一的語音無法判斷、其他聲音有 4 個以上、自動模式只找到 1 位）照常發佈，但成品的 `diarization.warnings` 會標出來。成品的 `source_note` 一律寫明「由語音辨識產生，說話者由聲音自動區分；標籤可能有誤，未經人工確認」。
+
+#### 請求與成品
+
+```json
+{"url": "https://www.youtube.com/watch?v=……", "speaker_mode": "diarize", "speaker_count": null}
+```
+
+- `speaker_mode`：`"single"`（預設，成品和以前一模一樣）或 `"diarize"`；其他值 422
+- `speaker_count`：`diarize` 時省略（自動判斷人數）或 2～20；`single` 時省略或 1。其他組合 422，例如 `diarize` 加 `1`（一個人請用 `single`）。指定的人數只是告訴說話者區分器「有幾個人」，不會讓檢查放水：指定了卻只找到一位會失敗，不會硬湊
+- 只有摘要工作能指定這兩個欄位；議題分類與追問判斷工作帶了 `speaker_mode`（不是 `single`）或 `speaker_count` 也是 422，不會默默忽略
+- 成品比單人多這幾塊：`speaker_mode`、`speakers`（每位說話者的標籤、說話秒數、段數、首末時間與最長的三段樣本）、`diarization`（引擎、版本、模型、指紋，`status`／`warnings`，找到幾位，無法判斷與交疊的比例）、每一頁的 `points`（每個重點和它根據的發言）；`brief` 一律是 `null`（多人模式不產生摘要卡）
+- `bullets`、`detail`、`transcript_text` 裡的說話者是 `[[S1]]` 這樣的代號，不是名字：要顯示給人看時，換成 `speakers` 裡同一個代號的 `label`（`[[S0]]` 是「無法判斷」）。桌面 app 輸出的 HTML 已經換好了
+- 缺任何一塊出處（說話者清單、區分報告、某一頁的 `points`）的多人成品，GPU 不會交出去，工作直接失敗
+- 契約版本寫在 `GET /capabilities` 的 `speaker_contract`；範例放在 `tests/slidebox_api/fixtures/speaker_contract_v1.json`，GPU 這邊的測試對著它驗
+
+#### 一次性的設定
+
+1. 到 Hugging Face 建 token：Settings → Access Tokens → Create new token，類型選 **Read**（唯讀）就夠
+2. 用同一個帳號到 <https://huggingface.co/pyannote/speaker-diarization-community-1>，按下接受使用條款。沒接受的話，載入模型時會被拒絕；若仍被拒絕、錯誤訊息點名了別的模型頁，到那一頁也接受
+3. 把 token 填進 `.env.gpu` 的 `HUGGINGFACE_TOKEN=`。`.env.gpu` 已在 `.gitignore`，token 只放這裡——不要寫進 `compose.gpu.yaml`、不要提交、不要貼進 issue 或聊天。本程式自己的錯誤訊息與進度不會帶出 token
+4. 重新建置並啟動（映像要加裝 PyTorch 與 pyannote，見下面的〈資源與時間〉），再看能力檢查：
+
+   ```powershell
+   docker compose -f compose.gpu.yaml --env-file .env.gpu up -d --build
+   curl http://localhost:8800/capabilities    # speaker_diarization 要是 true
+   ```
+
+   **這只是便宜的檢查**（有 token、有裝套件、沒被關掉），不會載入模型也不會連 Hugging Face，所以 `true` 不代表條款已經接受、模型載得起來。真的載入模型是在下面的 `diarize_check --sample`，請先跑它再收任何影片
+
+#### 設定值
+
+寫在 `.env.gpu`（`compose.gpu.yaml` 會傳進容器）；不用 Docker 時設成環境變數，完整清單見 `serve_api.py` 的 docstring。
+
+| 變數 | 預設 | 說明 |
+|---|---|---|
+| `HUGGINGFACE_TOKEN` | 空 | 沒設就沒有多人模式：`/capabilities` 回 `false` 和原因 |
+| `SLIDEBOX_DIARIZER` | `pyannote` | 設成 `off` 關掉多人模式，`/capabilities` 回 `false`；其他值會被當成設定錯誤回報 |
+| `SLIDEBOX_DIARIZATION_DEVICE` | `auto` | 說話者區分跑在哪裡。`auto`：有 CUDA 就用顯示卡，載不起來退回 CPU（進度裡會說）；`cuda`：強制，失敗就工作失敗；`cpu`：完全不碰 CUDA（較慢）——驅動和映像的 CUDA 版本對不上、或顯示卡記憶體不夠時的逃生口 |
+| `SLIDEBOX_CHUNK_CHARS` | `6000` | 多人對談切成一窗一窗送給模型，每窗最多幾個字（1000～20000）。留空、不是整數或超出範圍就用預設值，通常不用動 |
+| `SLIDEBOX_WHISPER_DEVICE` | `auto` | 語音辨識的裝置；多人模式、單人模式的語音備援和議會片段都用它 |
+
+`compose.gpu.yaml` 另外把 `PYANNOTE_METRICS_ENABLED=0` 和 `HF_HUB_DISABLE_TELEMETRY=1` 傳進容器：不把使用統計送回 pyannote 或 Hugging Face。
+
+#### 資源與時間（先看過再決定要不要開）
+
+- **映像會大很多，第一次建置要很久**：多人模式讓映像多裝 PyTorch、pyannote.audio 和它們的 CUDA 函式庫，大小以 GB 計（沒有實測，依你的網路與磁碟而定）。Docker Desktop 的磁碟要留足空間
+- **第一次跑多人工作要下載模型**，存在 `whisper-cache` volume，之後不會再下載。`docker compose down -v` 會把這個 volume 連同已經下載的 Whisper 模型一起刪掉
+- **比字幕模式慢很多**：字幕模式只抓文字；多人模式要下載整支影片的音訊，再跑完整支的聲音區分與語音辨識，時間隨影片長度增加。沒有實測數字——先用 `diarize_check` 在你的機器上量（它會印每個階段的耗時），再決定要收多長的影片
+- **顯示卡記憶體**：Ollama、faster-whisper 和 pyannote 共用同一張卡，用量沒有實測（`diarize_check` 會印顯示卡記憶體峰值）。不夠就把 `SLIDEBOX_DIARIZATION_DEVICE` 設成 `cpu`
+- **Pi 那邊要調大 `GPU_JOB_TIMEOUT_SECONDS`**：這是 Pi 等單一支影片的上限（`services/news` 預設 1800 秒，Pi 的 `compose.yaml` 預設 2700 秒），GPU 這一端沒有硬性逾時。長的對談影片很容易超過，超過 Pi 就不等了。要在 Pi 的 `api` 與 `scheduler` 兩個容器都調大
+- 被取消或逾時的工作，已經完成的階段（說話者區分、語音辨識、各窗摘要）會存在 `summary-output` volume 的 `.slidebox_cache/` 底下，**再送同一支影片會從那裡接著做**，成功後清掉。逾時若發生在說話者區分或語音辨識的「途中」，那一階段要整個重做，所以要調大逾時，不能只靠重試
+
+#### 先聽過，再相信（`diarize_check`）
+
+在相信任何多人文章之前，先用這個工具檢查說話者區分準不準。它只做「下載音訊 → 說話者區分 → 語音辨識 → 對齊」，不呼叫語言模型、不寫成品、不碰 Pi；用的是正式工作同一組對齊與分段的程式，所以這裡看到的標籤，就是文章裡會出現的標籤。
+
+```powershell
+# 冒煙測試：下載一段公開的四人中文對話（k2-fsa/sherpa-onnx 的範例音檔），預期找到 4 個聲音
+docker compose -f compose.gpu.yaml --env-file .env.gpu exec api python -m slidebox_api.diarize_check --sample
+
+# 檢查自己的影片的一段（秒，或 分:秒、時:分:秒）；--speakers 是你確定的人數，不確定就省略
+docker compose -f compose.gpu.yaml --env-file .env.gpu exec api python -m slidebox_api.diarize_check 'https://www.youtube.com/watch?v=VIDEO_ID' --start 0 --end 600 --speakers 2
+```
+
+不用 Docker 的話：`$env:PYTHONPATH = "src"; uv run --group api --group diarization python -m slidebox_api.diarize_check --sample`。
+
+它會印出：
+
+- 說話者區分器找到幾個聲音，以及每一段話歸給誰（起訖時間、說話者、文字）
+- 每個標籤各占多少秒、幾段
+- 說話者清單：每個標籤最長的三段話，附 `&t=` 連結，點開來聽是不是同一個人
+- 平均分布的 10 個抽查位置、品質與警告（正式工作會拒絕的結果也會明說）
+- 每個階段的耗時、這個行程的記憶體峰值、PyTorch 的顯示卡記憶體峰值
+
+`--start`／`--end` 只切出那一段來檢查，印出的時間仍是整支影片的時間。音訊放在暫存資料夾，結束（包括失敗與 Ctrl-C）就刪掉。結束碼：`0` 正常；`1` 跑完了，但正式工作會拒絕這個結果（或樣本與預期不符）；`2` 參數不對；`3` 跑不起來（說話者區分不能用、下載或語音辨識失敗）；`130` 被中斷。樣本是第三方 GitHub release 上的檔案，它失效或抓不下來時，改用自己認得出聲音的短片段。
+
+建議的順序：先 `--sample` 確認 token、模型、驅動都正常；再挑一支你認得出每個人聲音的影片，用 `--start`／`--end` 取一段 5～10 分鐘，點開 `&t=` 連結聽過、抽查位置核對過；確認沒問題才開始收真的影片。
+
+#### 疑難排解
+
+- `/capabilities` 回 `false`：看 `reason`——沒設 token、沒裝 `pyannote.audio`（映像要用 `--group diarization` 建置）、被 `SLIDEBOX_DIARIZER=off` 關掉，或設定值寫錯
+- 工作失敗、訊息說模型被拒絕或要先接受條款：回到〈一次性的設定〉第 2、3 步，確認 token 屬於接受了條款的那個帳號，而且有讀取權限
+- 顯示卡相關的錯誤，或 `auto` 一直退回 CPU：鎖檔（`uv.lock`）裡的 PyTorch 是 CUDA 13 的版本，驅動要夠新。`docker run --rm --gpus all ubuntu nvidia-smi` 右上角的 `CUDA Version` 要是 13.x；比它舊就先設 `SLIDEBOX_DIARIZATION_DEVICE=cpu`（完全不碰 CUDA，只是慢）
+- 想確認 PyTorch 看不看得到顯示卡：`docker compose -f compose.gpu.yaml --env-file .env.gpu exec api python -c "import torch; print(torch.version.cuda, torch.cuda.is_available())"`
 
 ## 2. 後端（Pi）
 
