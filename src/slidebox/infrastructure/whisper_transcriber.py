@@ -229,6 +229,7 @@ class FasterWhisperTranscriber:
         if is_cancelled():
             raise OperationCancelled()
 
+        duration = _finite(duration, 0.0)         # 進度文字只是參考：NaN／無限大當作不知道，不要讓它害辨識失敗
         total = f" / {_mmss(duration)}" if duration > 0 else ""
         segments_words: list[list[Word]] = []
         progress(None, "準備語音辨識…（解碼音訊、偵測人聲）")
@@ -243,7 +244,8 @@ class FasterWhisperTranscriber:
                 words = _segment_words(seg, number)
                 if words:
                     segments_words.append(words)
-                done = min(seg.end, duration) if duration > 0 else seg.end
+                reached = _finite(getattr(seg, "end", math.nan), 0.0)
+                done = min(reached, duration) if duration > 0 else reached
                 progress(None, f"語音辨識中… {_mmss(done)}{total}")
         except OperationCancelled:
             raise

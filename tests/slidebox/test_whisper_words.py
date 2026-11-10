@@ -334,3 +334,85 @@ def test_the_model_is_loaded_once_and_shared_with_the_single_speaker_path():
     t.transcribe_words("a.webm", 1.0, _quiet, lambda: False)
     t.transcribe_words("b.webm", 1.0, _quiet, lambda: False)
     assert built == ["large-v3-turbo"]
+
+
+# --- 補強：每一道防線都有一個測試抓得到它被拿掉（對照 mutation 的結果加的） ---
+
+
+def test_a_long_multiline_engine_error_is_shortened_and_keeps_its_cause():
+    """攔的 bug：底層錯誤動輒數百字、含換行，原樣放進狀態列；或例外鏈斷了，除錯時看不到真正的原因。"""
+    original = RuntimeError("很長的錯誤\n" + "x" * 400)
+    with pytest.raises(SpeechRecognitionFailed) as error:
+        _run(FakeModel([], error=original))
+    message = str(error.value)
+    assert "\n" not in message and len(message) <= 200 and message.endswith("…")
+    assert error.value.__cause__ is original
+
+
+def test_a_word_without_a_probability_is_trusted_but_an_unreadable_one_is_not():
+    """沒有這個欄位（極少見）不代表不可信；NaN 是壞資料——可信度 0，對齊時不當作確定。"""
+
+    class Bare:
+        def __init__(self, start, end, word):
+            self.start, self.end, self.word = start, end, word
+
+    model = FakeModel([Seg(0.0, 3.0, "好好好", [Bare(0.0, 1.0, "好"), W(1.0, 2.0, "好", math.nan),
+                                              W(2.0, 3.0, "好", 0.4)])])
+    words, _ = _run(model)
+    assert [w.probability for w in words] == [1.0, 0.0, 0.4]
+
+
+def test_progress_never_runs_past_the_length_of_the_audio():
+    """攔的 bug：最後一段的結束時間比音訊長度大一點（Whisper 常見），進度顯示「0:12 / 0:10」。"""
+    seen = []
+    model = FakeModel([Seg(0.0, 12.5, "好", [W(0.0, 12.5, "好")])])
+    _run(model, duration=10.0, progress=lambda f, s: seen.append(s))
+    assert [s for s in seen if s.startswith("語音辨識中")] == ["語音辨識中… 0:10 / 0:10"]
+
+
+def test_a_non_finite_time_in_the_progress_text_never_fails_the_transcription():
+    """攔的 bug：引擎給了 NaN／無限大的段落結束時間（或影片長度），進度文字算不出來——
+    進度只是參考，卻害整個辨識失敗（int(NaN) 丟 ValueError）。壞的那一段照樣處理，只是進度顯示 0:00。"""
+    seen = []
+    model = FakeModel([Seg(0.0, math.nan, "好", [W(0.0, 1.0, "好")]),
+                       Seg(1.0, math.inf, "吧", [W(1.0, 2.0, "吧")])])
+    words, _ = _run(model, duration=math.inf, progress=lambda f, s: seen.append(s))
+    assert [w.text for w in words] == ["好", "吧"]
+    per_segment = [s for s in seen if s.startswith("語音辨識中")]
+    assert per_segment == ["語音辨識中… 0:00", "語音辨識中… 0:00"]      # 影片長度不明，不顯示「/ 總長」
+
+
+def test_a_word_whose_times_cannot_be_recovered_is_dropped():
+    """攔的 bug：字的時間和整段的時間都是 NaN，字照樣進了結果——之後的對齊與存檔都會壞。"""
+    model = FakeModel([Seg(math.nan, math.nan, "好", [W(math.nan, math.nan, "好")]),
+                       Seg(1.0, 2.0, "吧", [W(1.0, 2.0, "吧")])])
+    words, _ = _run(model)
+    assert [w.text for w in words] == ["吧"]
+
+
+def test_a_spread_segment_gives_each_piece_time_in_proportion_to_its_length():
+    """攔的 bug：沒有字時間的段落平均分，長字和短字拿到一樣多的時間——換人點會偏掉。"""
+    words, _ = _run(FakeModel([Seg(0.0, 5.0, " abcd e", None)], language="en"))
+    assert [w.text for w in words] == [" abcd", " e"]
+    assert [(w.start, w.end) for w in words] == [
+        (0.0, pytest.approx(4.0)), (pytest.approx(4.0), pytest.approx(5.0))]
+
+
+def test_a_spread_segment_glues_quotes_to_the_word_they_belong_to():
+    """攔的 bug：開引號黏在前一個字上（「說「」），換人的邊界落在引號中間；
+    句子最後的開引號被默默弄丟，串起來就不是原文。"""
+    words, _ = _run(FakeModel([Seg(0.0, 6.0, "他說「好」。", None)]))
+    assert [w.text for w in words] == ["他", "說", "「好」。"]
+    words, _ = _run(FakeModel([Seg(0.0, 3.0, "他說「", None)]))
+    assert [w.text for w in words] == ["他", "說「"]
+
+
+def test_the_per_word_fallback_keeps_the_names_from_the_hint(monkeypatch):
+    """攔的 bug：退回逐字轉換時忘了保護詞——講者姓名裡的字被轉成別的字。"""
+    seen = []
+    monkeypatch.setattr(mod, "fix_transcript", lambda texts, keep_terms=(): ["多出來的字" + t for t in texts])
+    monkeypatch.setattr(mod, "to_traditional",
+                        lambda text, keep_terms=(): seen.append((text, list(keep_terms))) or text)
+    model = FakeModel([Seg(0.0, 2.0, "这个", [W(0.0, 1.0, "这"), W(1.0, 2.0, "个")])])
+    _run(model, hint="臺中市議會 發言者：楊啓邦")
+    assert len(seen) == 2 and all("楊啓邦" in terms for _, terms in seen)
