@@ -14,6 +14,14 @@ class DiarizationUnavailable(Exception):
     """需要區分說話者，但 GPU 上的 diarization 無法使用。"""
 
 
+class SpeechRecognitionFailed(Exception):
+    """多人模式的音訊下載或語音辨識失敗（沒有偵測到語音也算）：工作失敗，什麼都不發佈。
+
+    多人模式不用字幕，所以不借用 NoSubtitlesAvailable——那個例外的訊息一開頭就是
+    「這部影片沒有字幕」，對一支其實沒去找過字幕的工作是誤導。
+    """
+
+
 class AttributionUnreliable(Exception):
     """多人模式沒辦法可靠地說出「誰說了什麼」：工作失敗，什麼都不發佈。
 
