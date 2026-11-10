@@ -247,6 +247,8 @@ class WordTranscriber(Protocol):
 
         speech_hint 的意義同 SpeechTranscriber.transcribe 的 initial_prompt。沒偵測到
         任何語音時回傳空的 tuple。逐段檢查 is_cancelled，取消時 raise OperationCancelled。
+        辨識失敗（模型載不起來、解碼出錯…）raise SpeechRecognitionFailed，訊息給操作者看；
+        不用 NoSubtitlesAvailable——多人模式根本沒有找過字幕。
         """
         ...
 
@@ -371,6 +373,19 @@ class Checkpoints(Protocol):
 
     def save_words(self, output_dir: str, url: str, fingerprint: str,
                    words: WordTranscript) -> None:
+        ...
+
+    def load_conversation(self, output_dir: str, url: str,
+                          fingerprint: str) -> tuple[tuple[Slide, ...], int] | None:
+        """多人模式通過檢查的摘要：(投影片（含 points）, 模型提出的重點數)；沒有或對不上時回 None。
+
+        不借用 slides 階段：那一階段的檔案格式是單人模式的，沒有 points，也沒地方放提出的點數
+        （diarization_report 的 proposed_points 要用）。兩種模式的階段各用各的檔案，不會互相蓋掉。
+        """
+        ...
+
+    def save_conversation(self, output_dir: str, url: str, fingerprint: str,
+                          slides: Sequence[Slide], proposed: int) -> None:
         ...
 
     def clear(self, output_dir: str, url: str) -> None:
