@@ -84,3 +84,14 @@ def test_manual_subtitles_skip_rolling_dedupe():
     cues = (Cue(0.0, 2.0, "我們今天要講的是"), Cue(1.0, 3.0, "我們今天要"))
     out = compress_cues(cues, 1000, is_automatic=False)
     assert out == "[0] 我們今天要講的是 我們今天要"
+
+
+def test_automatic_subtitles_do_not_drop_the_same_words_after_a_speaker_change():
+    cues = (
+        Cue(0.0, 2.0, "我同意", speaker="說話者 1"),
+        Cue(3.0, 5.0, "我同意", speaker="說話者 2"),
+    )
+
+    out = compress_cues(cues, 1000)
+
+    assert out == "[0] [說話者 1] 我同意 [說話者 2] 我同意"

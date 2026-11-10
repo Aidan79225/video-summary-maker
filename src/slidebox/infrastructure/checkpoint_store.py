@@ -30,9 +30,11 @@ class JsonCheckpointStore:
             t = data["transcript"]
             transcript = Transcript(
                 video_id=t["video_id"], title=t["title"], duration=float(t["duration"]),
-                cues=tuple(Cue(float(c["start"]), float(c["end"]), c["text"]) for c in t["cues"]),
+                cues=tuple(Cue(float(c["start"]), float(c["end"]), c["text"], c.get("speaker", ""))
+                           for c in t["cues"]),
                 language=t["language"], is_automatic=bool(t["is_automatic"]),
-                source_note=t.get("source_note", ""))
+                source_note=t.get("source_note", ""),
+                speakers=tuple(t.get("speakers", ())))
             return transcript, data["note"]
         except (KeyError, TypeError, ValueError):
             return None

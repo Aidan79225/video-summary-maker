@@ -119,8 +119,10 @@ class SlideboxExecutor:
     def __call__(self, job: Job, progress: ProgressCallback,
                  is_cancelled: CancelCheck) -> dict:
         settings = self._apply(job)
-        result = self._usecase.execute(job.url, settings, progress, is_cancelled,
-                                       speech_hint=job.speech_hint)
+        kwargs = {"speech_hint": job.speech_hint}
+        if job.speaker_mode != "single" or job.speaker_count is not None:
+            kwargs.update(speaker_mode=job.speaker_mode, speaker_count=job.speaker_count)
+        result = self._usecase.execute(job.url, settings, progress, is_cancelled, **kwargs)
         return deck_payload(result.deck, video_id_of(job.url))
 
     def _apply(self, job: Job) -> Settings:
@@ -193,8 +195,10 @@ class ByKindExecutor:
     工作。
     """
 
-    def __init__(self, executors: Mapping[JobKind, Executor]):
+    def __init__(self, executors: Mapping[JobKind, Executor],
+                 speaker_capabilities: Callable[[], tuple[bool, str]] | None = None):
         self._executors = dict(executors)
+        self.speaker_capabilities = speaker_capabilities
 
     def __call__(self, job: Job, progress: ProgressCallback,
                  is_cancelled: CancelCheck) -> dict:

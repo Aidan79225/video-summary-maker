@@ -10,6 +10,10 @@ class NoSubtitlesAvailable(Exception):
     """影片沒有任何可用的字幕軌。"""
 
 
+class DiarizationUnavailable(Exception):
+    """需要區分說話者，但 GPU 上的 diarization 無法使用。"""
+
+
 class SubtitleDownloadFailed(NoSubtitlesAvailable):
     """取得逐字稿失敗，而且**改走語音也幫不上忙**：use case 直接回報，不做語音備援。
 

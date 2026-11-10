@@ -18,7 +18,7 @@ ENV IMAGEIO_FFMPEG_EXE=/usr/bin/ffmpeg
 
 COPY pyproject.toml uv.lock ./
 # pyside6 是桌面 app 才需要的；API 走的是不碰 Qt 的 build_usecase，跳過它省下幾百 MB
-RUN uv sync --frozen --no-dev --group api --group whisper-gpu --no-install-package pyside6
+RUN uv sync --frozen --no-dev --group api --group whisper-gpu --group diarization --no-install-package pyside6
 # ctranslate2 在執行時動態載入 cuBLAS／cuDNN；pip 版的函式庫不在系統路徑上，要指給它
 ENV LD_LIBRARY_PATH=/app/.venv/lib/python3.13/site-packages/nvidia/cublas/lib:/app/.venv/lib/python3.13/site-packages/nvidia/cudnn/lib
 

@@ -23,7 +23,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "src
 
 from fastapi import FastAPI
 
-from slidebox.composition import build_usecase
+from slidebox.composition import build_diarizer, build_usecase
 from slidebox.domain.entities import Settings
 from slidebox.infrastructure.ollama_summarizer import (
     OllamaFollowUpJudge,
@@ -82,7 +82,8 @@ def warn_if_exposed_without_key() -> None:
 def build_executor(settings: Settings) -> ByKindExecutor:
     # use case 只建一次：它會連帶建立語音辨識器，模型載入要 40 秒並佔著
     # VRAM，每個工作重建一次等於每次重付。
-    deck = SlideboxExecutor(build_usecase(settings), settings)
+    diarizer = build_diarizer()
+    deck = SlideboxExecutor(build_usecase(settings, diarizer=diarizer), settings)
     # 分類器的 host、num_ctx 與預設模型在這裡就取值定下來：SlideboxExecutor 會
     # 把摘要工作指定的模型寫進共用的 settings，分類不能跟著它變。num_ctx 跟
     # 摘要同一個，Ollama 才不會在兩種工作之間重新載入模型。
@@ -95,8 +96,12 @@ def build_executor(settings: Settings) -> ByKindExecutor:
         partial(OllamaFollowUpJudge, settings.ollama_host, num_ctx=settings.num_ctx),
         settings.model,
     )
-    return ByKindExecutor({JobKind.DECK: deck, JobKind.TOPIC: topic,
-                           JobKind.FOLLOWUP: followup})
+    # 回傳給 API 的能力檢查與 deck executor 共用同一個 lazy pipeline，
+    # 否則能力端點載過的模型不會被實際工作重用。
+    return ByKindExecutor(
+        {JobKind.DECK: deck, JobKind.TOPIC: topic, JobKind.FOLLOWUP: followup},
+        speaker_capabilities=diarizer.available,
+    )
 
 
 def build() -> FastAPI:
@@ -111,6 +116,7 @@ def build() -> FastAPI:
         model=settings.model,
         ollama_host=settings.ollama_host,
         probe_ollama=ollama_probe(settings.ollama_host),
+        probe_speaker_diarization=executor.speaker_capabilities,
     )
 
 

@@ -6,10 +6,11 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True)
 class Cue:
-    """字幕的一句。"""
+    """字幕的一句；speaker 是 diarization 後的匿名說話者標籤。"""
     start: float
     end: float
     text: str
+    speaker: str = ""
 
 
 @dataclass(frozen=True)
@@ -26,6 +27,16 @@ class Transcript:
     # 「滾動字幕」這個技術事實，不是品質標籤：有些來源兩者不重合，所以讓
     # 來源自己說。空字串表示由 use case 依 is_automatic 判斷。
     source_note: str = ""
+    # 只有影片多人模式會填；名稱是「說話者 1」這類匿名標籤，不是猜出來的真人姓名。
+    speakers: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class SpeakerTurn:
+    """diarization 找到的一段聲音與匿名說話者。"""
+    start: float
+    end: float
+    speaker: str
 
 
 @dataclass(frozen=True)
@@ -106,6 +117,8 @@ class Deck:
     transcript_text: str = ""
     # 詳細模式下另外產生的質詢卡；產不出來時為 None，成品照常出片。
     brief: Brief | None = None
+    # 影片多人模式的匿名說話者清單；議會文章維持空清單。
+    speakers: tuple[str, ...] = ()
 
     @property
     def missing_images(self) -> int:

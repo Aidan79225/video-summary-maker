@@ -18,7 +18,7 @@ from pydantic import BaseModel, Field
 
 from slidebox.domain.entities import FollowUpPair, TopicLabel
 
-from .jobs import Job, JobKind, JobStore
+from .jobs import Job, JobKind, JobStore, SpeakerMode
 from .runner import JobWorker
 
 MAX_SLIDES = 50
@@ -58,6 +58,9 @@ class JobRequest(BaseModel):
     model: str | None = None
     # 語音辨識的專有名詞提示（講者姓名、機關名），走 Whisper 的來源才用得到
     speech_hint: str | None = Field(default=None, max_length=200)
+    # 舊的議會 client 維持 single；YouTube add_video 明確送 diarize。
+    speaker_mode: SpeakerMode = SpeakerMode.SINGLE
+    speaker_count: int | None = Field(default=None, ge=1, le=20)
     # 以下只有分類工作用得到：要分類的文字與可選的領域
     text: str = Field(default="", max_length=MAX_TOPIC_TEXT)
     labels: list[TopicLabelIn] = Field(default_factory=list)
@@ -93,6 +96,11 @@ class HealthView(BaseModel):
     busy: bool
 
 
+class CapabilitiesView(BaseModel):
+    speaker_diarization: bool
+    reason: str = ""
+
+
 def _view(job: Job, include_result: bool = True) -> JobView:
     return JobView(
         id=job.id, kind=job.kind, url=job.url, status=job.status, detailed=job.detailed,
@@ -111,6 +119,7 @@ def create_app(
     model: str,
     ollama_host: str,
     probe_ollama: Callable[[], bool],
+    probe_speaker_diarization: Callable[[], tuple[bool, str]] | None = None,
 ) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -140,13 +149,21 @@ def create_app(
             ollama_reachable=probe_ollama(), queued=queued, busy=bool(running),
         )
 
+    @app.get("/capabilities", response_model=CapabilitiesView)
+    def capabilities() -> CapabilitiesView:
+        if probe_speaker_diarization is None:
+            return CapabilitiesView(speaker_diarization=False, reason="GPU 尚未提供多人說話者區分能力")
+        available, reason = probe_speaker_diarization()
+        return CapabilitiesView(speaker_diarization=available, reason=reason)
+
     @app.post("/jobs", status_code=202, dependencies=[Depends(require_key)])
     def submit(request: JobRequest) -> JobView:
         _validate(request)
         return _view(store.submit(
             request.url, detailed=request.detailed, min_slides=request.min_slides,
             max_slides=request.max_slides, model=request.model,
-            speech_hint=request.speech_hint, kind=request.kind, text=request.text,
+            speech_hint=request.speech_hint, speaker_mode=request.speaker_mode,
+            speaker_count=request.speaker_count, kind=request.kind, text=request.text,
             labels=[TopicLabel(key=item.key, label=item.label,
                                description=item.description)
                     for item in request.labels],
@@ -190,6 +207,10 @@ def _validate_deck(request: JobRequest) -> None:
             and request.min_slides > request.max_slides:
         raise HTTPException(status_code=422, detail="min_slides 不可大於 max_slides")
     _validate_url(request.url)
+    if request.speaker_mode == SpeakerMode.SINGLE and request.speaker_count not in (None, 1):
+        raise HTTPException(status_code=422, detail="single 模式的 speaker_count 只能是 1")
+    if request.speaker_mode == SpeakerMode.DIARIZE and request.speaker_count == 1:
+        raise HTTPException(status_code=422, detail="diarize 模式的 speaker_count 要省略或至少是 2")
 
 
 def _validate_url(url: str) -> None:

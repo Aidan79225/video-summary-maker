@@ -137,12 +137,18 @@ def _dedupe(cues: Sequence[Cue], is_automatic: bool = True) -> list[tuple[float,
     不會滾動，去重只有壞處，只濾掉空白 cue。
     """
     if not is_automatic:
-        return [(cue.start, " ".join(cue.text.split())) for cue in cues
+        return [(cue.start, _with_speaker(cue, " ".join(cue.text.split()))) for cue in cues
                 if " ".join(cue.text.split())]
     out: list[tuple[float, str]] = []
     prev = ""
+    prev_speaker = ""
     for cue in cues:
-        text = " ".join(cue.text.split())
+        raw = " ".join(cue.text.split())
+        text = raw
+        if cue.speaker != prev_speaker:
+            # 兩個不同說話者的相同句子不是滾動字幕重複，不能因為文字一樣
+            # 把後一個人的發言刪掉。
+            prev = ""
         # 只有夠長的重複才視為滾動字幕的殘留；短句（對／好／是啊）本身就是內容
         if not text or (len(text) >= _MIN_OVERLAP and text in prev):
             continue
@@ -154,9 +160,15 @@ def _dedupe(cues: Sequence[Cue], is_automatic: bool = True) -> list[tuple[float,
             k = 0          # 巧合等級的重疊不修剪
         new = text[k:].strip()
         prev = text
+        prev_speaker = cue.speaker
         if new:
-            out.append((cue.start, new))
+            out.append((cue.start, _with_speaker(cue, new)))
     return out
+
+
+def _with_speaker(cue: Cue, text: str) -> str:
+    """把匿名說話者放進給模型與讀者看的文字，不影響舊的單人 cue。"""
+    return f"[{cue.speaker}] {text}" if cue.speaker else text
 
 
 def _group(pairs: Sequence[tuple[float, str]], window: float, keep: float = 1.0) -> str:

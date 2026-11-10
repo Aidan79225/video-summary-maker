@@ -24,6 +24,7 @@ class DeckField(StrEnum):
     TRANSCRIPT = "transcript_text"
     SLIDES = "slides"
     BRIEF = "brief"
+    SPEAKERS = "speakers"
 
 
 class SlideField(StrEnum):
@@ -93,6 +94,7 @@ def deck_payload(deck: Deck, video_id: str) -> dict:
         DeckField.TRANSCRIPT: deck.transcript_text,
         DeckField.SLIDES: [_slide_payload(s) for s in deck.slides],
         DeckField.BRIEF: brief_payload(deck.brief),
+        DeckField.SPEAKERS: list(deck.speakers),
     }
 
 

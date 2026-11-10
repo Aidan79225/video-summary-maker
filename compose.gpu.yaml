@@ -39,6 +39,9 @@ services:
       SLIDEBOX_MODEL: ${SLIDEBOX_MODEL:-qwen3.5:9b}
       # auto：有 CUDA 就用顯示卡，載不起來退回 CPU；cpu／cuda 強制
       SLIDEBOX_WHISPER_DEVICE: ${SLIDEBOX_WHISPER_DEVICE:-auto}
+      # pyannote/speaker-diarization-community-1 的 Hugging Face token；
+      # 需先在 Hugging Face 接受模型條款。沒有它時議會單人工作仍可跑，YouTube 多人模式會拒絕。
+      HUGGINGFACE_TOKEN: ${HUGGINGFACE_TOKEN:-}
     volumes:
       - summary-output:/data/output
       # faster-whisper 第一次用會下載 1.6 GB 的模型，放 volume 才不會每次重建都重抓。

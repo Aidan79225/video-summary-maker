@@ -25,6 +25,7 @@ from .infrastructure.routing import (
 )
 from .infrastructure.ntpc_api import NtpcClient
 from .infrastructure.ntpc_audio import NtpcAudioGateway
+from .infrastructure.pyannote_diarizer import PyannoteSpeakerDiarizer
 from .infrastructure.settings_repository import JsonSettingsRepository
 from .infrastructure.tccc_api import TcccClient
 from .infrastructure.tccc_audio import TcccAudioGateway
@@ -115,7 +116,12 @@ class CurrentSettingsSlideRewriter:
             slide, problem, progress, is_cancelled)
 
 
-def build_usecase(settings: Settings) -> BuildDeckUseCase:
+def build_diarizer() -> PyannoteSpeakerDiarizer:
+    """建立延遲載入的說話者區分器；沒有 token 時仍可跑議會的單人工作。"""
+    return PyannoteSpeakerDiarizer()
+
+
+def build_usecase(settings: Settings, diarizer: PyannoteSpeakerDiarizer | None = None) -> BuildDeckUseCase:
     """組好一條完整的 pipeline。
 
     刻意與 UI 分開：這個函式不碰 PySide6，所以無介面的服務（例如每天跑一輪
@@ -150,6 +156,7 @@ def build_usecase(settings: Settings) -> BuildDeckUseCase:
         audio=BySourceAudioGateway(YtDlpAudioGateway(), tccc=TcccAudioGateway(tccc_client),
                                    ntpc=NtpcAudioGateway(ntpc_client)),
         transcriber=FasterWhisperTranscriber(settings.whisper_model),
+        diarizer=diarizer or build_diarizer(),
         # 詳細模式下多寫一張摘要卡（一句話、關鍵數字、要求與回應）
         brief_writer=CurrentSettingsBriefWriter(settings),
         # 摘要有第一人稱時只把那幾頁送回去改，不整份重產

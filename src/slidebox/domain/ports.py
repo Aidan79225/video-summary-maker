@@ -15,6 +15,7 @@ from .entities import (
     TopicLabel,
     TopicResult,
     Transcript,
+    SpeakerTurn,
 )
 
 # 進度回報：fraction 為 0..1，None 表示不確定；status 為文字說明。
@@ -222,6 +223,25 @@ class SpeechTranscriber(Protocol):
         逐段檢查 is_cancelled，取消時 raise OperationCancelled。
         duration 只用於進度顯示，給 0 時不顯示總長。
         """
+        ...
+
+
+class SpeechDiarizer(Protocol):
+    """把音訊切成匿名說話者區段。"""
+
+    def available(self) -> tuple[bool, str]:
+        """回傳 (可用與否, 給管理者看的原因)。"""
+        ...
+
+    def diarize(
+        self,
+        audio_path: str,
+        duration: float,
+        speaker_count: int | None,
+        progress: ProgressCallback,
+        is_cancelled: CancelCheck,
+    ) -> tuple[SpeakerTurn, ...]:
+        """回傳按時間排序的說話者區段；speaker 仍是匿名識別碼。"""
         ...
 
 
