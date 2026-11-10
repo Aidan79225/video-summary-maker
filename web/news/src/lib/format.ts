@@ -39,22 +39,53 @@ export function formatDateWithWeekday(iso: string | null | undefined): string {
   return `${m[1]}.${m[2]}.${m[3]}${wd}`;
 }
 
+export type TranscriptLine = { time: string; speaker: string; body: string };
+
 /**
  * 逐字稿拆行：每行開頭是 mm:ss。
  *
  * 分鐘是累計的、不補到兩位以上：兩小時的影片會寫到「125:30」，所以允許三位數；
  * 只認兩位的話，一百分鐘以後的每一行都會掉出時間欄。
+ *
+ * 多人影片的一行是「mm:ss 顯示名：內文」。speakers 是這篇文章已知的顯示名（出場名單）：
+ * 第一個全形冒號前面剛好是其中一個，才拆出說話者；不是（議會的「主席：…」、影片內文裡
+ * 的冒號、名字對不上的）一律整行當內文、speaker 是空字串——寧可不標，也不亂拆。
+ * 沒給（或給空陣列）就完全不拆，議會與單人影片的逐字稿跟改版前逐字相同。
  */
-export function parseTranscript(text: string): { time: string; body: string }[] {
+export function parseTranscript(text: string, speakers: readonly string[] = []): TranscriptLine[] {
   if (!text) return [];
+  const known = new Set(speakers.filter(Boolean));
   return text
     .split(/\r?\n/)
     .map((line) => line.trim())
     .filter(Boolean)
     .map((line) => {
       const m = /^(\d{1,3}:\d{2}(?::\d{2})?)\s*(.*)$/.exec(line);
-      return m ? { time: m[1], body: m[2] } : { time: '', body: line };
+      const time = m ? m[1] : '';
+      const rest = m ? m[2] : line;
+      if (known.size > 0) {
+        const colon = rest.indexOf('：');
+        const who = colon > 0 ? rest.slice(0, colon).trim() : '';
+        if (known.has(who)) return { time, speaker: who, body: rest.slice(colon + 1).trim() };
+      }
+      return { time, speaker: '', body: rest };
     });
+}
+
+export type TranscriptGroup = { speaker: string; lines: { time: string; body: string }[] };
+
+/**
+ * 相鄰、同一位說話者的行併成一塊（晶片只畫一次）。沒有說話者的行（speaker 是空字串）
+ * 不會併進有說話者的那塊；連續的無說話者行自成一塊。每一行恰好出現一次、順序不變。
+ */
+export function groupTranscript(lines: readonly TranscriptLine[]): TranscriptGroup[] {
+  const groups: TranscriptGroup[] = [];
+  for (const l of lines) {
+    const last = groups[groups.length - 1];
+    if (last && last.speaker === l.speaker) last.lines.push({ time: l.time, body: l.body });
+    else groups.push({ speaker: l.speaker, lines: [{ time: l.time, body: l.body }] });
+  }
+  return groups;
 }
 
 /** 保留既有 query，換掉其中幾個值；空值就移除 */

@@ -1,0 +1,20 @@
+---
+/**
+ * 多人影片的說話者晶片：形狀＋文字（顯示名），顏色只是輔助。
+ *
+ * 文字就是無障礙名稱，形狀是裝飾（aria-hidden）。不是連結——影片的說話者沒有自己的頁面
+ * （「發言者 A」不是人，編輯設的名字也沒有名冊可以對），所以任何地方都不連到 /speaker/。
+ * 樣式在 styles/global.css 的 .spk。
+ */
+import { SHAPES, type Mark } from '../lib/speakers';
+
+interface Props {
+  mark: Mark;
+  class?: string;
+}
+
+const { mark, class: extra = '' } = Astro.props;
+const shape = SHAPES[mark.shape % SHAPES.length];
+---
+
+<span class:list={['spk', extra]} data-kind={mark.kind} data-tone={mark.tone} data-shape={shape}><span class="spk-mark" aria-hidden="true"></span><span class="spk-name">{mark.display}</span></span>

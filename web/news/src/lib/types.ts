@@ -19,6 +19,24 @@ export type ArticleCard = {
   teaser: string;
   cover_image_url: string | null;
   slide_count: number;
+  /**
+   * 多人影片的參與者人數（列表才帶，選配）。沒帶、不是正整數就是 undefined，卡片不顯示；
+   * 只有影片可能有，議會永遠沒有。
+   */
+  participant_count?: number;
+};
+
+/**
+ * 多人影片的一個重點：誰（speaker 是編號、display 是後端代好的顯示名）在影片的哪一秒講了什麼。
+ *
+ * 誰講的是程式從聲音的分段查出來的，不是語言模型猜的；網站只顯示。start 不是有限的非負數時
+ * 是 null（重點照留，只是沒有時間連結）。
+ */
+export type Point = {
+  speaker: string;
+  display: string;
+  start: number | null;
+  text: string;
 };
 
 export type Slide = {
@@ -28,6 +46,8 @@ export type Slide = {
   detail: string;
   timestamp: number;
   image_url: string | null;
+  /** 多人影片才有內容；單人影片、議會、舊版 API 都是空陣列（normalizeSlides 補齊） */
+  points: Point[];
 };
 
 /** 一條法條的原文，附官方與 LYAPI 兩個連結。只附來源，不判對錯。 */
@@ -67,11 +87,53 @@ export type Brief = {
   asks: Ask[];
 };
 
+/**
+ * 多人影片裡，用聲音區分出來的一位說話者（`/api/articles/{slug}` 的 speakers）。
+ *
+ * 名稱與合併都由後端解開：display 就是要顯示的字（編輯設了名字就是名字，否則是標籤
+ * 「發言者 A」「其他聲音 1」），網站不再自己判斷是誰。叫 VideoSpeaker 是因為 Speaker
+ * 已經是議會的發言者清單（/api/speakers）。
+ */
+export type VideoSpeaker = {
+  /** "S1"…；重點的 speaker 欄位用它對應 */
+  id: string;
+  /** 程式給的中性標籤，從不是人名 */
+  label: string;
+  /** 編輯（label_video）設的名字，沒設是空字串 */
+  name: string;
+  /** 編輯設的角色，沒設是空字串 */
+  role: string;
+  display: string;
+  /** participant 是說了不少話的；minor 是短暫出現的聲音，只在逐字稿，不寫進重點 */
+  kind: 'participant' | 'minor';
+  seconds: number;
+  turns: number;
+  /** none＝程式給的標籤、沒人確認過；operator＝編輯設了名字或角色。看不懂的值一律當 none */
+  basis: 'none' | 'operator';
+  flags: string[];
+};
+
+/**
+ * 說話者區分的結果摘要。只放網站要說明的：狀態與警告碼；診斷用的比例、信心不帶進來，
+ * 頁面也不顯示。warnings 是後端的警告碼（count_mismatch、high_unassigned、many_minor、
+ * single_found），不認得的碼照留，由 diarizationNotes 轉成一句通用的話。
+ */
+export type Diarization = {
+  status: 'ok' | 'warn';
+  warnings: string[];
+  requested_speakers: number | null;
+  found_speakers: number | null;
+};
+
 export type ArticleDetail = ArticleCard & {
   source_note: string;
   transcript_text: string;
   brief: Brief | null;
   slides: Slide[];
+  /** 多人影片的說話者；單人影片、議會、舊版 API 都是空陣列（normalizeArticleDetail 補齊） */
+  speakers: VideoSpeaker[];
+  /** 多人影片的區分結果；沒有就是 null */
+  diarization: Diarization | null;
 };
 
 export type ArticleList = {

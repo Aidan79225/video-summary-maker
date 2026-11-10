@@ -2,8 +2,10 @@
 import type { Slide } from '../lib/types';
 import { mediaUrl } from '../lib/api';
 import { mmss } from '../lib/format';
-import { timestampHint, timestampHref } from '../lib/sources';
+import { FRAME_CAPTION, pointMark, type Cast } from '../lib/speakers';
+import { isVideoSource, timestampHint, timestampHref } from '../lib/sources';
 import Figure from './Figure.astro';
+import SpeakerChip from './SpeakerChip.astro';
 
 interface Props {
   slide: Slide;
@@ -11,15 +13,22 @@ interface Props {
   source?: string;
   order: number;
   total: number;
+  /** 多人影片的出場名單；沒有（議會、單人影片）就是以前的樣子 */
+  cast?: Cast;
 }
 
-const { slide, ivodUrl, source, order, total } = Astro.props;
+const { slide, ivodUrl, source, order, total, cast } = Astro.props;
 const img = mediaUrl(slide.image_url);
 const num = String(slide.index ?? order).padStart(2, '0');
 const time = mmss(slide.timestamp);
 // 原片網址吃時間參數的來源（YouTube）直接跳到這一段；其餘維持原網址、從頭播
 const href = timestampHref(source, ivodUrl, slide.timestamp);
 const bullets = Array.isArray(slide.bullets) ? slide.bullets.filter(Boolean) : [];
+// 多人影片的重點：每一點有自己的說話者與時間。有的話取代平的條列（條列只是它的前幾點、
+// 沒有時間）；沒有（議會、單人影片、舊版 API）就是以前的條列。只有影片來源才採用——
+// 議會的質詢不會有說話者，就算壞掉的 API 送了 points 來也不改變議會頁面
+const points = isVideoSource(source) && Array.isArray(slide.points) ? slide.points : [];
+const multi = !!cast && cast.members.length > 0;
 ---
 
 <section
@@ -61,18 +70,67 @@ const bullets = Array.isArray(slide.bullets) ? slide.bullets.filter(Boolean) : [
         ratio="16 / 9"
         label="此段無截圖"
       />
+      {
+        multi && img && (
+          <p data-frame-caption class="mt-2 text-[0.75rem] leading-relaxed text-muted">{FRAME_CAPTION}</p>
+        )
+      }
 
       <h2 id={`s${slide.index ?? order}-h`} class="headline mt-5 text-xl font-semibold sm:text-2xl">
         {slide.title}
       </h2>
 
       {
-        bullets.length > 0 && (
-          <ul class="mt-4 space-y-2 border-l-2 border-accent/40 pl-4 text-[0.92rem] text-ink-2">
-            {bullets.map((b) => (
-              <li class="leading-relaxed">{b}</li>
-            ))}
+        points.length > 0 ? (
+          <ul
+            data-points
+            aria-label="這一段的重點，依說話者標示"
+            class="mt-4 space-y-3 border-l-2 border-accent/40 pl-4 text-[0.92rem] text-ink-2"
+          >
+            {points.map((p) => {
+              const at = p.start === null ? null : mmss(p.start);
+              const to = p.start === null ? null : timestampHref(source, ivodUrl, p.start);
+              return (
+                <li
+                  data-point={p.speaker}
+                  class="grid gap-x-3 gap-y-1 sm:grid-cols-[9rem_minmax(0,1fr)]"
+                >
+                  <span class="self-start">
+                    <SpeakerChip mark={pointMark(cast, p.speaker, p.display)} />
+                  </span>
+                  <span class="min-w-0 leading-relaxed">
+                    {p.text}
+                    {at !== null && to && (
+                      <a
+                        href={to}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        title={timestampHint(source, at)}
+                        aria-label={`從 ${at} 開始播放`}
+                        class="ml-2 inline-flex items-center gap-1 rounded-full border border-line bg-surface px-2 py-0.5 align-middle text-[0.7rem] leading-snug text-muted hover:border-accent hover:text-accent"
+                      >
+                        <svg viewBox="0 0 24 24" class="h-2.5 w-2.5" fill="currentColor" aria-hidden="true">
+                          <path d="M8 5.5v13l11-6.5z"></path>
+                        </svg>
+                        <span class="tabular">{at}</span>
+                      </a>
+                    )}
+                    {at !== null && !to && (
+                      <span class="tabular ml-2 text-[0.7rem] text-muted">{at}</span>
+                    )}
+                  </span>
+                </li>
+              );
+            })}
           </ul>
+        ) : (
+          bullets.length > 0 && (
+            <ul class="mt-4 space-y-2 border-l-2 border-accent/40 pl-4 text-[0.92rem] text-ink-2">
+              {bullets.map((b) => (
+                <li class="leading-relaxed">{b}</li>
+              ))}
+            </ul>
+          )
         )
       }
 

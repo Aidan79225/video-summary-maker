@@ -10,9 +10,9 @@ const PAGE_SIZE = 12;
 // 影片來源的代碼（lib/sources.ts 裡 kind 是 video 的那一列）。後端沒帶 source 時只回議會，
 // 影片一定要明確要
 const SOURCE = 'youtube';
-// 新增影片只能在 Pi 上用指令：網站是唯讀的，空的時候把指令寫出來。這一版的 add_video 沒有 --speakers 1
-// 就拒絕登記（用聲音區分說話的人的功能還在做）；那個功能完成後，指令不再需要它，把它從這裡拿掉
-const ADD_COMMAND = "sudo docker exec ly-news-api python manage.py add_video '<影片網址>' --speakers 1";
+// 新增影片只能在 Pi 上用指令：網站是唯讀的，空的時候把指令寫出來。add_video 預設就是多人
+// （用聲音區分說話者），只有確定單人的影片才用 --speakers 1 聲明，所以範例指令不帶它
+const ADD_COMMAND = "sudo docker exec ly-news-api python manage.py add_video '<影片網址>'";
 
 const url = Astro.url;
 const page = Math.max(1, Number(url.searchParams.get('page')) || 1);
@@ -75,7 +75,7 @@ const retryHref = `${url.pathname}${url.search}`;
             body={
               beyondLastPage
                 ? `影片只有 ${list?.pages ?? 1} 頁。`
-                : '影片只能在 Raspberry Pi 上用指令加入，網站本身是唯讀的。在容器裡貼上 YouTube 影片的網址（--speakers 1 是聲明這支影片只有一個人在講話）：'
+                : '影片只能在 Raspberry Pi 上用指令加入，網站本身是唯讀的。在容器裡貼上 YouTube 影片的網址：'
             }
             retryHref={beyondLastPage ? '/videos' : retryHref}
           >

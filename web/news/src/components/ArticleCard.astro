@@ -2,6 +2,7 @@
 import type { ArticleCard } from '../lib/types';
 import { mediaUrl } from '../lib/api';
 import { formatDateWithWeekday, humanDuration } from '../lib/format';
+import { cardParticipantCount } from '../lib/speakers';
 import { articleTitle } from '../lib/sources';
 import Figure from './Figure.astro';
 import SourceBadge from './SourceBadge.astro';
@@ -16,6 +17,8 @@ interface Props {
 const { article, index = 0, eager = false } = Astro.props;
 const cover = mediaUrl(article.cover_image_url);
 const title = articleTitle(article.source, article.title);
+// 多人影片才有的人數（只算參與者、不含短暫的聲音）；沒有或不是正整數就不顯示，卡片跟以前一模一樣
+const participants = cardParticipantCount(article.participant_count);
 ---
 
 <article
@@ -57,7 +60,10 @@ const title = articleTitle(article.source, article.title);
     <p class="line-clamp-4 text-sm leading-relaxed text-muted">{article.teaser}</p>
 
     <div
-      class="mt-auto flex items-center gap-3 border-t border-line-soft pt-3 text-[0.7rem] text-muted/80"
+      class:list={[
+        'mt-auto flex items-center gap-3 border-t border-line-soft pt-3 text-[0.7rem] text-muted/80',
+        participants && 'flex-wrap gap-y-1',
+      ]}
     >
       <span class="tabular">{article.slide_count} 段重點</span>
       {
@@ -65,6 +71,14 @@ const title = articleTitle(article.source, article.title);
           <>
             <span aria-hidden="true" class="text-line">·</span>
             <span class="tabular">{humanDuration(article.duration_seconds)}</span>
+          </>
+        )
+      }
+      {
+        participants && (
+          <>
+            <span aria-hidden="true" class="text-line">·</span>
+            <span class="tabular" data-participants>{participants} 位說話者</span>
           </>
         )
       }
