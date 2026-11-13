@@ -520,11 +520,58 @@ def test_cancel_and_failure_of_the_audio_decoder_propagate():
 
 
 def test_an_inference_failure_is_readable_and_points_at_the_escape_hatch():
+    pipeline = Pipeline(error=RuntimeError("cuDNN error: CUDNN_STATUS_EXECUTION_FAILED"))
+    with pytest.raises(DiarizationUnavailable) as error:
+        run(make(pipeline, device="cuda"))
+    text = str(error.value)
+    assert "CUDNN_STATUS_EXECUTION_FAILED" in text and "SLIDEBOX_DIARIZATION_DEVICE=cpu" in text
+
+
+def test_a_failure_while_running_does_not_blame_the_model_terms():
+    """攔的 bug：跑到一半的失敗（例如顯示卡記憶體不足）也被勸「請確認已接受模型條款」。
+    模型都載入成功了，條款一定接受過；操作者照著建議回去查 token，白費工夫。"""
+    pipeline = Pipeline(error=RuntimeError("cuDNN error: CUDNN_STATUS_EXECUTION_FAILED"))
+    with pytest.raises(DiarizationUnavailable) as error:
+        run(make(pipeline, device="cuda"))
+    assert "條款" not in str(error.value)
+
+
+def test_a_failure_while_loading_still_asks_about_the_model_terms():
+    """對照：載入階段的失敗才是條款（或 token 權限）的問題，這句話要留在那裡。"""
+
+    def refused(name, token):
+        raise OSError("403 Client Error: gated repo")
+
+    with pytest.raises(DiarizationUnavailable) as error:
+        run(make(factory=refused))
+    assert "使用條款" in str(error.value)
+
+
+def test_cuda_running_out_of_memory_is_named_as_such_and_points_at_vram_sharing():
+    """顯示卡同時給 Ollama、語音辨識與說話者區分用；跑到一半最像的失敗就是記憶體不夠。"""
     pipeline = Pipeline(error=RuntimeError("CUDA out of memory. Tried to allocate 2.00 GiB"))
     with pytest.raises(DiarizationUnavailable) as error:
-        run(make(pipeline))
+        run(make(pipeline, device="cuda"))
     text = str(error.value)
-    assert "CUDA out of memory" in text and "SLIDEBOX_DIARIZATION_DEVICE=cpu" in text
+    assert "顯示卡記憶體不足" in text and "Ollama" in text
+    assert "SLIDEBOX_DIARIZATION_DEVICE=cpu" in text and "條款" not in text
+
+
+def test_an_out_of_memory_error_class_is_recognised_even_when_its_text_is_terse():
+    class OutOfMemoryError(RuntimeError):          # 比照 torch.cuda.OutOfMemoryError 的名字
+        pass
+
+    pipeline = Pipeline(error=OutOfMemoryError("allocation failed"))
+    with pytest.raises(DiarizationUnavailable, match="顯示卡記憶體不足"):
+        run(make(pipeline, device="cuda"))
+
+
+def test_the_cpu_hint_is_left_out_when_the_run_was_already_on_the_cpu():
+    """對照：已經在 CPU 上了，還勸人「改用 CPU」只會讓人困惑。"""
+    pipeline = Pipeline(error=RuntimeError("something broke"))
+    with pytest.raises(DiarizationUnavailable) as error:
+        run(make(pipeline, device="cpu"))
+    assert "something broke" in str(error.value) and "SLIDEBOX_DIARIZATION_DEVICE" not in str(error.value)
 
 
 def test_the_token_never_appears_in_any_error_message():

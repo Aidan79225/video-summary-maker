@@ -202,10 +202,7 @@ class PyannoteSpeakerDiarizer:
         except Exception as e:  # noqa: BLE001
             if cancelled_in_hook or is_cancelled():
                 raise OperationCancelled() from e
-            raise DiarizationUnavailable(
-                f"說話者區分失敗（{self._safe(e)}）；請確認 GPU 主機已接受 {self._model_name} 的模型條款。"
-                f"{_ESCAPE_HATCH}"
-            ) from e
+            raise DiarizationUnavailable(self._run_failure(e)) from e
         if is_cancelled():
             raise OperationCancelled()
         if not turns:
@@ -270,6 +267,20 @@ class PyannoteSpeakerDiarizer:
             return "cpu"
         return "cuda"
 
+    def _run_failure(self, error: Exception) -> str:
+        """跑到一半的失敗（模型已經載入成功）。
+
+        **不提模型條款**：載得起來就代表條款接受過，那句話只屬於載入階段；跑到一半最常見的是顯示卡
+        記憶體不夠（同一張卡同時給 Ollama、語音辨識與說話者區分用）或 cuDNN／核心的錯誤，勸操作者
+        回頭查 token 只是白費工夫。改用 CPU 的逃生口只在用顯示卡時才有意義。
+        """
+        reason = self._safe(error)
+        on_gpu = self._device_used != "cpu"
+        if on_gpu and _is_out_of_memory(error):
+            return (f"說話者區分失敗：顯示卡記憶體不足（Ollama、語音辨識與說話者區分共用同一張卡）：{reason}。"
+                    f"稍後再試，或設 {DEVICE_ENV}=cpu 改用 CPU（較慢）")
+        return f"說話者區分失敗（{reason}）" + (f"。{_ESCAPE_HATCH}" if on_gpu else "")
+
     def _safe(self, error: Exception) -> str:
         """給人看的錯誤：蓋掉 token、壓成一行、截短。"""
         text = " ".join(str(error).split())
@@ -277,6 +288,11 @@ class PyannoteSpeakerDiarizer:
             text = text.replace(self._token, "***")
         text = _HF_TOKEN_RE.sub("hf_***", text)
         return text if len(text) <= 240 else text[:237] + "…"
+
+
+def _is_out_of_memory(error: BaseException) -> bool:
+    """torch.cuda.OutOfMemoryError（類別名稱）或訊息裡的 "out of memory"（torch、ctranslate2 都這樣寫）。"""
+    return type(error).__name__ == "OutOfMemoryError" or "out of memory" in str(error).lower()
 
 
 def _installed_version() -> str:
