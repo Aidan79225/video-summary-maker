@@ -829,6 +829,15 @@ def test_a_chunked_response_that_ends_early_is_reported_as_unavailable(monkeypat
         _summarize()
 
 
+def test_a_stream_line_cut_off_in_the_middle_is_still_a_connection_problem(monkeypatch):
+    """界線：模型寫的內容不完整（截斷的 JSON、沒有 done 事件）是「輸出無效」，會重問；但 Ollama 傳來的某一「行」
+    本身被截斷，是連線在傳輸途中斷了，和連線被重置一樣是 SummarizerUnavailable、不重問
+    （_stream_chat 既有的行為，與單人模式共用，這裡不改）。"""
+    _serve(monkeypatch, ['{"message": {"content": "{"}, "done": fal'])
+    with pytest.raises(SummarizerUnavailable, match="中斷"):
+        _summarize()
+
+
 def test_an_answer_that_is_not_http_is_reported_as_unavailable(monkeypatch):
     def fake_post(url, body, timeout):
         raise http.client.BadStatusLine(LEAK)
