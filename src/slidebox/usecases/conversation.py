@@ -1013,28 +1013,56 @@ def _polarity_flip_problem(text: str, spoken: str) -> Problem | None:
     """
     written = _outside_quotes(text)
     for sides, flips in _OPPOSED:
-        mine, theirs = _opposed_marks(written, sides, flips), _opposed_marks(spoken, sides, flips)
+        mine, _ = _opposed_marks(written, sides, flips)
+        theirs, denied = _opposed_marks(spoken, sides, flips)
         if mine and theirs and not mine.keys() & theirs.keys():
             ours, said = next(iter(mine.values())), next(iter(theirs.values()))
             return Problem(POLARITY_FLIP, (
                 f"文字寫的是「{ours}」，原話說的是「{said}」，意思可能寫反了；請照原話的說法寫"))
+        # 原話每一次都是「不會增加」，文字卻寫成「增加」；原話有條件（「如果沒有每個月試運轉，馬達會鏽死」≈「需每月
+        # 試運轉，否則…」）時否定的意思會繞一圈，看不準，不擋
+        dropped = ([side for side in mine if side in denied and side not in theirs]
+                   if not flips and not _CONDITION_RE.search(spoken) else [])
+        if dropped:
+            ours = mine[dropped[0]]
+            return Problem(POLARITY_FLIP, (
+                f"文字寫的是「{ours}」，原話說的是「不…{denied[dropped[0]]}」（有否定），意思寫反了；請照原話的說法寫，保留否定"))
     return _double_negation_problem(written, spoken)
 
 
-def _opposed_marks(text: str, sides: Sequence[Sequence[str]], flips: bool) -> dict[int, str]:
-    """text 用了哪幾邊（邊的編號 → 第一個遇到的說法）。"""
+def _negated_before(text: str, at: int) -> bool:
+    """text[at] 前面兩個字內有沒有否定（「不僅」「不管」「未來」「非常」不是；問句的「是否」要先拿掉）。"""
+    return bool(_NEGATION_RE.search(text[max(0, at - 2):at]))
+
+
+def _resolve_double_negations(text: str) -> str:
+    """雙重否定（不得不、不是不…）等於肯定：把那個說法換成同樣長的空白，後面的字就不算被否定。"""
+    def blank(match: re.Match[str]) -> str:
+        tail = match.group("tail")
+        return "　" * (len(match.group(0)) - len(tail)) + tail
+    return _DOUBLE_NEGATION_RE.sub(blank, text)
+
+
+def _opposed_marks(text: str, sides: Sequence[Sequence[str]], flips: bool) -> tuple[dict[int, str], dict[int, str]]:
+    """text 用了哪幾邊：（沒被否定的邊 → 第一個遇到的說法，被否定的邊 → 第一個遇到的說法）。
+
+    立場那一組（flips）被「不」「沒」否定的說法算成另一邊（不同意 ≈ 反對），所以也算在第一個裡。
+    """
     found: dict[int, str] = {}
-    plain = _without_yes_no_forms(text)
+    denied: dict[int, str] = {}
+    plain = _resolve_double_negations(_without_yes_no_forms(text))
     for side, words in enumerate(sides):
         for word in words:
             start = 0
             while (at := text.find(word, start)) >= 0:
                 start = at + len(word)
-                if not any(char in _NEGATION_CHARS for char in plain[max(0, at - 2):at]):
+                if not _negated_before(plain, at):
                     found.setdefault(side, word)
-                elif flips and len(sides) == 2:
-                    found.setdefault(1 - side, "不" + word)
-    return found
+                else:
+                    denied.setdefault(side, word)
+                    if flips and len(sides) == 2:
+                        found.setdefault(1 - side, "不" + word)
+    return found, denied
 
 
 def _double_negation_problem(written: str, spoken: str) -> Problem | None:

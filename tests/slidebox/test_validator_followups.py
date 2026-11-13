@@ -248,6 +248,45 @@ def test_a_flipped_wording_is_dropped_with_its_own_code():
     assert result.contradicted == 1                                       # 算在「文字有問題」那一類，不是查不出來
 
 
+# --- 文字漏掉原話的否定 ---
+
+
+@pytest.mark.parametrize("text, spoken", [
+    ("主張增加明年的預算", "我們不會增加明年的預算，因為財源不足"),
+    ("指出預算減少兩成", "預算並沒有減少兩成"),
+    ("說明明年的預算上升", "明年的預算不會上升，維持原樣"),
+    ("說明補助提高到三千元", "這次補助沒有提高，還是兩千元"),
+    ("指出明年開始實施", "法案不是明年開始實施，是後年"),
+])
+def test_a_wording_the_speaker_only_used_with_a_negation_is_written_without_it(text, spoken):
+    problem = conv._polarity_flip_problem(text, spoken)
+
+    assert problem is not None and problem.code == conv.POLARITY_FLIP
+    assert "不" in problem.message or "沒" in problem.message
+
+
+@pytest.mark.parametrize("text, spoken", [
+    ("說明預算並沒有增加", "我們不會增加預算"),                              # 文字自己也否定
+    ("必須增加預算", "我們不得不增加預算"),                                  # 雙重否定等於肯定
+    ("並非不增加預算", "我們不是不增加預算"),
+    ("指出預算增加，人力沒有增加", "預算增加了兩成，但人力不會增加"),         # 原話兩種都有
+    ("詢問會不會增加預算", "你們會不會增加預算"),                            # 「會不會」是在問
+    ("說明不僅增加預算還增加人力", "我們不僅增加預算，也增加人力"),             # 「不僅」不是否定
+    ("說明增加預算", "不管增加或減少預算，都要公開"),
+    ("說明預算增加", "預算沒有人說會減少，增加是確定的"),                       # 否定的是別的字
+])
+def test_a_faithful_wording_next_to_a_negation_is_not_flagged_as_dropping_it(text, spoken):
+    assert conv._polarity_flip_problem(text, spoken) is None
+
+
+@pytest.mark.parametrize("text, spoken", [
+    ("支持課徵碳稅", "我不僅支持課徵碳稅，也支持補貼"),
+    ("說明不僅支持課徵碳稅還支持補貼", "我支持課徵碳稅"),
+])
+def test_not_only_is_not_a_negation_of_a_stance(text, spoken):
+    assert conv._polarity_flip_problem(text, spoken) is None
+
+
 # --- 雙重否定 ---
 
 
