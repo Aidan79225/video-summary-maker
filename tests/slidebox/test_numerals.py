@@ -268,3 +268,78 @@ def test_a_different_value_or_a_different_kind_is_never_accepted(seed):
         # 同一個數值，只是種類從「帶單位的數量」變成百分比：也不行
         assert number_problem(f"合計{n}%", support) is not None, n
         assert number_problem(f"合計百分之{chinese(n)}", f"合計{n}{unit}") is not None, n
+
+
+# --- 每個單位字、每種寫法都有人釘住（mutation testing 找出原本沒人看的地方）---
+
+# 這兩份清單故意在測試裡再寫一次：從 numerals 匯入的話，被改掉的清單會連測試的範圍一起縮小，什麼都抓不到
+UNIT_CHARS_AFTER = "年月日號歲週周倍元塊點分鐘秒時天度里斤人次戶家件場屆期趟折"       # 「成」是成數，另外處理
+ABSOLUTE_UNITS = ["分鐘", "小時", "公里", "公尺", "公頃", "公分", "個月", "人次",
+                  "天", "年", "週", "周", "元", "人", "戶", "座", "間", "棟", "輛", "份", "張", "次"]
+
+
+@pytest.mark.parametrize("unit", list(UNIT_CHARS_AFTER))
+def test_a_lone_chinese_numeral_before_each_of_these_characters_is_checked(unit):
+    assert number_problem(f"約三{unit}", f"約三{unit}") is None
+    assert number_problem(f"約三{unit}", f"約五{unit}") is not None
+
+
+@pytest.mark.parametrize("unit", ABSOLUTE_UNITS)
+def test_every_entity_unit_tells_a_quantity_from_a_percentage(unit):
+    """數字後面跟著實體單位，那段話裡同一個數值只以百分比出現，就是單位被改掉；
+    反過來，帶單位的數字不能拿來撐「百分之」（語音辨識漏掉百分之的，只會是沒單位的數字）。"""
+    changed = number_problem(f"預計十二{unit}", "預計百分之十二")
+
+    assert changed is not None and f"十二{unit}" in changed and "是百分比" in changed
+    assert number_problem("預計百分之十二", f"預計十二{unit}") is not None
+
+
+@pytest.mark.parametrize("magnitude", list("十百千萬億"))
+def test_a_chinese_numeral_with_a_magnitude_character_is_checked_even_without_a_unit(magnitude):
+    assert number_problem(f"預計三{magnitude}", f"預計三{magnitude}") is None
+    assert number_problem(f"預計三{magnitude}", f"預計五{magnitude}") is not None
+
+
+@pytest.mark.parametrize("magnitude, value", [("十", 50), ("百", 500), ("千", 5000), ("萬", 50_000), ("億", 500_000_000)])
+def test_a_magnitude_character_after_the_tenths_digit_starts_another_number(magnitude, value):
+    """「三成五」的五是成數的下一位；「三成五千」的五千是另一個數字。"""
+    assert kinds(f"三成五{magnitude}") == [(PERCENT, 30, ""), (PLAIN, value, "")]
+
+
+@pytest.mark.parametrize("text, expected", [
+    ("二〇二五", 2025), ("一二三", 123), ("一〇五", 105), ("零五", 5),                  # 一個字一個字唸的數字（年份、編號）
+    ("十", 10), ("百", 100), ("千", 1000), ("萬", 10_000), ("億", 100_000_000),         # 單獨一個單位字就是那個單位
+    ("三百九", 390), ("三千五百", 3500), ("3萬2千", 32_000), ("2千5", 2500), ("2千10", 2010),
+    ("１２．５", Fraction(25, 2)),                                                    # 全形的數字與小數點
+    ("點五", Fraction(1, 2)),                                                         # 沒有整數部分的口語寫法
+    ("三點五2", Fraction(7, 2)),                                                      # 小數後面的阿拉伯數字不是單位
+])
+def test_more_ways_numbers_are_written(text, expected):
+    assert value_of(text) == expected
+
+
+@pytest.mark.parametrize("text, expected", [
+    ("零三百五", 350), ("零百五", 5), ("1二", 2), ("二1三", 3),
+])
+def test_combinations_nobody_writes_are_read_the_same_way_every_time(text, expected):
+    """開頭的零、阿拉伯數字緊接中文數字：沒有人會這樣寫，不是想要的行為，只是把現在的讀法釘住；
+    改 _int_value 讀法的人，改這裡的期望值即可。"""
+    assert value_of(text) == expected
+
+
+def test_a_year_written_digit_by_digit_is_the_same_year_as_the_arabic_one():
+    assert kinds("二〇二五年") == [(PLAIN, 2025, "年")]
+    assert number_problem("二〇二五年上路", "2025年上路") is None
+    assert number_problem("二〇二六年上路", "2025年上路") is not None
+
+
+def test_the_tenths_digit_is_read_whatever_follows_it():
+    assert kinds("四成二，其餘") == [(PERCENT, 42, "")]
+    assert kinds("3成5") == [(PERCENT, 35, "")]
+    assert kinds("7成5的人") == [(PERCENT, 75, "")]
+
+
+def test_the_reason_quotes_exactly_the_percentage_the_point_wrote():
+    problem = number_problem("增加了四成二，其餘照舊", "增加了四成三，其餘照舊")
+
+    assert problem == "數字「四成二」不在被引用的那段話裡（百分比的數值對不上；數字與單位請照抄）"

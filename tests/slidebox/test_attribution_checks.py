@@ -223,13 +223,15 @@ def test_a_quote_that_is_not_contiguous_too_short_or_too_long_is_refused(text, q
 
 
 def test_a_quote_of_exactly_the_maximum_length_is_still_shown():
-    text = ("今天討論預算與期程" * 12)[:MAX_RESCUED_QUOTE_CHARS]
+    text = ("今天討論預算與期程" * 12)[:100]                       # 上限是 100 個字（連標點）；寫死，改上限要有意地改這裡
 
+    assert MAX_RESCUED_QUOTE_CHARS == 100
     assert not isinstance(span_or_reason(text, text), str)
-    assert isinstance(span_or_reason(text + "安", text + "安"), str)
+    assert "超過 100 個字" in span_or_reason(text + "安", text + "安")
 
 
-@pytest.mark.parametrize("pronoun", ["他", "她", "它", "牠", "他們", "她們", "對方", "雙方", "此人", "該員", "該名", "該位"])
+@pytest.mark.parametrize("pronoun", ["他", "她", "它", "牠", "他們", "她們", "它們", "牠們", "對方", "雙方", "此人", "該員", "該名",
+                                     "該位"])
 def test_a_pronoun_inside_the_quote_stops_it_from_being_shown(pronoun):
     reason = span_or_reason(f"我們討論過{pronoun}提出的預算方案。", f"我們討論過{pronoun}提出的預算方案")
 
@@ -577,6 +579,245 @@ def test_a_short_answer_that_states_a_stance_over_the_right_context_is_kept():
 
     assert [p.text for p in kept] == ["同意補助應該加倍"] and not result.dropped_by_code
 
+
+# --- 每個門檻剛好在邊界上的例子（mutation testing 補的）---
+
+
+def filler(n: int) -> str:
+    """n 個字、和 SEQ 沒有任何共同特徵的填充字。"""
+    return ("春夏秋冬" * 30)[:n]
+
+
+NO_RELATION = ["雪月風花木石山川", "魚蟲鳥獸草木花果", "金木水火土日月星"]          # 彼此、也和 SEQ 沒有共同特徵的幾段話
+PARTICIPANTS = make_speakers("participant", "participant")
+
+
+def test_a_point_text_needs_four_characters_and_may_have_a_hundred_and_twenty():
+    assert conv._text_problem("補助加倍") is None
+    assert conv._text_problem("補助加").code == "too_short"
+    assert conv._text_problem("預算" * 60) is None
+    assert conv._text_problem("預算" * 60 + "額").code == "too_long"
+
+
+def test_a_title_may_have_sixty_characters():
+    assert conv._title_problem("預" * 60) is None
+    assert conv._title_problem("預" * 61) == "超過 60 個字"
+
+
+def test_the_problem_list_is_capped_at_twelve_and_says_how_many_were_left_out():
+    twelve = [f"問題{i}" for i in range(12)]
+
+    assert conv._cap(twelve) == tuple(twelve)
+    assert conv._cap([*twelve, "多的"]) == (*twelve, "（另有 1 項問題未列出）")
+    assert conv._cap([*twelve, "a", "b", "c"])[-1] == "（另有 3 項問題未列出）"
+
+
+def test_codes_with_the_same_count_are_listed_alphabetically():
+    out_of_window = RawPoint(999, "說明補助的做法", quote="現金補助有幫助，但不能只靠現金")
+    made_up = RawPoint(1, "現金補助有幫助", quote="這句話根本沒有人說過的引文")
+
+    _, result = run(out_of_window, made_up)
+
+    assert result.dropped_by_code == ((BAD_QUOTE, 1), ("turn_out_of_window", 1))
+
+
+def test_a_quote_that_only_a_turn_outside_the_window_holds_is_not_found():
+    """攔的 bug：窗外（模型沒看到）的那一輪有這段原文，卻被找出來當出處，點被歸給一個模型沒看過的輪次。"""
+    turns, good = with_anchors(("S1", "春夏秋冬瓜果"), ("S2", "雪月風花木石山川"))
+    outside = Turn(len(turns), float(len(turns)), len(turns) + 0.9, "S2", "琴棋書畫詩酒花茶")
+    point = RawPoint(1, "說明琴棋書畫詩酒", quote="琴棋書畫詩酒花茶")
+
+    kept, result = run(point, turns=[*turns, outside], speakers=PARTICIPANTS,
+                       window=conv.Window(0, tuple(turns)), good=good)
+
+    assert kept == [] and codes(result) == {BAD_QUOTE: 1}
+
+
+# 內容的出處與短回答的上文，都只在前後 3 輪裡找
+
+
+def lines_with_gap(gap: int, first: tuple[str, str], last: tuple[str, str]):
+    """first 在 T0，last 在 T{gap}，中間是毫不相干的話（說話者輪流）。"""
+    middle = [("S2" if i % 2 == 0 else "S1", NO_RELATION[i]) for i in range(gap - 1)]
+    return [first, *middle, last]
+
+
+def test_a_source_three_turns_away_is_found_and_one_four_turns_away_is_not():
+    content = ("S1", SEQ[:9] + "，春夏秋冬")
+    quote_turn = ("S2", "琴棋書畫詩酒花茶")
+    point = lambda gap: RawPoint(gap, SEQ[:9], quote="琴棋書畫詩酒花茶")                 # noqa: E731
+
+    near_turns, near_good = with_anchors(*lines_with_gap(3, content, quote_turn))
+    far_turns, far_good = with_anchors(*lines_with_gap(4, content, quote_turn))
+    near_kept, near = run(point(3), turns=near_turns, speakers=PARTICIPANTS, good=near_good)
+    far_kept, far = run(point(4), turns=far_turns, speakers=PARTICIPANTS, good=far_good)
+
+    assert near_kept == [] and codes(near) == {ANCHOR_CONFLICT: 1}                 # 出處在 T0，不是 quote 所在的 T3
+    assert [p.text for p in far_kept] == ["「琴棋書畫詩酒花茶」"] and far.rescued == 1 and not codes(far)
+
+
+@pytest.mark.parametrize("gap, kept", [(3, True), (4, False)])
+def test_the_context_of_a_short_answer_may_be_up_to_three_turns_back(gap, kept):
+    lines = lines_with_gap(gap, ("S1", "你認為補助應該加倍嗎？"), ("S2", "沒錯"))
+    turns, good = with_anchors(*lines)
+
+    extra, result = run(RawPoint(gap, "同意補助應該加倍", quote="沒錯", context=(0,)),
+                        turns=turns, speakers=PARTICIPANTS, good=good)
+
+    assert bool(extra) is kept
+    assert codes(result) == ({} if kept else {"short_answer_no_context": 1})
+
+
+def test_the_quote_turn_is_still_the_source_when_it_is_exactly_one_margin_below_the_best():
+    claim = claim_of(11)                                 # 10 個特徵，容許的差距是 10 × 0.1 = 1 個
+    quote_turn, better = talk(0, "S1", 5), talk(1, "S1", 6)
+    worse = talk(0, "S1", 4)                             # 差 2 個：不算一樣好
+
+    assert conv._pick_anchor(quote_turn, claim, [quote_turn, better], CITABLE) is quote_turn
+    assert conv._pick_anchor(worse, claim, [worse, better], CITABLE) is better
+
+
+def test_the_nearest_equally_good_turn_wins_even_when_it_comes_after_the_quote_turn():
+    claim = claim_of(16)
+    quote_turn = talk(3, "S1", 2)
+    before, after = talk(0, "S2", 9), talk(4, "S2", 9)    # 前面隔 3 輪、後面隔 1 輪
+
+    assert conv._pick_anchor(quote_turn, claim, [before, quote_turn, after], CITABLE) is after
+
+
+def test_a_turn_that_repeats_what_the_same_speaker_said_earlier_is_not_an_echo():
+    claim = claim_of(9)
+    said_before = Turn(0, 0.0, 0.9, "S1", SEQ[:9])
+    again = Turn(1, 1.0, 1.9, "S1", SEQ[:9] + "，對嗎？")                  # 有問句的語氣
+    other = replace(said_before, speaker="S2")
+
+    assert conv._echo_source(again, claim, [said_before]) is None
+    assert conv._echo_source(again, claim, [other]) is other
+
+
+@pytest.mark.parametrize("polarity, word, example", [
+    ("yes", "肯定", "「同意…」「認同…」"), ("no", "否定", "「不同意…」「否認…」"),
+])
+def test_the_stance_hint_matches_the_kind_of_short_answer(polarity, word, example):
+    context = Turn(0, 0.0, 0.9, "S1", "你認為補助應該加倍嗎")
+
+    problem = conv._answer_problem(polarity, "補助應該加倍", conv._grams("補助應該加倍"), [context])
+
+    assert problem.code == "short_answer_stance"
+    assert f"很短的{word}回答" in problem.message and example in problem.message
+
+
+# 重點的特徵（兩個字一組）與證據
+
+
+def test_the_features_of_a_text_are_pairs_of_characters_and_whole_ascii_words():
+    assert conv._grams("預算增加") == {"預算", "算增", "增加"}
+    assert conv._grams("預算，增加") == {"預算", "增加"}                    # 標點隔開，不連
+    assert conv._grams("ai a 5 12 版") == {"ai", "5", "12"}               # 單個英文字母不算、數字算
+    assert conv._grams("是的") == frozenset()                             # 兩個字都是虛字的組合不算
+
+
+def test_a_claim_that_shares_one_feature_still_points_at_that_clause():
+    turn_text = "今天天氣晴朗，預算增加，大家都很開心。"
+
+    assert evidence(turn_text, "預算很重要")[0] == "預算增加"
+
+
+def test_without_any_shared_feature_the_evidence_is_the_whole_turn_up_to_eighty_characters():
+    exactly_eighty = f"{filler(26)}，{filler(26)}，{filler(26)}"
+
+    assert evidence(exactly_eighty + "。", "完全不同")[0] == exactly_eighty
+
+
+def test_when_the_matching_clauses_do_not_fit_in_eighty_characters_the_best_fitting_ones_are_shown():
+    first = SEQ[:3] + filler(28)                         # 31 個字，和重點共有 2 個特徵
+    middle = filler(32)                                  # 沒有共同特徵
+    last = SEQ[:9] + filler(16)                          # 25 個字，共有 8 個特徵
+    turn_text = f"{first}，{middle}，{last}。"             # 全部 91 個字，放不下
+
+    assert evidence(turn_text, SEQ[:9])[0] == f"{middle}，{last}"        # 同分取最前面開始的
+
+
+def test_a_stretch_of_exactly_eighty_characters_fits():
+    x = SEQ[:4] + filler(35)                             # 39 個字，和重點共有 3 個特徵
+    y = SEQ[:4] + filler(36)                             # 40 個字，共有 3 個特徵
+    z = "天地" + filler(8)                                # 10 個字，共有 1 個特徵
+
+    assert evidence(f"{x}，{y}，{z}。", SEQ[:4])[0] == f"{x}，{y}"          # x、y 加起來剛好 80 個字
+
+
+def test_the_best_window_never_reaches_past_the_range_it_was_given():
+    """_best_window 的說明是「在 [low, high] 裡面挑」：範圍外那一句的分數再高，也不能被拉進來。"""
+    clauses = [("甲" * 10, "，"), ("乙" * 10, "，"), ("丙" * 10, "。")]
+
+    assert conv._best_window(clauses, [1, 1, 9], 0, 1) == (0, 1)         # 最後一句分數最高，但在範圍外
+    assert conv._best_window(clauses, [9, 1, 1], 1, 2) == (1, 2)         # 第一句分數最高，但在範圍外
+
+
+def test_the_evidence_is_cut_at_eighty_characters_with_an_ellipsis():
+    assert evidence("預" * 80, "完全不同")[0] == "預" * 80
+    assert evidence("預" * 81, "完全不同")[0] == "預" * 79 + "…"
+    assert conv._clip("甲" * 100, 80) == "甲" * 79 + "…"
+    assert conv._clip("甲" * 80, 80) == "甲" * 80
+
+
+def test_a_turn_made_only_of_punctuation_is_its_own_evidence():
+    assert conv._evidence("？？", frozenset()) == ("？？", False)
+
+
+def test_a_question_in_a_clause_that_shares_nothing_does_not_count_when_another_clause_carries_the_claim():
+    clauses = [("預算很重要", "。"), ("這樣公平嗎", "？")]
+
+    assert conv._carries_question(clauses, [1, 0]) is False
+    assert conv._carries_question(clauses, [0, 1]) is True
+
+
+def test_with_no_shared_clause_at_all_the_whole_turn_decides():
+    """呼叫的人已經確認整段有問句字眼；沒有任何一句和重點共用字時，這個判斷照舊算「是問句」。"""
+    assert conv._carries_question([("甲甲", "，"), ("乙乙", "。")], [0, 0]) is True
+
+
+# 文字裡的第一人稱、引號
+
+
+def test_the_first_person_message_shows_eight_characters_on_each_side():
+    ten = "甲乙丙丁戊己庚辛壬癸"
+
+    middle = conv._first_person_problem(ten + "我們" + ten).message
+    near_start = conv._first_person_problem("我們" + ten).message
+    near_end = conv._first_person_problem(ten + "我們").message
+
+    assert "（…丙丁戊己庚辛壬癸我們甲乙丙丁戊己庚辛…）" in middle
+    assert "（…我們甲乙丙丁戊己庚辛…）" in near_start
+    assert "（…丙丁戊己庚辛壬癸我們…）" in near_end
+
+
+def test_straight_double_quotes_must_come_in_pairs():
+    said = Turn(0, 0.0, 0.9, "S1", "預算應該先編三個月")
+
+    assert conv._quote_problem('強調"預算應該先編三個月"', [said]) is None
+    for text in ('強調"預算應該先編三個月', '強調"預算應該先編三個月"和"'):
+        problem = conv._quote_problem(text, [said])
+        assert problem is not None and problem.code == "bad_inline_quote" and "沒有成對" in problem.message
+
+
+def test_an_inline_quote_of_exactly_eight_characters_can_be_checked():
+    said = Turn(0, 0.0, 0.9, "S1", "預算應該先編三個月，之後再追加")
+
+    assert conv._quote_problem("強調「預算應該先編三個」", [said]) is None
+    assert conv._quote_problem("強調「預算應該先編三」", [said]).code == "bad_inline_quote"
+
+
+# 原話與代名詞
+
+
+@pytest.mark.parametrize("word", ["發言者", "主持人", "來賓", "講者", "受訪者"])
+def test_the_first_role_word_in_the_quote_is_the_one_named(word):
+    text = f"這件事{word}和委員都有提到預算方案"
+
+    reason = span_or_reason(text, text)
+
+    assert isinstance(reason, str) and f"「{word}」" in reason
 
 
 @pytest.mark.parametrize("text", ["對其他方案也有幫助", "對其它方面的影響", "對他人方案提出意見"])

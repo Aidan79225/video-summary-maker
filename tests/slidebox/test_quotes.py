@@ -14,6 +14,7 @@ from slidebox.usecases.quotes import (
     MIN_QUOTE_CHARS,
     QUOTE_MIN_FRAGMENT,
     QuoteSpan,
+    _holds,
     contiguous_span,
     fragments,
     is_restatement,
@@ -56,6 +57,12 @@ def test_fragments_ignore_case_and_width():
 @pytest.mark.parametrize("quote", [None, 12, ["預算"], b"abc", "", "   ", "，。！", "對", "嗯，對，好"])
 def test_a_quote_without_a_piece_of_two_characters_has_no_fragments(quote):
     assert fragments(quote) == []
+
+
+def test_the_pieces_must_all_be_found_in_order_and_the_answer_is_a_real_boolean():
+    assert _holds("預算大約三千億", ["預算", "三千億"]) is True
+    assert _holds("預算大約三千億", ["三千億", "預算"]) is False                  # 順序反了
+    assert _holds("預算大約三千億", ["預算", "補助"]) is False                    # 少了一片
 
 
 # --- locate_quote：說話者從有這段原文的那一輪查 ---
@@ -386,3 +393,50 @@ def test_a_quote_that_starts_by_relaying_the_other_person_is_an_echo(text):
 ])
 def test_a_quote_that_does_not_start_that_way_is_not_an_echo(text):
     assert not ECHO_START_RE.search(text)
+
+
+def test_a_restating_lead_in_at_the_start_of_the_sentence_counts():
+    assert is_restatement(span_of("所以補助應該全部取消，這樣對嗎？", "補助應該全部取消")) is True
+    assert is_restatement(span_of("預算有限。所以補助應該全部取消，這樣對嗎？", "補助應該全部取消")) is True
+
+
+def test_a_quote_that_ends_its_sentence_is_not_a_restatement_even_when_a_question_follows():
+    """引文自己是一個完整的句子（後面是句號）：後面的那個問句是另一句，不能回頭把它變成複述。"""
+    assert is_restatement(span_of("預算應該全部取消。是這個意思嗎？", "預算應該全部取消")) is False
+
+
+# --- 每個門檻剛好在邊界上的例子（mutation testing 補的）---
+
+
+def test_eight_characters_of_pieces_that_are_all_shorter_than_five_cannot_tell_which_turn():
+    """合計剛好 8 個字，但最長的片段只有 4 個字：是拼起來的，認不出出處；有一個 5 個字的片段就可以。"""
+    spliced = [turn(0, "S1", "天地玄黃，宇宙洪荒，日月盈昃。"), turn(1, "S2", "好的")]
+    anchored = [turn(0, "S1", "天地玄黃宇，宙洪荒，日月盈昃。"), turn(1, "S2", "好的")]
+
+    refused = locate_quote("天地玄黃，宇宙洪荒", spliced[0], spliced, CITABLE)
+    accepted = locate_quote("天地玄黃宇，宙洪荒", anchored[0], anchored, CITABLE)
+
+    assert refused.turn is None and "是由太短的片段拼起來的" in refused.problem
+    assert accepted.turn is anchored[0]
+
+
+def test_seven_characters_are_too_few_and_eight_are_enough():
+    turns = [turn(0, "S1", "天地玄黃宇宙洪荒日月盈昃。"), turn(1, "S2", "好的")]
+
+    seven = locate_quote("天地玄黃宇宙洪", turns[0], turns, CITABLE)
+    eight = locate_quote("天地玄黃宇宙洪荒", turns[0], turns, CITABLE)
+
+    assert seven.turn is None and "不到 8 個字" in seven.problem
+    assert eight.turn is turns[0]
+
+
+def test_the_message_shows_at_most_twenty_four_characters_of_a_quote():
+    turns = window()
+    ten = "甲乙丙丁戊己庚辛壬癸"
+
+    def shown(quote):
+        message = locate_quote(quote, turns[1], turns, CITABLE).problem
+        return message.split("quote「", 1)[1].split("」", 1)[0]
+
+    assert shown(ten * 2 + "甲乙丙丁") == ten * 2 + "甲乙丙丁"                 # 24 個字：整段照列
+    assert shown(ten * 2 + "甲乙丙丁戊") == ten * 2 + "甲乙丙" + "…"            # 25 個字：前 23 個字加「…」

@@ -61,6 +61,16 @@ def test_an_ordinary_word_or_a_nickname_that_is_only_mentioned_is_not_a_name(tex
     assert detect_names(text) == frozenset()
 
 
+# 職稱前面這些字不是姓氏；清單故意在測試裡再寫一次（從 names 匯入的話，被改掉的清單會連測試的範圍一起縮小）
+NOT_SURNAMES = "的是這那個位請謝跟和與及讓給對向被把將於在到從由為各本前副總該每某老小阿一二兩三四五六七八九十"
+
+
+@pytest.mark.parametrize("char", list(NOT_SURNAMES))
+def test_a_title_after_a_word_that_is_not_a_surname_is_not_a_name(char):
+    assert detect_names(f"今天{char}委員說明預算。") == frozenset()
+    assert detect_names(f"今天{char}教授說明預算。") == frozenset()
+
+
 def test_nothing_in_nothing_out():
     assert detect_names("") == frozenset() and detect_names("今天討論預算與期程。") == frozenset()
 

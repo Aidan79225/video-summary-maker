@@ -173,7 +173,8 @@ def test_the_retry_hint_still_says_something_when_there_are_no_reasons():
     assert dp.retry_hint([]).endswith("：\n- 沒有任何一頁通過檢查")
 
 
-@pytest.mark.parametrize("proposed,kept,expected", [(0, 0, 1.0), (4, 4, 0.0), (8, 6, 0.25), (3, 0, 1.0)])
+@pytest.mark.parametrize("proposed,kept,expected", [
+    (0, 0, 1.0), (4, 4, 0.0), (8, 6, 0.25), (3, 0, 1.0), (1, 1, 0.0), (1, 0, 1.0), (2, 1, 0.5)])
 def test_dropped_ratio(proposed, kept, expected):
     assert dp.dropped_ratio(proposed, kept) == expected
 
@@ -318,6 +319,28 @@ def test_progress_never_reports_more_than_the_share_of_windows_started():
     assert all(frac in {n / total for n in range(total)} for frac in fractions)
 
 
+def test_a_skipped_window_reports_the_share_of_windows_before_it():
+    turns, speakers, allocations = _setup(*LINES, ("S3", "我是打電話進來的聽眾想問一件事"),
+                                          ("S3", "請問這個政策什麼時候開始實施呢"), budget=100)
+    total = len(allocations)
+
+    outcomes, seen = run_windows(FakeConversation(default=reply_citing(*GOOD)), turns, speakers, allocations)
+
+    number = next(n for n, o in enumerate(outcomes, 1) if o.skipped)
+    assert number >= 2
+    assert ((number - 1) / total, f"第 {number}/{total} 段沒有主要發言者可以整理，略過") in seen
+
+
+def test_each_attempt_announces_itself_and_the_retry_says_so():
+    turns, speakers, allocations = _setup(*LINES)
+    conversation = FakeConversation([reply_citing(*FOUR_GOOD[:2], *NOWHERE[:2]), reply_citing(*FOUR_GOOD)])
+
+    _, seen = run_windows(conversation, turns, speakers, allocations)
+
+    assert (0.0, "整理第 1/1 段對談…") in seen and (0.0, "第 1/1 段不合要求，重試一次…") in seen
+    assert [status for _, status in seen].index("整理第 1/1 段對談…") < [s for _, s in seen].index("第 1/1 段不合要求，重試一次…")
+
+
 # --- 整份的可靠度 ---
 
 
@@ -353,6 +376,11 @@ def test_nothing_to_check_is_not_reliable_either():
 def test_exactly_a_quarter_dropped_is_reliable():
     dp.check_reliability([outcome(0, 9, 100, 75)])
     dp.check_reliability([outcome(0, 9, 4, 3)])
+
+
+def test_a_single_proposed_point_that_was_kept_is_reliable():
+    """「沒有任何一段整理出重點」只指提出 0 個；提出 1 個、留下 1 個沒有問題。"""
+    dp.check_reliability([outcome(0, 9, 1, 1)])
 
 
 def test_just_over_a_quarter_dropped_is_not():
@@ -448,7 +476,9 @@ def test_the_summary_line_says_proposed_kept_quoted_and_dropped_by_class():
     (dp.AttributionCounts(8, 6, 0, 0, 0, 0, 0), "對談重點：模型提出 8 個，留下 6 個；丟掉 2 個"),
     (dp.AttributionCounts(8, 6, 0, 0, 0, 2, 0),
      "對談重點：模型提出 8 個，留下 6 個；丟掉 2 個（有問題 0、查不出來 0、同頁規則 2）"),
-], ids=["nothing dropped", "all quoted", "dropped without classes", "dropped by the slide rule"])
+    (dp.AttributionCounts(10, 9, 0, 1, 0, 0, 0),
+     "對談重點：模型提出 10 個，留下 9 個；丟掉 1 個（有問題 1、查不出來 0、同頁規則 0）"),
+], ids=["nothing dropped", "all quoted", "dropped without classes", "dropped by the slide rule", "exactly one dropped"])
 def test_the_summary_line_leaves_out_what_does_not_apply(counts, expected):
     assert dp.summary_line(counts) == expected
 

@@ -324,6 +324,20 @@ def test_a_resumed_job_reports_the_same_counts_as_a_fresh_one():
     assert (resumed.rescued_points, resumed.contradicted_points) == (None, None)      # 沒有重新檢查，不亂填
 
 
+def test_the_progress_log_names_each_step_and_a_resumed_job_says_it_reuses_the_saved_points():
+    parts = make(renderer=FlakyRenderer())
+    first, second = [], []
+    with pytest.raises(RuntimeError):
+        run(parts, progress=lambda frac, status: first.append((frac, status)))
+    run(parts, progress=lambda frac, status: second.append((frac, status)))
+
+    assert first[0] == (0.0, "多人模式：說話者由聲音區分…") and (0.05, "對齊說話者…") in first
+    assert not any(status == "沿用上次整理好的對談重點" for _, status in first)
+    assert not any("超出頁數上限" in status for _, status in first)                 # 沒有砍掉任何一頁，就不提
+    assert (0.4, "沿用上次整理好的對談重點") in second
+    assert not any(status.startswith("對談重點：") for _, status in second)         # 沿用的沒有重新檢查，不記數字
+
+
 def mixed_reply(call):
     """10 個重點：7 個通過、1 個用字對不上改顯示原話、1 個 quote 是編出來的、1 個 quote 在甲、內容卻是乙說的。"""
     good = good_points()
