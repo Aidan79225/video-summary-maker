@@ -348,7 +348,9 @@ _LEADING_RE = re.compile(
     rf"|(?:[{_SURNAMES}][一-鿿]{{0,2}})?(?:{_TITLES}){_NOT_A_TITLE}"
     rf"|[一-鿿]{{1,5}}(?:{_MAJOR_TITLES}){_NOT_A_TITLE})")
 _PRONOUN_RE = re.compile(_PRONOUN)
-_PRONOUN_SAFE_RE = re.compile(r"其他|其它|他人")          # 這些詞只是剛好含有「他」
+# 「其他」只是剛好含有「他」（他人、他山、他方、他鄉已經被 _PRONOUN 後面的 (?![人山方鄉]) 排除，「其它」不含代名詞）。
+# 拿掉它時換成空格、不是空字串：「對其他方案」拿掉「其他」會變成「對方案」，憑空冒出「對方」
+_PRONOUN_SAFE_RE = re.compile(r"其他")
 _LEAD_STRIP = "-•・*· 　\t"
 
 # 內容相符：兩個字一組（bigram），這些是虛字，兩個都是虛字的組合不算
@@ -642,7 +644,7 @@ def _quote_to_show(turn: Turn, quote: str, names: frozenset[str]) -> QuoteSpan |
 def _wording_hit(text: str, names: frozenset[str]) -> str | None:
     """原話裡第一個不能顯示的字眼（代名詞、角色字眼、稱呼說話者的字眼、逐字稿裡的名字）；沒有回傳 None。"""
     flat = unicodedata.normalize("NFKC", text)
-    for pattern, searched in ((_RESCUE_PRONOUN_RE, _RESCUE_PRONOUN_SAFE_RE.sub("", flat)),
+    for pattern, searched in ((_RESCUE_PRONOUN_RE, _RESCUE_PRONOUN_SAFE_RE.sub(" ", flat)),
                               (_RESCUE_ROLE_RE, flat)):
         match = pattern.search(searched)
         if match:
@@ -712,7 +714,7 @@ def _leading_problem(text: str) -> Problem | None:
     if match:
         return Problem(LEADING_PRONOUN_OR_TITLE, (
             f"文字以「{match.group(0)}」開頭；不要用代名詞、姓名或職稱當主詞，寫成沒有主詞的短句"))
-    match = _PRONOUN_RE.search(_PRONOUN_SAFE_RE.sub("", _outside_quotes(head)))
+    match = _PRONOUN_RE.search(_PRONOUN_SAFE_RE.sub(" ", _outside_quotes(head)))
     if match:
         return Problem(PRONOUN_IN_TEXT, f"文字裡有代名詞「{match.group(0)}」；不要用代名詞，寫成沒有主詞的短句")
     return None

@@ -576,3 +576,13 @@ def test_a_short_answer_that_states_a_stance_over_the_right_context_is_kept():
                        speakers=make_speakers("participant", "participant"), good=good)
 
     assert [p.text for p in kept] == ["同意補助應該加倍"] and not result.dropped_by_code
+
+
+
+@pytest.mark.parametrize("text", ["對其他方案也有幫助", "對其它方面的影響", "對他人方案提出意見"])
+def test_taking_out_a_safe_word_never_glues_its_neighbours_into_a_pronoun(text):
+    """攔的 bug：把「其他」拿掉之後，「對其他方案」變成「對方案」，憑空冒出代名詞「對方」。"""
+    quote = f"我們{text}的部分已經規劃好了"
+
+    assert conv._text_problem(text) is None
+    assert not isinstance(span_or_reason(quote, quote), str)
