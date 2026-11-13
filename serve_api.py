@@ -20,6 +20,10 @@
     SLIDEBOX_DIARIZER             設成 off 可關掉多人模式（預設 pyannote）
     SLIDEBOX_DIARIZATION_DEVICE   說話者區分的裝置：auto（預設）／cpu／cuda；
                                   驅動與映像的 CUDA 版本不合時用 cpu
+    SLIDEBOX_DIARIZATION_TIMEOUT_SECONDS
+                                  說話者區分單次工作的時間上限（秒），預設 21600（6 小時）；0 是不設上限
+    SLIDEBOX_DIARIZATION_PYTHON   說話者區分用的 Python（pyannote、PyTorch 裝在那個環境）；
+                                  Docker 映像已經設好，沒設就用目前這個環境
     SLIDEBOX_CHUNK_CHARS          多人對談切窗的字數預算（1000–20000，預設 6000）
 """
 import os

@@ -13,9 +13,12 @@ import pytest
 
 import serve_api
 from slidebox.infrastructure.pyannote_diarizer import (
+    DEFAULT_TIMEOUT_SECONDS,
     DEVICE_ENV,
     METRICS_ENV,
     MODE_ENV,
+    PYTHON_ENV,
+    TIMEOUT_ENV,
     TOKEN_ENV,
     PyannoteSpeakerDiarizer,
 )
@@ -23,6 +26,8 @@ from slidebox.usecases.conversation import CHUNK_CHARS_ENV, DEFAULT_CHUNK_CHARS,
 
 ROOT = Path(__file__).resolve().parents[1]
 DIARIZATION_SETTINGS = (TOKEN_ENV, MODE_ENV, DEVICE_ENV, CHUNK_CHARS_ENV)
+# 說話者區分的工作行程（pyannote_worker）的設定。PYTHON_ENV 由映像自己設（Dockerfile），不進 compose 與 .env
+WORKER_SETTINGS = (TIMEOUT_ENV,)
 HF_CACHE = "/root/.cache/huggingface"
 TOKEN_SHAPE = re.compile(r"hf_[A-Za-z0-9]{8,}")
 
@@ -111,6 +116,13 @@ def _adapter_accepts(mode: str, device: str) -> tuple[bool, str]:
         spec_finder=lambda _name: object()).available()
 
 
+def _adapter_accepts_timeout(value: str) -> tuple[bool, str]:
+    """同上，看工作行程的時間上限這個設定值。"""
+    return PyannoteSpeakerDiarizer(
+        token="hf_FAKEtokenForConfigTest0123456789", mode="pyannote", device="auto", timeout_seconds=value,
+        spec_finder=lambda _name: object()).available()
+
+
 # --- compose.gpu.yaml ---
 
 @pytest.mark.parametrize("name", DIARIZATION_SETTINGS)
@@ -131,6 +143,28 @@ def test_compose_defaults_leave_multi_speaker_switched_on_and_valid():
     assert _adapter_accepts(mode, device) == (True, "")
     assert _default_of(environment[CHUNK_CHARS_ENV]) in ("", str(DEFAULT_CHUNK_CHARS))
     assert _default_of(environment[TOKEN_ENV]) == ""      # token 不寫死在 compose 裡
+
+
+@pytest.mark.parametrize("name", WORKER_SETTINGS)
+def test_compose_hands_each_worker_setting_to_the_api_container(name):
+    environment = _api_environment()
+    assert name in environment, f"compose.gpu.yaml 沒有把 {name} 傳進 api 容器"
+    assert environment[name].startswith("${" + name), f"{name} 沒有從 .env.gpu 傳進來：{environment[name]}"
+
+
+def test_compose_leaves_the_worker_time_limit_at_the_codes_default_and_valid():
+    """沒設就是程式的預設值（不在 compose 裡另外寫死一個），而且 adapter 認得這個值。"""
+    default = _default_of(_api_environment()[TIMEOUT_ENV])
+    assert default in ("", str(DEFAULT_TIMEOUT_SECONDS))
+    assert _adapter_accepts_timeout(default) == (True, "")
+
+
+def test_compose_does_not_override_the_python_the_image_points_the_worker_at():
+    """攔的 bug：compose 寫了 `SLIDEBOX_DIARIZATION_PYTHON: ${SLIDEBOX_DIARIZATION_PYTHON:-}`——沒設的時候
+    它變成空字串，蓋掉 Dockerfile 的 ENV：工作行程改用主環境的 Python（那裡沒有 torch），
+    多人模式永遠說「沒有安裝 pyannote.audio」，而映像本身一點問題也沒有。"""
+    assert PYTHON_ENV not in _api_environment()
+    assert PYTHON_ENV not in _env_example()
 
 
 def test_compose_turns_usage_telemetry_off():
@@ -175,6 +209,13 @@ def test_env_example_lists_every_diarization_setting_with_a_value_the_code_accep
     assert chunk == "" or parse_chunk_chars(chunk) == int(chunk)
 
 
+def test_env_example_lists_the_worker_time_limit_with_a_value_the_code_accepts():
+    values = _env_example()
+    for name in WORKER_SETTINGS:
+        assert name in values, f"範例檔沒有 {name}"
+    assert _adapter_accepts_timeout(values[TIMEOUT_ENV]) == (True, "")
+
+
 # --- Dockerfile ---
 
 def test_dockerfile_installs_the_diarization_group():
@@ -214,6 +255,19 @@ def test_readme_section_documents_every_setting_and_the_audit_tool():
     assert not TOKEN_SHAPE.search(section)
 
 
+def test_readme_explains_the_two_environments_and_what_the_checks_do_and_do_not_prove():
+    """攔的 bug：說明還停在「一個環境」——照著跑 `exec api python -c "import torch…"` 會因為主環境沒有 torch 失敗；
+    把 `--sample` 的結束碼 0 讀成「顯示卡沒問題」（其實可能一直在 CPU 上跑）；Windows 主機上的指令只能驗證 CPU。"""
+    section = _multi_speaker_section()
+    for needle in (TIMEOUT_ENV, PYTHON_ENV, "/opt/diarize-venv", "/app/.venv", "docker/check_environments.py",
+                   "env -u LD_LIBRARY_PATH", "CUDA UMD Version", "SLIDEBOX_DIARIZATION_DEVICE=cuda",
+                   "這條路只能驗證 CPU", "不是「顯示卡沒問題」",
+                   "沒有真的建置過", "find /app/.venv /opt/diarize-venv -name 'libcudnn.so*'"):
+        assert needle in section, f"README 的多人說話者模式一節沒有提到 {needle}"
+    for stale in ("確認 token、模型、驅動都正常", 'exec api python -c "import torch', "`--group diarization` 建置"):
+        assert stale not in section, f"README 還留著舊的說法：{stale}"
+
+
 def test_the_documented_chunk_size_default_is_the_codes_default():
     """攔的 bug：程式的預設值改了，說明還寫著舊的數字。"""
     assert str(DEFAULT_CHUNK_CHARS) in _multi_speaker_section()
@@ -223,3 +277,16 @@ def test_the_documented_chunk_size_default_is_the_codes_default():
 @pytest.mark.parametrize("name", DIARIZATION_SETTINGS)
 def test_serve_api_docstring_lists_each_diarization_setting(name):
     assert name in (serve_api.__doc__ or "")
+
+
+@pytest.mark.parametrize("name", (*WORKER_SETTINGS, PYTHON_ENV))
+def test_serve_api_docstring_lists_each_worker_setting(name):
+    assert name in (serve_api.__doc__ or "")
+
+
+def test_the_documented_worker_time_limit_default_is_the_codes_default():
+    """攔的 bug：程式的預設上限改了，說明還寫著舊的數字。"""
+    default = str(DEFAULT_TIMEOUT_SECONDS)
+    assert default in _multi_speaker_section()
+    assert default in _read("compose.gpu.yaml") and default in _read(".env.gpu.example")
+    assert f"預設 {default}" in (serve_api.__doc__ or "")

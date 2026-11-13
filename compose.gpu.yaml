@@ -51,6 +51,11 @@ services:
       # auto：有 CUDA 就用顯示卡，載不起來退回 CPU（進度裡會說）；cuda：強制，失敗就回報失敗；
       # cpu：完全不碰 CUDA，驅動跟映像裡的 CUDA 版本（鎖檔裡的 torch 是 CUDA 13）對不上時的逃生口，較慢
       SLIDEBOX_DIARIZATION_DEVICE: ${SLIDEBOX_DIARIZATION_DEVICE:-auto}
+      # 說話者區分單次工作的時間上限（秒）：超過就把工作行程殺掉、回報失敗，免得卡死的行程一直佔著顯示卡。
+      # 留空是預設的 21600（6 小時），0 是不設上限。
+      # （說話者區分用的 Python 環境 SLIDEBOX_DIARIZATION_PYTHON 由映像自己設好，不要放進這裡：
+      #   設成空字串也會蓋掉映像裡的設定，說話者區分就找不到 pyannote。）
+      SLIDEBOX_DIARIZATION_TIMEOUT_SECONDS: ${SLIDEBOX_DIARIZATION_TIMEOUT_SECONDS:-}
       # 多人對談切窗的字數預算（1000–20000）；留空或超出範圍就用程式裡的預設值
       SLIDEBOX_CHUNK_CHARS: ${SLIDEBOX_CHUNK_CHARS:-}
       # 不把使用統計送回 pyannote／Hugging Face
