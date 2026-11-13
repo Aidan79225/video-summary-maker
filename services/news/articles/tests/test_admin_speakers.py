@@ -2,20 +2,28 @@
 
 說話者的名字與併法只能用 label_video（驗過、整批套用、不猜）；admin 的表單若是可以改的，一個手滑就會把
 話安到別人頭上，而且沒有任何檢查。所以這些欄位根本不放進表單——POST 偷帶也不會被存。
+
+「每個重點是誰說的」不只在 points 裡：條列、完整敘述與逐字稿裡的 [[Sn]] 記號決定網頁上那句話寫誰的名字，
+摘要卡（多人影片一律是空的）則是沒有說話者的口吻。這些文字在多人影片上也鎖成唯讀；單人影片與議會的文章
+照舊可以在 admin 裡修。
 """
 from __future__ import annotations
 
 import shutil
 import tempfile
+from datetime import date
 
 from django.contrib.auth import get_user_model
 from django.test import TestCase, override_settings
 
-from articles.models import Article, Slide
+from articles.models import Article, ArticleStatus, Slide
 from articles.tests.speaker_support import publish_diarized
 
 VIDEO = "jNQXAC9IVRw"
 HIDDEN_FROM_THE_FORM = ("speakers", "diarization", "speaker_count")
+# 讀取時會被換成名字的文字：改掉一個記號就是換掉那句話的主人
+LOCKED_ARTICLE_FIELDS = ("transcript_text", "brief")
+LOCKED_SLIDE_FIELDS = ("title", "bullets", "detail")
 
 
 def form_data(response) -> dict:
@@ -57,6 +65,92 @@ class SpeakerAdminTests(TestCase):
         inline = response.context["inline_admin_formsets"][0].formset
         self.assertNotIn("points", inline.form.base_fields)
         self.assertNotContains(response, 'name="slides-0-points"')
+
+    def test_the_text_that_decides_who_said_what_is_shown_but_cannot_be_edited(self):
+        """攔的洞：points 藏起來了，但 [[S1]] 記號在條列、完整敘述與逐字稿裡，表單照樣給人改。"""
+        response = self.client.get(self.url)
+        form = response.context["adminform"].form
+        for name in LOCKED_ARTICLE_FIELDS:
+            with self.subTest(field=name):
+                self.assertNotIn(name, form.fields)
+                self.assertNotContains(response, f'name="{name}"')
+                self.assertIn(name, response.context["adminform"].model_admin.get_readonly_fields(
+                    response.wsgi_request, self.article))
+        inline = response.context["inline_admin_formsets"][0].formset
+        for name in LOCKED_SLIDE_FIELDS:
+            with self.subTest(field=f"slides-0-{name}"):
+                self.assertNotIn(name, inline.form.base_fields)
+                self.assertNotContains(response, f'name="slides-0-{name}"')
+        # 鎖起來不等於藏起來：操作者要核對的，看得到
+        self.assertContains(response, "[[S1]]")
+        self.assertContains(response, self.article.transcript_text.splitlines()[0])
+
+    def test_the_rest_of_the_form_still_works(self):
+        """鎖的只有記號所在的文字；標題、頻道、狀態這些欄位照常改得動，投影片的順序、時間與圖也是。"""
+        response = self.client.get(self.url)
+        self.assertLessEqual({"title", "speaker", "status", "source_note"}, set(response.context["adminform"].form.fields))
+        inline = response.context["inline_admin_formsets"][0].formset
+        self.assertLessEqual({"index", "timestamp", "image"}, set(inline.form.base_fields))
+
+    def test_a_tampered_post_cannot_reach_the_marker_text_or_add_a_slide(self):
+        before = Article.objects.get(pk=self.article.pk)
+        slides = list(before.slides.order_by("index").values("title", "bullets", "detail", "points"))
+        data = form_data(self.client.get(self.url))
+        count = int(data["slides-TOTAL_FORMS"])
+        data |= {
+            "transcript_text": "00:05 [[S2]]：偷改的逐字稿",
+            "brief": '{"one_liner": "偷塞的摘要卡", "key_numbers": [], "asks": []}',
+            "slides-0-title": "偷改的小標",
+            "slides-0-bullets": '["[[S2]]：偷改的條列"]',
+            "slides-0-detail": "[[S2]]：偷改的完整敘述",
+            "slides-TOTAL_FORMS": str(count + 1),
+            f"slides-{count}-index": "99",
+            f"slides-{count}-title": "偷加的一頁",
+            f"slides-{count}-bullets": '["[[S2]]：偷加的條列"]',
+            f"slides-{count}-detail": "偷加的完整敘述",
+            f"slides-{count}-timestamp": "0",
+        }
+        response = self.client.post(self.url, data)
+        self.assertEqual(response.status_code, 302, getattr(response, "context", None) and
+                         response.context["adminform"].form.errors)
+        after = Article.objects.get(pk=self.article.pk)
+        self.assertEqual(after.transcript_text, before.transcript_text)
+        self.assertEqual(after.brief, before.brief)
+        self.assertIsNone(after.brief)
+        self.assertEqual(list(after.slides.order_by("index").values("title", "bullets", "detail", "points")), slides)
+        self.assertNotIn("偷", str(list(Slide.objects.values())) + str(Article.objects.values()))
+
+    def test_changing_the_source_does_not_unlock_the_text(self):
+        """source 是表單裡改得動的欄位；鎖看的是說話者清單，不是來源。"""
+        Article.objects.filter(pk=self.article.pk).update(source="ly")
+        response = self.client.get(self.url)
+        for name in LOCKED_ARTICLE_FIELDS:
+            self.assertNotIn(name, response.context["adminform"].form.fields)
+        inline = response.context["inline_admin_formsets"][0].formset
+        for name in LOCKED_SLIDE_FIELDS:
+            self.assertNotIn(name, inline.form.base_fields)
+
+    def test_a_video_marked_as_one_speaker_and_a_council_article_stay_editable(self):
+        """單人影片（--speakers 1）與議會的文章沒有說話者清單，文字裡也沒有記號：照第一部分的樣子，全部改得動。"""
+        for source, speaker_count in (("youtube", 1), ("ly", None)):
+            with self.subTest(source=source):
+                article = Article.objects.create(
+                    ivod_id=f"{source}-plain", slug=f"2026-10-30-{source}-plain", title="t", speaker="某人", source=source,
+                    date=date(2026, 10, 30), ivod_url="https://example.com/x", status=ArticleStatus.READY,
+                    speaker_count=speaker_count, transcript_text="00:01 一句話", brief={"one_liner": "一句話"})
+                Slide.objects.create(article=article, index=1, title="小標", bullets=["重點"], detail="敘述")
+                response = self.client.get(f"/admin/articles/article/{article.pk}/change/")
+                self.assertEqual(response.status_code, 200)
+                for name in LOCKED_ARTICLE_FIELDS:
+                    self.assertIn(name, response.context["adminform"].form.fields)
+                inline = response.context["inline_admin_formsets"][0].formset
+                for name in LOCKED_SLIDE_FIELDS:
+                    self.assertIn(name, inline.form.base_fields)
+                data = form_data(response) | {"transcript_text": "00:01 改過的逐字稿", "slides-0-detail": "改過的敘述"}
+                self.assertEqual(self.client.post(f"/admin/articles/article/{article.pk}/change/", data).status_code, 302)
+                article.refresh_from_db()
+                self.assertEqual(article.transcript_text, "00:01 改過的逐字稿")
+                self.assertEqual(article.slides.get().detail, "改過的敘述")
 
     def test_the_speaker_mode_is_shown_but_read_only(self):
         """空的（自動區分）在 admin 裡顯示成「-」——要看得到這個欄位，也要確定它不是輸入框。"""

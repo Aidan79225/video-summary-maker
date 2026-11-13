@@ -11,14 +11,36 @@ from .models import (Article, ArticleSource, ArticleStatus, BillTopic, BillTopic
                      FollowUp, FollowUpEvaluation, FollowUpLabel, LyBill, LyMeeting, LyVote, Membership,
                      Person, ProfileStat, Session, Slide, Topic, TopicEvaluation, TopicLabel)
 from .profiles import compute_profiles
+from .speakers import has_structured_speakers
+
+
+def has_roster(article: Article | None) -> bool:
+    """這篇是不是已經通過驗證、帶著說話者清單的多人影片？
+
+    看清單本身而不看 source：source 是表單裡改得動的欄位，改成別的來源不該順便把鎖打開。
+    """
+    return article is not None and has_structured_speakers(article.speakers)
 
 
 class SlideInline(admin.TabularInline):
     model = Slide
     extra = 0
+    fields = ("index", "title", "bullets", "detail", "timestamp", "image")
     # 每個重點是誰說的（多人影片）不給人在表單裡手改：改錯一個編號就是把話安到別人頭上。
     # exclude 之後表單不含這一欄，存檔也不會動到它
     exclude = ("points",)
+    # points 藏起來還不夠：條列與完整敘述裡的 [[S1]] 在讀取時被換成名字，改掉一個記號就把那句話安給別人，
+    # 而且沒有任何檢查。多人影片的這三欄鎖成唯讀（看得到、改不動；小標不會被換成名字，手打一個記號上去
+    # 會原樣漏到網頁上）。單人影片與議會的文章沒有記號，照舊可以修
+    locked_when_diarized = ("title", "bullets", "detail")
+
+    def get_readonly_fields(self, request, obj=None):
+        fields = super().get_readonly_fields(request, obj)
+        return (*fields, *self.locked_when_diarized) if has_roster(obj) else fields
+
+    def has_add_permission(self, request, obj=None):
+        # 多人影片的每一頁都來自通過驗證的 GPU 結果；手動加的一頁沒有人驗過，也沒有「誰說的」
+        return not has_roster(obj) and super().has_add_permission(request, obj)
 
 
 @admin.register(Article)
@@ -33,6 +55,13 @@ class ArticleAdmin(admin.ModelAdmin):
     # 名字與併法只能用 label_video 改
     readonly_fields = ("error", "gpu_job_id", "attempts", "speaker_count", "created_at", "updated_at",
                        "published_at")
+    # 多人影片的逐字稿（每一行開頭是 [[Sn]]）與摘要卡（多人影片一律沒有，有的話就是沒說話者的口吻）鎖成唯讀，
+    # 理由同 SlideInline：誰說的不只在 points 裡。標題、頻道、狀態這些欄位照常改得動
+    locked_when_diarized = ("transcript_text", "brief")
+
+    def get_readonly_fields(self, request, obj=None):
+        fields = super().get_readonly_fields(request, obj)
+        return (*fields, *self.locked_when_diarized) if has_roster(obj) else fields
     # 會期可以手動改：每晚的重算只替「還沒掛會期」的文章掛，不會蓋掉人改過的
     autocomplete_fields = ("membership", "session")
     fieldsets = (
