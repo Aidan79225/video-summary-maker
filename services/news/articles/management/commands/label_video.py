@@ -4,7 +4,8 @@
     python manage.py label_video 影片 --name S1=黃國昌 --name S2=王小明 --role S1=主持人
     python manage.py label_video 影片 --merge S3=S1       # S3 和 S1 其實是同一個人（例如連線進來的聲音被分開了）
     python manage.py label_video 影片 --clear S1          # 取消 S1 的名字、角色與併法
-    python manage.py label_video 影片 --audit 5 [--seed 7]  # 抽 5 個重點：誰說的、依據是哪句話、連結跳到那一秒
+    python manage.py label_video 影片 --audit 6 [--seed 7]  # 抽 6 個重點：誰說的、依據是哪句話、連結跳到那一秒
+                                                           # （每位說話者至少抽 2 個；數字太小抽不到每個人，會說是誰沒抽到）
 
 影片可以是 slug（2026-10-30-yt-xxxxxxxxxxx）、11 碼影片 id，或網址（網址要加單引號）。
 
@@ -19,18 +20,55 @@ from __future__ import annotations
 import random
 import re
 import secrets
+from collections import Counter
 
 from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
 
 from articles.models import Article, ArticleSource, ArticleStatus
 from articles.speaker_labels import Labels, LabelError, apply_labels, changed, split_pair
-from articles.speaker_sheet import clock, describe, next_step_lines, plain, sheet_lines, video_id_of, watch_link
+from articles.speaker_sheet import (
+    AUDIT_PER_SPEAKER,
+    clock,
+    describe,
+    next_step_lines,
+    plain,
+    sheet_lines,
+    video_id_of,
+    watch_link,
+)
 from articles.speakers import display_of, has_structured_speakers
 from articles.youtube_source import UrlRejected, allow_dash_ids, clean_text, parse_video_url
 
 MAX_AUDIT = 100
 _NUMBER = re.compile(r"[0-9]{1,9}")
+
+
+def _choose(speakers: list[str], count: int, seed: int) -> list[int]:
+    """抽查哪幾個重點：speakers[i] 是第 i 個重點的說話者，回傳抽到的重點編號（由小到大）。
+
+    依說話者分層：每位說話者先抽 AUDIT_PER_SPEAKER 個（不夠就全抽），一輪一輪來；名額連每位一個都不夠時，
+    抽到哪幾位由種子決定。剩下的名額才從還沒抽到的重點裡均勻隨機補。均勻亂抽的話，只占 10% 重點的人在
+    5 個名額裡有六成的機會一個都沒被抽到，而最容易被分錯的正是講得少的人。同一個種子抽到同一批。
+    """
+    rng = random.Random(seed)
+    by_speaker: dict[str, list[int]] = {}
+    for index, speaker in enumerate(speakers):
+        by_speaker.setdefault(speaker, []).append(index)
+    for indices in by_speaker.values():
+        rng.shuffle(indices)
+    order = list(by_speaker)
+    rng.shuffle(order)
+    chosen: list[int] = []
+    for turn in range(AUDIT_PER_SPEAKER):
+        for speaker in order:
+            if len(chosen) < count and turn < len(by_speaker[speaker]):
+                chosen.append(by_speaker[speaker][turn])
+    taken = set(chosen)
+    rest = [index for index in range(len(speakers)) if index not in taken]
+    rng.shuffle(rest)
+    chosen.extend(rest[:count - len(chosen)])
+    return sorted(chosen)
 
 
 class Command(BaseCommand):
@@ -51,7 +89,9 @@ class Command(BaseCommand):
                             help="S3 和 S1 是同一個人：S3 的話之後顯示成 S1。只併一層，可以重複")
         parser.add_argument("--clear", action="append", default=[], metavar="S1",
                             help="取消 S1 的名字、角色與併法。可以重複")
-        parser.add_argument("--audit", metavar="N", help=f"抽 N 個重點（1～{MAX_AUDIT}）：誰說的、依據、連結")
+        parser.add_argument("--audit", metavar="N",
+                            help=f"抽 N 個重點（1～{MAX_AUDIT}）：誰說的、依據、連結。每位說話者至少抽 {AUDIT_PER_SPEAKER} 個，"
+                                 "N 太小抽不到每個人時會說是誰沒抽到")
         parser.add_argument("--seed", metavar="N", help="--audit 的抽樣種子；同一個種子抽到同一批")
 
     def handle(self, *args, **options) -> None:
@@ -179,9 +219,11 @@ class Command(BaseCommand):
             self.stdout.write(line)
 
     def _audit(self, article: Article, count: int, seed: int | None) -> None:
-        """隨機抽 count 個重點，一個一個印出：哪一頁、誰說的、說了什麼、依據的原話、連結跳到那一秒。
+        """抽 count 個重點，一個一個印出：哪一頁、誰說的、說了什麼、依據的原話、連結跳到那一秒。
 
-        抽到的人要自己點進去聽：這是驗證「有沒有安對人」唯一可靠的辦法。種子印出來，同一批可以再抽一次。
+        依說話者分層抽（見 _choose），而且印出每位抽到幾個、誰沒抽到：不能讓操作者以為每個人都查過了。
+        抽到的人要自己點進去聽：這是驗證「有沒有安對人」唯一可靠的辦法；聽過沒問題是證據，不是證明。
+        種子印出來，同一批可以再抽一次。
         """
         entries = [(slide.index, point) for slide in article.slides.all() for point in slide.points or []
                    if isinstance(point, dict) and isinstance(point.get("speaker"), str)]
@@ -189,18 +231,39 @@ class Command(BaseCommand):
             self.stdout.write("這支影片沒有可以抽查的重點。")
             return
         seed = secrets.randbelow(1_000_000) if seed is None else seed
-        chosen = sorted(random.Random(seed).sample(range(len(entries)), min(count, len(entries))))
+        chosen = _choose([point["speaker"] for _, point in entries], min(count, len(entries)), seed)
         self.stdout.write(f"抽查 {len(chosen)} 個重點（共 {len(entries)} 個；抽樣種子 {seed}，"
                           f"--seed {seed} 可以抽到同一批）。點連結聽一下，確認真的是那個人說的：")
+        for line in self._coverage(article, entries, chosen):
+            self.stdout.write(line)
         video_id = video_id_of(article)
-        by_id = {s["id"]: s for s in article.speakers}
         for number, index in enumerate(chosen, start=1):
             slide_index, point = entries[index]
-            speaker_id = point["speaker"]
-            label = plain((by_id.get(speaker_id) or {}).get("label")) or plain(speaker_id)
-            shown = plain(display_of(article.speakers, speaker_id))
-            who = f"{plain(speaker_id)} {label}" + (f"／{shown}" if shown != label else "")
+            who = self._who(article, point["speaker"])
             self.stdout.write(f"{number}. 第 {slide_index} 頁　[{who}] {plain(point.get('text'))}")
             self.stdout.write(f"     依據：「{plain(point.get('evidence'))}」")
             if video_id:
                 self.stdout.write(f"     {watch_link(video_id, point.get('start'), lead=3)}")
+
+    @staticmethod
+    def _who(article: Article, speaker_id: str) -> str:
+        """「S1 發言者 A」，操作者取過名字的話再加「／名字」。"""
+        by_id = {s["id"]: s for s in article.speakers}
+        label = plain((by_id.get(speaker_id) or {}).get("label")) or plain(speaker_id)
+        shown = plain(display_of(article.speakers, speaker_id))
+        return f"{plain(speaker_id)} {label}" + (f"／{shown}" if shown != label else "")
+
+    def _coverage(self, article: Article, entries: list, chosen: list[int]) -> list[str]:
+        """抽到的說話者各幾個；沒抽到、或抽得比建議的少的，直接說出來。"""
+        total = Counter(point["speaker"] for _, point in entries)           # 依第一次出現的順序
+        got = Counter(entries[index][1]["speaker"] for index in chosen)
+        lines = ["涵蓋：" + "、".join(f"{self._who(article, speaker)} {got[speaker]} 個" for speaker in total if got[speaker])]
+        missing = [speaker for speaker in total if not got[speaker]]
+        if missing:
+            lines.append(f"  ! 這次沒有抽到：{'、'.join(self._who(article, speaker) for speaker in missing)}"
+                         f"（只抽了 {len(chosen)} 個，比有重點的說話者 {len(total)} 位還少）；"
+                         "沒抽到的人，這次沒有檢查過有沒有安對。")
+        needed = sum(min(AUDIT_PER_SPEAKER, number) for number in total.values())
+        if len(chosen) < needed:
+            lines.append(f"  ! 要每位說話者都至少抽到 {AUDIT_PER_SPEAKER} 個（不夠的全抽），--audit 至少要是 {needed}。")
+        return lines

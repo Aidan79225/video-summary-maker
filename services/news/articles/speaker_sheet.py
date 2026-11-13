@@ -14,6 +14,9 @@ from .models import Article
 from .speakers import display_of, has_structured_speakers, resolve
 from .youtube_source import clean_text, video_id_from_ivod_id
 
+# label_video --audit：每位說話者至少抽幾個重點（不夠的全抽）。抽查的數字（add_video 的下一步建議）也照這個算
+AUDIT_PER_SPEAKER = 2
+
 # GPU 的警告代碼 → 給操作者看的白話
 WARNING_TEXT = {
     "count_mismatch": "分出來的人數跟你指定的不一樣：指定的人數是「每個講超過約 30 秒的聲音都算」，"
@@ -89,13 +92,22 @@ def rerun_loss_note(article: Article) -> str | None:
     return note
 
 
+def audit_count(speakers: object) -> int:
+    """建議的 --audit 數字：每位主要發言者至少 AUDIT_PER_SPEAKER 個，而且至少 5 個。
+    八位主要發言者時 5 個連每人一個都抽不到，所以隨人數增加。"""
+    participants = sum(1 for s in speakers if isinstance(s, dict) and s.get("kind") == "participant") \
+        if isinstance(speakers, list) else 0
+    return max(5, AUDIT_PER_SPEAKER * participants)
+
+
 def next_step_lines(article: Article) -> list[str]:
     """add_video 做完之後印的下一步。名字只有聽過音檔的人才知道，程式不替你猜。"""
     return [
         "下一步：每個編號是誰，只有聽過音檔的人才確定，程式不會猜。開上面的連結聽一下，再執行：",
         f"  python manage.py label_video {article.slug} --name S1=名字 --name S2=名字",
         "  加職稱：--role S1=主持人　同一個人被分成兩個編號：--merge S3=S1　名字取錯了：--clear S1",
-        f"  抽查幾個重點有沒有安對人：python manage.py label_video {article.slug} --audit 5",
+        f"  抽查幾個重點有沒有安對人（每位說話者至少抽 {AUDIT_PER_SPEAKER} 個）："
+        f"python manage.py label_video {article.slug} --audit {audit_count(article.speakers)}",
         "設定完不必重跑 GPU，網站上馬上會換成名字；沒設定之前，網站上只顯示「發言者 A」這種中性稱呼。",
     ]
 

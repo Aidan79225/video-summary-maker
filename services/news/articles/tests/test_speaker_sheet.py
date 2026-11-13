@@ -174,3 +174,13 @@ class NextStepTests(SimpleTestCase):
         self.assertIn("程式不會猜", text)
         self.assertIn("--merge S3=S1", text)
         self.assertIn("--audit 5", text)
+
+    def test_the_audit_hint_asks_for_at_least_two_points_per_participant(self):
+        """八位主要發言者，--audit 5 連每個人一個都抽不到；建議的數字隨人數增加。"""
+        base = CONTRACT["result"]["speakers"][0]
+        eight = with_pi_fields([{**copy.deepcopy(base), "id": f"S{n}", "label": f"發言者 {chr(64 + n)}"}
+                                for n in range(1, 9)])
+        self.assertIn("--audit 16", "\n".join(next_step_lines(article(speakers=eight))))
+        self.assertIn("--audit 5", "\n".join(next_step_lines(article())))
+        junk = article(speakers=["junk", None, {"kind": "participant"}])
+        self.assertIn("--audit 5", "\n".join(next_step_lines(junk)))

@@ -128,7 +128,7 @@ uv run python manage.py add_video 'https://www.youtube.com/watch?v=jNQXAC9IVRw' 
 uv run python manage.py label_video jNQXAC9IVRw                                  # 印說話者對照表（每位附幾句話與可以跳到那一秒的連結）
 uv run python manage.py label_video jNQXAC9IVRw --name S1=黃國昌 --role S1=主持人 --name S2=王小明
 uv run python manage.py label_video jNQXAC9IVRw --merge S3=S1                    # S3 和 S1 其實是同一個人
-uv run python manage.py label_video jNQXAC9IVRw --audit 5 --seed 7               # 抽查 5 個重點：誰說的、依據、連結
+uv run python manage.py label_video jNQXAC9IVRw --audit 5 --seed 7               # 抽查 5 個重點（每位說話者至少 2 個）：誰說的、依據、連結
 uv run python manage.py remove_video yt-jNQXAC9IVRw --dry-run   # 下架：刪文章與截圖檔案
 uv run python manage.py remove_video yt-jNQXAC9IVRw --force     # 緊急下架：不等進行中的 GPU 工作（它做完的結果會被丟棄）
 ```
@@ -188,7 +188,7 @@ uv run python manage.py remove_video yt-jNQXAC9IVRw --force     # 緊急下架�
 
 **資料與顯示**：`Article.speakers` 是 GPU 回報的 `id`、`label`（中性的「發言者 A」）、`kind`、`seconds`、`turns`、`first_seen`、`last_seen`、`samples`、`flags`，加上 Pi 自己的 `name`、`role`、`basis`（`none` 或 `operator`）、`merged_into`。逐字稿、條列、完整敘述裡存的永遠是 `[[S1]]` 這樣的記號，**名字從來不寫進文字**：API 讀取時才把記號換成名字（有名字用名字，沒有就是標籤；`merged_into` 跟到底，有環不會無限迴圈；`S0` 顯示「（無法判斷）」，不認得的編號顯示「（未知發言者）」）。用 callback 換，名字裡的 `$1`、`A.*B`、反斜線加數字不會被當成樣板；換完仍殘留的 `[[` 或 `]]` 一律拿掉，不會漏到網頁上；`teaser` 先換再截斷。只有 YouTube 影片而且有說話者清單的文章才換，議會與單人影片的文字一個字都不碰，回應只多了 `speakers: []`、`diarization: null`、`points: []` 這些中性預設值。
 
-**名字只由操作者設定，程式不猜**（`label_video`，不碰 GPU）：GPU 只知道「這是同一個聲音」，不知道那個人是誰。`add_video` 做完會印說話者對照表（每位的編號、標籤、發言時間與次數、幾句話與 `&t=` 連結）、GPU 的警告（人數對不上、無法歸屬的比例偏高、其他聲音太多、只找到一個人）與下一步；聽過、確定了才用 `label_video <影片> --name S1=黃國昌 --role S1=主持人`。影片可以是 slug、11 碼影片 id 或網址。名字最多 40 字、角色最多 20 字，先過 `clean_text`，不能含 `[[`、`]]`、冒號、換行，不能長得像說話者編號；兩位說話者不能顯示成同一個字（真的是同一個人用 `--merge S3=S1`：只併一層，主要發言者不能併進其他聲音，被併的編號沒有自己的名字）。每一項先驗證完才套用，有一項不對就整批都不套用。`--audit N [--seed S]` 抽 N 個重點（種子印出來，同一批可以再抽）：第幾頁、誰說的、依據的原話、跳到前 3 秒的連結。**驗證有沒有安對人唯一可靠的辦法是點進去聽。**
+**名字只由操作者設定，程式不猜**（`label_video`，不碰 GPU）：GPU 只知道「這是同一個聲音」，不知道那個人是誰。`add_video` 做完會印說話者對照表（每位的編號、標籤、發言時間與次數、幾句話與 `&t=` 連結）、GPU 的警告（人數對不上、無法歸屬的比例偏高、其他聲音太多、只找到一個人）與下一步；聽過、確定了才用 `label_video <影片> --name S1=黃國昌 --role S1=主持人`。影片可以是 slug、11 碼影片 id 或網址。名字最多 40 字、角色最多 20 字，先過 `clean_text`，不能含 `[[`、`]]`、冒號、換行，不能長得像說話者編號；兩位說話者不能顯示成同一個字（真的是同一個人用 `--merge S3=S1`：只併一層，主要發言者不能併進其他聲音，被併的編號沒有自己的名字）。每一項先驗證完才套用，有一項不對就整批都不套用。`--audit N [--seed S]` 依說話者分層抽 N 個重點：每位說話者至少 2 個（不夠 2 個的全抽），剩下的名額才隨機補——均勻亂抽的話，只占 10% 重點的人在 `--audit 5` 裡有六成的機會一個都沒被抽到，而最容易被分錯的正是講得少的人。一開始先印每位抽到幾個；名額連每位一個都不夠時，說出是誰沒抽到，以及要每位至少 2 個時 `--audit` 至少要多少（種子印出來，同一批可以再抽）。每個重點印第幾頁、誰說的、依據的原話、跳到前 3 秒的連結。**驗證有沒有安對人唯一可靠的辦法是點進去聽；聽過沒問題只是證據，不是證明。**
 
 **重跑（`add_video --rerun`）不保留名字與併法**：重跑之後說話者編號可能全部重新排，把舊名字掛到新編號上等於安錯人；指令在重跑之前先印出會丟掉的設定。同一道理，`label_video` 沒有版本檢查，編號是你看到那份對照表時的編號：重跑做完要重新看過對照表再取名字（設定完會印出被改的說話者與一句例子，方便對一下）。
 
@@ -215,7 +215,7 @@ uv run python manage.py add_video 'https://www.youtube.com/watch?v=jNQXAC9IVRw' 
 1. GPU 主機：更新程式與說話者區分需要的套件和模型，重啟摘要 API；`GET /capabilities` 要回 `speaker_diarization: true` 與 `speaker_contract: 1`。
 2. Pi：整個 stack 一起重新部署（`migrate` 在容器啟動時跑）。先備份資料庫檔案：0015 對 `articles_article` 加 `speaker_count` 與 `diarization`、對 `articles_slide` 加 `points`，SQLite 加欄位會把這兩張表各重建一次，重建期間寫入會短暫被鎖住。**既有的資料列 `speaker_count` 一律填 1**（既有的影片全都是 `--speakers 1` 做的，行為不變；議會的資料列忽略這個欄位），新登記的影片預設 `NULL`＝自動區分。
 3. 長影片要在 `api` 與 `scheduler` 兩個容器都把 `GPU_JOB_TIMEOUT_SECONDS` 調大（例如 `5400`）：區分說話者比單人流程慢，夜間批次用同一個數字判斷「卡住」。
-4. 驗證：先 `add_video <短影片> --dry-run`（不問 GPU），再真的加一支兩個人講話的短影片，看對照表、用 `label_video <影片> --audit 5` 點連結聽幾個重點，確定沒有安錯人之後再加其他影片。
+4. 驗證：先 `add_video <短影片> --dry-run`（不問 GPU），再真的加一支兩個人講話的短影片，看對照表、用 `label_video <影片> --audit 6`（數字至少是主要發言者人數的 2 倍，每位才抽得到 2 個）點連結聽那幾個重點，確定沒有安錯人（聽過沒問題是證據，不是證明）之後再加其他影片。
 
 ```bash
 uv run python manage.py migrate    # 0015：Article.speaker_count（既有的列填 1）、Article.diarization、Slide.points

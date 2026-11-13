@@ -5,9 +5,11 @@
 from __future__ import annotations
 
 import io
+import re
 import shutil
 import tempfile
 import urllib.request
+from collections import Counter
 from datetime import date
 from unittest import mock
 
@@ -286,7 +288,8 @@ class AuditTests(LabelTestCase):
         first, _ = self.run_cmd(SLUG, "--audit", "2", "--seed", "7")
         again, _ = self.run_cmd(SLUG, "--audit", "2", "--seed", "7")
         self.assertEqual(first, again)
-        others = {self.run_cmd(SLUG, "--audit", "2", "--seed", str(seed))[0] for seed in range(30)}
+        # 整段輸出的標題裡有種子，每個種子的輸出本來就不一樣：要比的是抽到的那一批
+        others = {self.batch(self.run_cmd(SLUG, "--audit", "2", "--seed", str(seed))[0]) for seed in range(30)}
         self.assertGreater(len(others), 1, "30 個種子抽到的全是同一批")
 
     def test_the_chosen_points_come_out_in_video_order(self):
@@ -346,6 +349,133 @@ class AuditTests(LabelTestCase):
         slide.save(update_fields=["points"])
         out, _ = self.run_cmd(SLUG, "--audit", "50", "--seed", "1")
         self.assertIn("抽查 6 個重點（共 6 個", out)
+
+    # --- 每位說話者都要被抽到：均勻亂抽的話，講得少的人（最容易被分錯的）常常一個都沒抽到 ---
+
+    def crowd(self, counts):
+        """把重點換成 counts（例如 S1 60 個、S2 48 個、S3 12 個）：三位主要發言者、占的比例差很多。
+        每個重點的文字與依據都不一樣，輸出裡認得出是哪一個。"""
+        speakers = self.speakers()
+        for speaker in speakers:
+            if speaker["id"] == "S3":
+                speaker.update(kind="participant", label="發言者 C")
+        Article.objects.filter(pk=self.article.pk).update(speakers=speakers)
+        points = []
+        for speaker, count in counts.items():
+            for number in range(1, count + 1):
+                points.append({"speaker": speaker, "turn": len(points), "start": 5.0 + len(points),
+                               "text": f"{speaker} 的第 {number} 個重點", "evidence": f"{speaker} 說的第 {number} 句"})
+        first, *others = self.article.slides.order_by("index")
+        first.points = points
+        first.save(update_fields=["points"])
+        for slide in others:
+            slide.points = []
+            slide.save(update_fields=["points"])
+
+    @staticmethod
+    def batch(out):
+        """抽到的那一批（標題那一行有種子，不算）。"""
+        return out.split("確認真的是那個人說的：\n", 1)[1]
+
+    @staticmethod
+    def audited(out):
+        """輸出裡每個被抽到的重點的說話者編號（依印出的順序）。"""
+        return [re.search(r"\[(S\d+) ", line).group(1) for line in out.splitlines() if "頁　[" in line]
+
+    def test_every_speaker_is_audited_at_least_twice_whatever_their_share_of_the_points(self):
+        """攔的 bug：均勻亂抽，只占 10% 的人在 --audit 5 裡有六成的機會一個都沒被抽到。"""
+        self.crowd({"S1": 60, "S2": 48, "S3": 12})
+        for seed in range(40):
+            with self.subTest(seed=seed):
+                out, _ = self.run_cmd(SLUG, "--audit", "6", "--seed", str(seed))
+                self.assertEqual(Counter(self.audited(out)), {"S1": 2, "S2": 2, "S3": 2})
+
+    def test_the_slots_left_over_are_filled_at_random(self):
+        self.crowd({"S1": 60, "S2": 48, "S3": 12})
+        batches = set()
+        for seed in range(30):
+            out, _ = self.run_cmd(SLUG, "--audit", "10", "--seed", str(seed))
+            seen = Counter(self.audited(out))
+            self.assertEqual(sum(seen.values()), 10)
+            self.assertTrue(all(seen[speaker] >= 2 for speaker in ("S1", "S2", "S3")), seen)
+            batches.add(tuple(sorted(seen.items())))
+        self.assertGreater(len(batches), 1, "剩下的名額不是隨機補的")
+
+    def test_the_same_seed_still_gives_the_same_batch(self):
+        self.crowd({"S1": 60, "S2": 48, "S3": 12})
+        first, _ = self.run_cmd(SLUG, "--audit", "8", "--seed", "11")
+        again, _ = self.run_cmd(SLUG, "--audit", "8", "--seed", "11")
+        self.assertEqual(first, again)
+        self.assertGreater(len({self.batch(self.run_cmd(SLUG, "--audit", "8", "--seed", str(seed))[0])
+                                for seed in range(20)}), 1)
+
+    def test_which_points_are_the_guaranteed_ones_is_random_too(self):
+        """每位至少抽的那幾個不能永遠是他的前幾個重點（那樣就只查了每個人開頭說的話）。"""
+        self.crowd({"S1": 60, "S2": 48, "S3": 12})
+        s1_points = set()
+        for seed in range(20):
+            out, _ = self.run_cmd(SLUG, "--audit", "3", "--seed", str(seed))
+            s1_points.update(line for line in out.splitlines() if "[S1 " in line)
+        self.assertGreater(len(s1_points), 3, s1_points)
+
+    def test_a_speaker_with_a_single_point_is_audited_by_that_point(self):
+        self.crowd({"S1": 60, "S2": 48, "S3": 1})
+        for seed in range(20):
+            with self.subTest(seed=seed):
+                out, _ = self.run_cmd(SLUG, "--audit", "6", "--seed", str(seed))
+                seen = Counter(self.audited(out))
+                self.assertEqual(seen["S3"], 1)
+                self.assertTrue(seen["S1"] >= 2 and seen["S2"] >= 2, seen)
+                self.assertNotIn("沒有抽到", out)
+
+    def test_the_output_says_who_was_covered_and_how_often(self):
+        self.crowd({"S1": 60, "S2": 48, "S3": 12})
+        out, _ = self.run_cmd(SLUG, "--audit", "6", "--seed", "1")
+        self.assertIn("涵蓋：S1 發言者 A 2 個、S2 發言者 B 2 個、S3 發言者 C 2 個", out)
+        self.assertNotIn("沒有抽到", out)
+        self.assertNotIn("至少要是", out)
+        self.run_cmd(SLUG, "--name", "S3=黃國昌")
+        out, _ = self.run_cmd(SLUG, "--audit", "6", "--seed", "1")
+        self.assertIn("S3 發言者 C／黃國昌 2 個", out)
+
+    def test_with_fewer_slots_than_speakers_it_names_the_ones_that_were_not_reached(self):
+        self.crowd({"S1": 60, "S2": 48, "S3": 12})
+        missed = set()
+        for seed in range(30):
+            with self.subTest(seed=seed):
+                out, _ = self.run_cmd(SLUG, "--audit", "2", "--seed", str(seed))
+                seen = set(self.audited(out))
+                self.assertEqual(len(seen), 2, "兩個名額要給兩位不同的說話者，不是同一位抽兩次")
+                (left_out,) = {"S1", "S2", "S3"} - seen
+                warning = [line for line in out.splitlines() if "沒有抽到" in line]
+                self.assertEqual(len(warning), 1, out)
+                self.assertIn(left_out, warning[0])
+                self.assertFalse(any(f"{speaker} " in warning[0] for speaker in seen), warning[0])
+                self.assertIn("--audit 至少要是 6", out)
+                missed.add(left_out)
+        self.assertGreater(len(missed), 1, "每次都漏同一位")
+        out, _ = self.run_cmd(SLUG, "--audit", "1", "--seed", "4")
+        warning = next(line for line in out.splitlines() if "沒有抽到" in line)
+        self.assertEqual(sum(f"S{n} " in warning for n in (1, 2, 3)), 2)
+
+    def test_enough_to_reach_everyone_once_but_not_twice_says_how_many_are_needed(self):
+        self.crowd({"S1": 60, "S2": 48, "S3": 12})
+        out, _ = self.run_cmd(SLUG, "--audit", "4", "--seed", "2")
+        self.assertEqual(set(self.audited(out)), {"S1", "S2", "S3"})
+        self.assertNotIn("沒有抽到", out)
+        self.assertIn("--audit 至少要是 6", out)
+
+    def test_nobody_is_asked_for_more_points_than_they_have(self):
+        """契約範例：S1、S2 各 3 個重點，每位至少 2 個就是 --audit 4。"""
+        out, _ = self.run_cmd(SLUG, "--audit", "4", "--seed", "1")
+        self.assertNotIn("至少要是", out)
+        self.assertGreaterEqual(Counter(self.audited(out))["S1"], 2)
+        self.assertGreaterEqual(Counter(self.audited(out))["S2"], 2)
+        out, _ = self.run_cmd(SLUG, "--audit", "3", "--seed", "1")
+        self.assertIn("--audit 至少要是 4", out)
+        out, _ = self.run_cmd(SLUG, "--audit", "50", "--seed", "1")
+        self.assertIn("涵蓋：S1 發言者 A 3 個、S2 發言者 B 3 個", out)
+        self.assertNotIn("至少要是", out)
 
 
 class NoGpuTests(LabelTestCase):
