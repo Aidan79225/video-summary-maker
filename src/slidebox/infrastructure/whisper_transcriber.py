@@ -7,7 +7,9 @@ GPU 主機的容器裝了 cuBLAS／cuDNN，臺中市議會 50 分鐘的片段在
 """
 from __future__ import annotations
 
+import hashlib
 import importlib.util
+import json
 import math
 import os
 import re
@@ -19,12 +21,23 @@ from dataclasses import replace
 from ..domain.entities import Cue, Word
 from ..domain.errors import NoSubtitlesAvailable, OperationCancelled, SpeechRecognitionFailed
 from ..domain.ports import CancelCheck, ProgressCallback
+from ..usecases.code_fingerprint import code_fingerprint
 from .chinese_script import fix_transcript, keep_terms_from, to_traditional
 
 DEVICE_ENV = "SLIDEBOX_WHISPER_DEVICE"
 # 多人模式：靜默超過這麼久的地方，faster-whisper 會把落在裡面的幻覺字句丟掉（需要字的時間）。
-# 暫定值，用實際影片校正；改了它要同時升 speakers.ALIGN_VERSION，存檔的字才會重做。
+# 暫定值，用實際影片校正。改了它，辨識器的 fingerprint 會跟著變，存檔的字就會自己重做
+# （不必記得升 speakers.ALIGN_VERSION）。
 HALLUCINATION_SILENCE_SECONDS = 2.0
+# 多人模式呼叫模型的辨識參數（initial_prompt 另外帶：它是呼叫端給的語音提示，已經在存檔的指紋裡）。
+# 呼叫模型用它，fingerprint 也含它：參數放在這一個地方，兩邊不會各改各的。
+WORD_OPTIONS = {
+    "vad_filter": True,
+    "word_timestamps": True,
+    "hallucination_silence_threshold": HALLUCINATION_SILENCE_SECONDS,
+}
+# 決定「同一段音訊會辨識出什麼字」的程式：本模組（參數、字的整理、裝置與精度的選擇）與正體修正
+CODE_MODULES = (__name__, f"{__package__}.chinese_script")
 # ctranslate2 第一次用顯示卡時才載入的 DLL。Windows 版的 ctranslate2 自帶 cuDNN，缺的只有它
 _WINDOWS_CUBLAS = "cublas64_12.dll"
 # 只對普通話做正體修正。粵語的「晒」「吓」是正確寫法，轉了就錯；日文漢字更不能碰。
@@ -154,6 +167,13 @@ class FasterWhisperTranscriber:
         # 模型載入要約 40 秒，載一次後留著給之後的生成重複使用
         self._model = None
 
+    @property
+    def fingerprint(self) -> str:
+        """多人模式的「字」是這一版程式辨識出來的：辨識參數（WORD_OPTIONS）加上 CODE_MODULES 的原始碼。
+        模型名稱不算在內（它在存檔指紋的別的欄位）。讀不到原始碼時，指紋對不上任何舊存檔。"""
+        raw = json.dumps([sorted(WORD_OPTIONS.items()), code_fingerprint(CODE_MODULES)], ensure_ascii=False)
+        return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
+
     def transcribe(
         self,
         audio_path: str,
@@ -235,8 +255,7 @@ class FasterWhisperTranscriber:
         progress(None, "準備語音辨識…（解碼音訊、偵測人聲）")
         try:
             segments, info = model.transcribe(
-                audio_path, vad_filter=True, initial_prompt=speech_hint or None,
-                word_timestamps=True, hallucination_silence_threshold=HALLUCINATION_SILENCE_SECONDS)
+                audio_path, initial_prompt=speech_hint or None, **WORD_OPTIONS)
             language = info.language
             for number, seg in enumerate(segments):
                 if is_cancelled():

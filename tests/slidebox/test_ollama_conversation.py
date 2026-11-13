@@ -2,9 +2,13 @@
 from __future__ import annotations
 
 import hashlib
+import http.client
 import io
+import itertools
 import json
+import math
 import re
+import time
 import urllib.error
 
 import pytest
@@ -14,10 +18,11 @@ from slidebox.domain.errors import OperationCancelled, SummarizerOutputInvalid, 
 from slidebox.infrastructure import ollama_conversation as mod
 from slidebox.infrastructure import ollama_summarizer
 from slidebox.usecases import conversation as conv
+from slidebox.usecases import diarized_pipeline as dp
 from slidebox.usecases.names import detect_names
 from slidebox.usecases.quotes import locate_quote
 
-from .conversation_support import SPEAKERS, TURNS, WHOLE, at, run
+from .conversation_support import GOOD, SPEAKERS, TURNS, WHOLE, at, run
 from .speaker_fixtures import make_speakers
 
 WINDOW_TEXT = "[T3] S1：今天我們來談少子化。\n[T4] S2：現金補助有幫助。"
@@ -519,3 +524,394 @@ def test_an_error_event_from_ollama_is_reported_as_unavailable(monkeypatch):
     monkeypatch.setattr(ollama_summarizer, "_post_json", lambda *a, **k: FakeResponse(lines))
     with pytest.raises(SummarizerUnavailable, match="more system memory"):
         _summarize()
+
+
+# --- 這一版摘要程式的指紋 ---
+
+
+def test_the_adapter_reports_a_fingerprint_that_follows_its_own_source_and_the_transport_it_uses(monkeypatch):
+    """攔的 bug：提示詞、取樣設定或回應解析改了，卻忘了升 PROMPT_VERSION，存檔裡舊程式產生的摘要被當成新程式的。
+    這裡只驗性質：指紋跟著原始碼走（本模組、送出請求與讀串流的 ollama_summarizer），不跟主機與模型走
+    （那些在存檔指紋的別的欄位），也不釘任何雜湊值。"""
+    from slidebox.usecases import code_fingerprint as cf
+
+    summarizer = mod.OllamaConversationSummarizer("http://gpu:11434", "qwen3.5:9b", 32768)
+    base = summarizer.fingerprint
+    assert re.fullmatch(r"[0-9a-f]{16}", base) and summarizer.fingerprint == base
+    assert mod.OllamaConversationSummarizer("http://other:11434", "other-model", 4096).fingerprint == base
+    assert set(mod.CODE_MODULES) == {"slidebox.infrastructure.ollama_conversation",
+                                     "slidebox.infrastructure.ollama_summarizer"}
+    real = cf.read_module_source
+    for module in mod.CODE_MODULES:
+        monkeypatch.setattr(cf, "read_module_source",
+                            lambda name, edited=module: real(name) + "\n# 改過\n" if name == edited else real(name))
+        assert summarizer.fingerprint != base, module
+
+
+def test_an_unreadable_source_still_gives_the_adapter_a_fingerprint_that_matches_nothing(monkeypatch):
+    from slidebox.usecases import code_fingerprint as cf
+
+    summarizer = mod.OllamaConversationSummarizer("http://gpu:11434", "m", 8192)
+    base = summarizer.fingerprint
+    monkeypatch.setattr(cf, "read_module_source", lambda name: None)
+    assert re.fullmatch(r"[0-9a-f]{16}", summarizer.fingerprint) and summarizer.fingerprint != base
+
+
+# --- 敵意的回應 ---
+#
+# 模型的回應是不可信的資料。解析這一層對任何輸入只有兩種結果：RawSlide，或 SummarizerOutputInvalid
+# （summarize_windows 會帶著原因重問一次）。不可以有第三種：沒接住的 RecursionError、ValueError、
+# AttributeError 會讓整個工作以 traceback 當掉、也不重問。錯誤訊息也不可以含有模型寫的東西：
+# 訊息會被抄進重問的提示。
+
+LEAK = "模型寫的這段原文不可以出現在錯誤訊息裡"      # 放進敵意的回應裡；錯誤訊息或重問的提示裡出現它就是洩漏
+HUGE = "9" * 5000       # 超過 Python 轉換整數的位數上限（4300）
+
+
+def _slide_reply(point: str) -> str:
+    """合法的外殼、裡面一個重點；point 是那個重點的 JSON 原文。"""
+    return '{"slides": [{"title": "t", "points": [' + point + "]}]}"
+
+
+HOSTILE_REPLIES = {
+    "arrays nested past the recursion limit": "[" * 100_000,
+    "objects nested past the recursion limit": '{"a":' * 100_000,
+    "slides nested past the recursion limit": '{"slides":' * 100_000,
+    "objects nested past the limit after some prose": LEAK + ' {"junk":' * 100_000,
+    "an array nested past the limit inside the answer": '{"slides": [], "junk": ' + "[" * 100_000,
+    "a huge integer as the turn": _slide_reply(
+        '{"quote": "q", "turn": ' + HUGE + ', "text": "' + LEAK + '", "context": []}'),
+    "a huge integer in context": _slide_reply(
+        '{"quote": "q", "turn": 3, "text": "' + LEAK + '", "context": [' + HUGE + "]}"),
+    "a huge integer in a field nobody reads": '{"slides": [], "n": ' + HUGE + "}",
+    "a huge integer as the whole reply": HUGE,
+    "a huge integer after some prose": LEAK + ' {"slides": [], "n": ' + HUGE + "}",
+    "thinking leftovers that are never closed": "<think>" * 20_000,
+}
+
+
+@pytest.mark.parametrize("name", list(HOSTILE_REPLIES))
+def test_a_hostile_reply_is_an_invalid_output_and_the_message_says_nothing_the_model_wrote(name):
+    """攔的 bug：json 對巢狀太深丟 RecursionError、對超過 4300 位的整數丟普通的 ValueError（不是 JSONDecodeError），
+    兩種都沒人接，整個工作以 traceback 當掉、也不會重問一次。"""
+    with pytest.raises(SummarizerOutputInvalid) as caught:
+        mod.parse_conversation_response(HOSTILE_REPLIES[name])
+    assert LEAK not in str(caught.value) and len(str(caught.value)) < 200
+
+
+@pytest.mark.parametrize("payload", [
+    '"slides"', "true", "false", "NaN", "Infinity", "-Infinity", "0", "1e999", "[1e999]", "[[]]", "[[], {}]",
+    '[{"slides": []}]', '{"slides": null}', '{"slides": 5}', '{"slides": true}', '{"slides": [}', "{" * 50,
+])
+def test_every_other_wrong_top_level_shape_is_invalid_too(payload):
+    with pytest.raises(SummarizerOutputInvalid):
+        mod.parse_conversation_response(payload)
+
+
+@pytest.mark.parametrize("given", [None, 5, 1.5, True, ["現金補助有幫助"], {"t": 1}])
+def test_a_title_or_text_of_the_wrong_type_becomes_an_empty_one(given):
+    slides = mod.parse_conversation_response(
+        _reply({"title": given, "points": [{"quote": "q", "turn": 3, "text": given, "context": []}]}))
+    assert slides[0].title == "" and slides[0].points[0].text == ""
+
+
+def test_nan_and_infinity_are_read_but_never_trusted():
+    """NaN 與 Infinity 不是合法的 JSON，但 Python 的 json 照單全收。當成 turn 它們不是整數編號、
+    放進 context 也不是，兩處都由原有的規則處理，不需要另外的分支。"""
+    payload = _slide_reply('{"quote": "q", "turn": NaN, "text": "詢問目前補助政策的看法", '
+                           '"context": [Infinity, -Infinity, NaN, 1e999, 4]}')
+    (slide,) = mod.parse_conversation_response(payload)
+    (point,) = slide.points
+    assert math.isnan(point.turn) and point.context == (4,)
+
+    _, result = run(point)
+    assert (result.proposed, result.kept) == (3, 2)
+    assert sum("turn 必須是整數編號" in problem for problem in result.problems) == 1
+    for infinite in ("1e999", "-1e999"):
+        (slide,) = mod.parse_conversation_response(_slide_reply('{"quote": "q", "turn": ' + infinite + ', "text": "x"}'))
+        assert math.isinf(slide.points[0].turn)
+
+
+@pytest.mark.parametrize("given", ["T" + HUGE, HUGE, "٣" * 5000, "[T" + HUGE + "]", "   " + HUGE + "  "])
+def test_a_turn_with_more_digits_than_python_will_convert_is_left_for_the_checks_to_reject(given):
+    """攔的 bug：「T」加五千個數字符合「明確的編號」的寫法，int() 卻超過位數上限丟 ValueError。
+    它不是任何一輪的編號：原樣留著，檢查會以「turn 必須是整數編號」丟掉它，也不會把整串抄進訊息。"""
+    (slide,) = mod.parse_conversation_response(_reply(
+        {"title": "t", "points": [{"quote": "q", "turn": given, "text": "詢問目前補助政策的看法", "context": [given, 4]}]}))
+    (point,) = slide.points
+    assert point.turn == given and point.context == (4,)
+
+    _, result = run(point)
+    assert sum("turn 必須是整數編號" in problem for problem in result.problems) == 1
+    assert max(len(problem) for problem in result.problems) < 200
+
+
+@pytest.mark.parametrize("field", ["title", "text", "quote"])
+def test_a_million_character_string_is_read_and_thrown_away_by_the_checks(field):
+    point = {"quote": "現金補助有幫助，但不能只靠現金", "turn": at("現金補助"), "text": "現金補助有幫助", "context": []}
+    title, big = "補助與托育", "字" * 1_000_000
+    if field == "title":
+        title = big
+    else:
+        point[field] = big
+    started = time.perf_counter()
+
+    (slide,) = mod.parse_conversation_response(_reply({"title": title, "points": [point]}))
+    _, result = run(*slide.points, title=slide.title)
+
+    assert time.perf_counter() - started < 5.0
+    assert max((len(problem) for problem in result.problems), default=0) < 300       # 原因不會把整串抄進重問的提示
+    assert all(s.title != big and p.text != big for s in result.slides for p in s.points)
+
+
+@pytest.mark.parametrize("given", [
+    " " * 1500 + "x", " " * 1500 + "T" + " " * 1500 + "x", "[" + " " * 1500 + "x", "T" + " " * 1500 + "x",
+])
+def test_a_turn_made_of_long_runs_of_spaces_is_judged_in_linear_time(given):
+    """攔的 bug：「^\\s*\\[?\\s*T?\\s*(\\d+)」三個 \\s* 並排，遇到一長串空白加一個不是數字的字會回溯成三次方：
+    1600 個空白就要 5 秒，兩萬個要三個小時。模型寫在 turn 裡的字串長度沒有上限。"""
+    started = time.perf_counter()
+    assert mod._turn_ref(given) == given
+    assert time.perf_counter() - started < 1.0
+
+
+_OLD_TURN_REF_RE = re.compile(r"^\s*\[?\s*T?\s*(\d+)\s*\]?\s*$", re.IGNORECASE)      # 改寫成線性之前的寫法
+
+
+def test_the_turn_spelling_rule_accepts_exactly_what_it_always_accepted():
+    """改寫成線性的版本與舊的規則逐字串比對：在這些字元排出來的所有 5 個字以內的字串上，吃的和抓到的數字都一樣。"""
+    for length in range(6):
+        for chars in itertools.product(" \n[]Tt1٣x", repeat=length):
+            text = "".join(chars)
+            old, new = _OLD_TURN_REF_RE.match(text), mod._TURN_REF_RE.match(text)
+            assert (old.group(1) if old else None) == (new.group(1) if new else None), repr(text)
+
+
+_OLD_THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)             # 改寫成線性之前的寫法
+
+
+def test_thinking_leftovers_are_removed_exactly_as_before():
+    """有收尾的 <think>…</think> 整段去掉（可跨行、不分大小寫），沒有收尾的原樣留著：
+    改寫成線性的版本與舊的規則逐字串比對，所有 6 個片段以內的排列都一樣。"""
+    pieces = ("<think>", "</THINK>", "<Think>", "</think>", "a", "\n")
+    for length in range(7):
+        for combo in itertools.product(pieces, repeat=length):
+            text = "".join(combo)
+            assert mod._strip_thinking(text) == _OLD_THINK_RE.sub("", text), text
+
+
+def test_thinking_leftovers_are_removed_in_linear_time_even_when_none_is_closed():
+    """攔的 bug：<think> 沒有收尾時，每一個都要掃到字串尾才知道沒有，兩萬個就是十幾億步；
+    小模型卡在重複輸出時真的會寫出這種東西。"""
+    opened = "<think>" * 20_000
+    started = time.perf_counter()
+    assert mod.parse_conversation_response(opened + GOOD_REPLY) == mod.parse_conversation_response(GOOD_REPLY)
+    assert time.perf_counter() - started < 2.0
+
+
+@pytest.mark.parametrize("field", ["title", "text", "quote"])
+def test_a_string_that_cannot_be_written_as_utf8_is_treated_as_missing(field):
+    """攔的 bug：模型在 JSON 裡寫了「\\ud800」（孤立的代理碼位）。json 讀得進來，檢查也放行（其餘的字都對），
+    存檔時才以 UnicodeEncodeError 當掉，而存檔是整個工作的最後一步。"""
+    values = {"title": "補助與托育", "quote": "現金補助有幫助，但不能只靠現金", "text": "現金補助有幫助"}
+    values[field] += "\\ud800"          # JSON 裡的跳脫寫法；讀進來之後才是那個字元
+    payload = ('{"slides": [{"title": "%s", "points": [{"quote": "%s", "turn": %d, "text": "%s", "context": []}]}]}'
+               % (values["title"], values["quote"], at("現金補助"), values["text"]))
+
+    (slide,) = mod.parse_conversation_response(payload)
+    parsed = {"title": slide.title, "quote": slide.points[0].quote, "text": slide.points[0].text}
+    assert parsed[field] == ""
+    assert all(parsed[name] == values[name] for name in parsed if name != field)
+
+    _, result = run(*slide.points, title=slide.title)
+    assert result.kept >= 2
+    shown = [result.problems, [(s.title, [p.text for p in s.points]) for s in result.slides]]
+    json.dumps(shown, ensure_ascii=False).encode("utf-8")           # 存檔用的就是 UTF-8：寫得出去
+
+
+def test_characters_outside_the_basic_plane_are_ordinary_text():
+    (slide,) = mod.parse_conversation_response(_reply(
+        {"title": "補助😀", "points": [{"quote": "現金補助😀", "turn": 4, "text": "說明😀", "context": []}]}))
+    assert (slide.title, slide.points[0].quote, slide.points[0].text) == ("補助😀", "現金補助😀", "說明😀")
+
+
+# --- 敵意的串流：Ollama 傳回來的每一行 ---
+
+
+class _RawLines(FakeResponse):
+    """和 FakeResponse 一樣，但每一行原樣給：bytes 就是 bytes，才測得到「不是合法的 UTF-8」。"""
+
+    def __iter__(self):
+        for line in self._lines:
+            yield line if isinstance(line, bytes) else line.encode("utf-8")
+
+
+def _event(**fields) -> str:
+    return json.dumps(fields, ensure_ascii=False)
+
+
+def _serve(monkeypatch, *replies) -> list[dict]:
+    """依序回答每一個請求：字串是模型寫的內容（一次送完），list 是原樣的串流行。回傳送出的所有請求。"""
+    requests: list[dict] = []
+
+    def fake_post(url, body, timeout):
+        requests.append(body)
+        reply = replies[len(requests) - 1]
+        lines = [_event(message={"content": reply}), _event(done=True)] if isinstance(reply, str) else reply
+        return _RawLines(lines)
+
+    monkeypatch.setattr(ollama_summarizer, "_post_json", fake_post)
+    return requests
+
+
+HOSTILE_STREAMS = {
+    "a line that is not valid utf-8": [b'{"message": {"content": "\xff\xfe\xfd"}}'],
+    "a line nested past the recursion limit": ['{"message": {"content": "x"}, "junk": ' + "[" * 100_000],
+    "a line with an integer past the digit limit": ['{"message": {"content": "x"}, "junk": ' + HUGE + "}"],
+    "an event that is an array": [json.dumps([LEAK], ensure_ascii=False)],
+    "an event that is a number": ["42"],
+    "an event that is a string": [json.dumps(LEAK, ensure_ascii=False)],
+    "an event that is null": ["null"],
+    "an event that is true": ["true"],
+    "a message that is a string": [_event(message=LEAK)],
+    "a message that is a number": [_event(message=5)],
+    "a message that is a list": [_event(message=[LEAK])],
+    "a message that is true": [_event(message=True)],
+    "content that is a number": [_event(message={"content": 5})],
+    "content that is a float": [_event(message={"content": 1.5})],
+    "content that is a list": [_event(message={"content": [LEAK]})],
+    "content that is an object": [_event(message={"content": {"k": LEAK}})],
+    "content that is true": [_event(message={"content": True})],
+}
+
+
+@pytest.mark.parametrize("name", list(HOSTILE_STREAMS))
+def test_a_hostile_stream_is_an_invalid_output_and_the_message_says_nothing_the_model_wrote(monkeypatch, name):
+    """攔的 bug：_stream_chat 只接 JSONDecodeError 與 OSError。不是合法 UTF-8 的一行、巢狀太深或整數太長的一行、
+    不是物件的事件、不是文字的內容，各自丟出沒人接的 UnicodeDecodeError、RecursionError、ValueError、
+    AttributeError、TypeError，整個工作當掉、也不重問。"""
+    _serve(monkeypatch, HOSTILE_STREAMS[name])
+    with pytest.raises(SummarizerOutputInvalid) as caught:
+        _summarize()
+    assert LEAK not in str(caught.value) and len(str(caught.value)) < 200
+
+
+@pytest.mark.parametrize("lines", [
+    [], ["", "  "], [_event(done=True)], [_event(message={"content": ""}, done=True)], [_event(message={})],
+])
+def test_a_stream_with_no_content_is_an_invalid_output(monkeypatch, lines):
+    _serve(monkeypatch, lines)
+    with pytest.raises(SummarizerOutputInvalid, match="沒有回應任何內容"):
+        _summarize()
+
+
+def test_an_answer_that_stops_in_the_middle_is_an_invalid_output_whether_or_not_the_stream_says_done(monkeypatch):
+    whole = _reply({"title": LEAK, "points": [
+        {"quote": "今天我們來談少子化", "turn": 3, "text": "詢問目前補助政策的看法", "context": []}]})
+    cut = whole[: whole.index("quote")]
+    for lines in (_stream(cut), _stream(cut)[:-1]):
+        _serve(monkeypatch, lines)
+        with pytest.raises(SummarizerOutputInvalid) as caught:
+            _summarize()
+        assert "JSON" in str(caught.value) and LEAK not in str(caught.value)
+
+
+def test_a_chunked_response_that_ends_early_is_reported_as_unavailable(monkeypatch):
+    """攔的 bug：對方乾淨地關掉連線、沒有送最後那個空的區塊時，http.client 丟的是 IncompleteRead，
+    它不是 OSError，沒人接，工作以 traceback 當掉。它和連線被重置一樣是「生成途中中斷」。"""
+    class Cut(FakeResponse):
+        def __iter__(self):
+            yield json.dumps({"message": {"content": "{"}}).encode("utf-8")
+            raise http.client.IncompleteRead(b"", 100)
+
+    monkeypatch.setattr(ollama_summarizer, "_post_json", lambda *a, **k: Cut([]))
+    with pytest.raises(SummarizerUnavailable, match="中斷"):
+        _summarize()
+
+
+def test_a_stream_line_cut_off_in_the_middle_is_still_a_connection_problem(monkeypatch):
+    """界線：模型寫的內容不完整（截斷的 JSON、沒有 done 事件）是「輸出無效」，會重問；但 Ollama 傳來的某一「行」
+    本身被截斷，是連線在傳輸途中斷了，和連線被重置一樣是 SummarizerUnavailable、不重問
+    （_stream_chat 既有的行為，與單人模式共用，這裡不改）。"""
+    _serve(monkeypatch, ['{"message": {"content": "{"}, "done": fal'])
+    with pytest.raises(SummarizerUnavailable, match="中斷"):
+        _summarize()
+
+
+def test_an_answer_that_is_not_http_is_reported_as_unavailable(monkeypatch):
+    def fake_post(url, body, timeout):
+        raise http.client.BadStatusLine(LEAK)
+
+    monkeypatch.setattr(ollama_summarizer, "_post_json", fake_post)
+    with pytest.raises(SummarizerUnavailable, match="Ollama") as caught:
+        _summarize()
+    assert LEAK not in str(caught.value)
+
+
+@pytest.mark.parametrize("error", [
+    TypeError("progress broke"), ValueError("progress broke"), AttributeError("progress broke"),
+    RecursionError("progress broke"),
+])
+def test_a_bug_in_the_callers_progress_function_is_not_blamed_on_the_model(sent, error):
+    def broken(frac, status):
+        raise error
+
+    with pytest.raises(type(error)) as caught:
+        _summarize(progress=broken)
+    assert caught.value is error
+
+
+def test_a_bug_in_the_callers_cancel_check_is_not_blamed_on_the_model(sent):
+    def broken():
+        raise TypeError("cancel check broke")
+
+    with pytest.raises(TypeError, match="cancel check broke"):
+        _summarize(is_cancelled=broken)
+
+
+def test_a_malformed_host_is_not_blamed_on_the_model(monkeypatch):
+    """連線之前的錯（urllib 對沒有 http:// 的網址丟 ValueError）是設定的問題，不是模型的回應：
+    原樣丟出，不能變成「模型輸出無效」而被重問、被建議換模型。"""
+    def fake_post(url, body, timeout):
+        raise ValueError("unknown url type: 'gpu'")
+
+    monkeypatch.setattr(ollama_summarizer, "_post_json", fake_post)
+    with pytest.raises(ValueError, match="unknown url type"):
+        _summarize()
+
+
+# --- 敵意的回應進了逐窗摘要：重問一次，兩次都壞才放棄 ---
+
+
+DIALOGUE_REPLY = _reply({"title": "補助與托育", "points": [
+    {"quote": p.quote, "turn": p.turn, "text": p.text, "context": []} for p in GOOD]})
+HOSTILE = {**HOSTILE_REPLIES, **HOSTILE_STREAMS}
+
+
+def _summarize_the_dialogue():
+    adapter = mod.OllamaConversationSummarizer("http://gpu:11434", "qwen3.5:9b", 32768)
+    return dp.summarize_windows(adapter, (conv.Allocation(WHOLE, 1, 4),), TURNS, SPEAKERS,
+                                lambda frac, status: None, lambda: None, lambda: False)
+
+
+@pytest.mark.parametrize("name", list(HOSTILE))
+def test_a_window_whose_first_answer_is_hostile_is_asked_again_and_the_hint_has_none_of_it(monkeypatch, name):
+    requests = _serve(monkeypatch, HOSTILE[name], DIALOGUE_REPLY)
+
+    (outcome,) = _summarize_the_dialogue()
+
+    assert (outcome.proposed, outcome.kept) == (2, 2)
+    assert len(requests) == 2
+    first, second = (request["messages"][1]["content"] for request in requests)
+    assert "上一次的結果有這些問題" not in first and "上一次的結果有這些問題" in second
+    assert LEAK not in second and len(second) < len(first) + 400          # 原因只是一句話，不是把敵意的內容抄回去
+
+
+def test_a_window_whose_two_answers_are_both_hostile_fails_loudly_after_exactly_two_asks(monkeypatch):
+    requests = _serve(monkeypatch, HOSTILE["arrays nested past the recursion limit"],
+                      HOSTILE["a line that is not valid utf-8"])
+
+    with pytest.raises(SummarizerOutputInvalid, match="第 1/1 段.*重試後仍不符合要求") as caught:
+        _summarize_the_dialogue()
+
+    assert len(requests) == 2 and LEAK not in str(caught.value)

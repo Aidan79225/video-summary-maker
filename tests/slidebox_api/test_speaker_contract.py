@@ -133,6 +133,21 @@ def test_a_payload_the_pipeline_really_makes_has_the_same_shape_as_the_example()
     assert json.loads(json.dumps(payload, ensure_ascii=False)) == payload
 
 
+def test_a_payload_with_exactly_twelve_speakers_passes_the_checks_and_a_thirteenth_would_not():
+    """攔的 bug：GPU 的上限和新聞服務的上限（speakers 1 到 12 個）差一個，或差在有沒有算其他聲音。
+    正好 12 個（2 位主要發言者、10 個其他聲音）要過；多一個，新聞服務一定擋，GPU 也一定不交。"""
+    payload = deck_payload(support.run(support.crowd_parts(9)).deck, "abcdefghijk")
+
+    assert len(payload["speakers"]) == 12
+    assert key_paths(payload) == key_paths(RESULT)
+    assert violations(payload, requested_speakers=None) == []
+    assert json.loads(json.dumps(payload, ensure_ascii=False)) == payload
+
+    thirteenth = copy.deepcopy(payload)
+    thirteenth["speakers"].append({**thirteenth["speakers"][-1], "id": "S13"})
+    assert "speakers 不是 1 到 12 個" in violations(thirteenth, requested_speakers=None)
+
+
 def test_a_fixed_speaker_count_comes_back_as_requested_speakers():
     parts = support.make()
     payload = deck_payload(support.run(parts, speaker_count=3).deck, "abcdefghijk")

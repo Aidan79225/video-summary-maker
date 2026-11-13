@@ -130,6 +130,12 @@ class CurrentSettingsConversationSummarizer:
         self._settings = settings
         self._factory = factory
 
+    @property
+    def fingerprint(self) -> str:
+        """轉給真正的摘要器問：它的程式版本就是這一層的程式版本（ConversationSummarizer.fingerprint）。"""
+        s = self._settings
+        return self._factory(s.ollama_host, s.model, s.num_ctx).fingerprint
+
     def summarize_window(
         self,
         window_text: str,

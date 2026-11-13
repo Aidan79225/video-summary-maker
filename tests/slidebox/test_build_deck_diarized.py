@@ -10,7 +10,7 @@ import os
 
 import pytest
 
-from slidebox.domain.entities import DiarizerOutput, RawPoint, RawSlide, SpeakerTurn
+from slidebox.domain.entities import DiarizerOutput, RawPoint, RawSlide, Slide, SpeakerTurn, WordTranscript
 from slidebox.domain.errors import (
     AttributionUnreliable,
     DiarizationUnavailable,
@@ -19,10 +19,17 @@ from slidebox.domain.errors import (
     SummarizerOutputInvalid,
     SummarizerUnavailable,
 )
-from slidebox.usecases import diarized_pipeline
-from slidebox.usecases.conversation import chunk_turns, format_window
+from slidebox.infrastructure.checkpoint_store import JsonCheckpointStore
+from slidebox.usecases import code_fingerprint, diarized_pipeline
+from slidebox.usecases.conversation import allocate_slides, chunk_turns, format_window
 from slidebox.usecases.naming import deck_folder_name
-from slidebox.usecases.speakers import transcript_lines
+from slidebox.usecases.speakers import (
+    assign_speakers,
+    build_turns,
+    normalize_turns,
+    summarize_speakers,
+    transcript_lines,
+)
 
 from .diarized_support import (
     CLIP,
@@ -37,11 +44,13 @@ from .diarized_support import (
     FakeWordTranscriber,
     FlakyRenderer,
     at,
+    crowd_parts,
     good_points,
     good_reply,
     make,
     run,
     settings,
+    with_extra_voices,
 )
 from .fakes import FakeAudioGateway
 
@@ -284,6 +293,21 @@ def test_each_finished_stage_is_saved_right_away():
     assert stored(parts) == ["diarization", "words"] and parts.checkpoints.cleared == []
 
 
+def test_the_summary_is_saved_only_when_every_window_is_done_so_a_rerun_asks_every_window_again():
+    """README 說的：摘要不是一個窗一個窗存的。第二個窗連不上模型時，第一個窗問完的結果不留下，
+    重送從第一個窗重問；說話者區分與語音辨識照樣沿用，也不再下載音訊。"""
+    parts = make(TWO_WINDOWS, conversation=FakeConversation([good_reply, SummarizerUnavailable("連不上 Ollama")]))
+    with pytest.raises(SummarizerUnavailable):
+        run(parts)
+    assert stored(parts) == ["diarization", "words"] and len(parts.conversation.calls) == 2
+
+    assert run(parts).deck.slides
+    first_turns = [call.first_turn for call in parts.conversation.calls]
+    assert len(first_turns) == 4 and first_turns[2:] == first_turns[:2] and first_turns[0] != first_turns[1]
+    assert len(parts.diarizer.calls) == 1 and len(parts.words.calls) == 1
+    assert parts.audio.events.count("download") == 1
+
+
 def test_a_rerun_after_a_recognition_failure_does_not_diarize_again():
     parts = make(words=FakeWordTranscriber(error=SpeechRecognitionFailed("辨識失敗")))
     with pytest.raises(SpeechRecognitionFailed):
@@ -405,6 +429,9 @@ CHANGES = [
     ("prompt version", lambda p: setattr(diarized_pipeline, "PROMPT_VERSION", 99), (False, False, True)),
     ("safe mode", lambda p: setattr(p.usecase, "_quote_only", True), (False, False, True)),
     ("align version", lambda p: setattr(diarized_pipeline, "ALIGN_VERSION", 99), (False, True, False)),
+    ("recognizer code", lambda p: setattr(p.words, "fingerprint", "fake-words-code-2"), (False, True, False)),
+    ("summarizer code", lambda p: setattr(p.conversation, "fingerprint", "fake-conversation-code-2"),
+     (False, False, True)),
 ]
 
 
@@ -440,6 +467,114 @@ def test_a_different_diarization_with_the_same_settings_never_reuses_the_old_sum
     first, second = parts.conversation.calls
     assert first.window_text != second.window_text
     assert (result.deck.diarization.found_speakers, result.deck.diarization.minor_speakers) == (2, 0)
+
+
+# --- 存檔指紋：程式本身改了，舊結果不能冒充 ---
+
+
+def resumable(**overrides):
+    """第一次在最後一步（出片）壞掉：說話者區分、語音辨識與摘要的存檔都留著。"""
+    parts = make(renderer=FlakyRenderer(), **overrides)
+    with pytest.raises(RuntimeError):
+        run(parts)
+    return parts
+
+
+def counts(parts):
+    return len(parts.diarizer.calls), len(parts.words.calls), len(parts.conversation.calls)
+
+
+def redone(before, after):
+    return tuple(a > b for a, b in zip(after, before))
+
+
+@pytest.mark.parametrize("module", diarized_pipeline.RULE_MODULES)
+def test_editing_a_rule_module_redoes_the_summary_and_nothing_else(monkeypatch, module):
+    """攔的 bug：改了驗證規則卻沒升 PROMPT_VERSION，舊規則放行的摘要被沿用，沒經過新規則就發佈。"""
+    parts = resumable()
+    before = counts(parts)
+    real = code_fingerprint.read_module_source
+    monkeypatch.setattr(code_fingerprint, "read_module_source",
+                        lambda name: real(name) + "\n# 改過\n" if name == module else real(name))
+
+    assert run(parts).deck.slides
+
+    assert redone(before, counts(parts)) == (False, False, True)
+
+
+def test_unreadable_sources_never_crash_the_job_and_the_summary_is_redone(monkeypatch):
+    """原始碼讀不到（只有 .pyc、檔案被搬走）：工作照樣做完，只是不沿用摘要的存檔。"""
+    parts = resumable()
+    before = counts(parts)
+
+    def gone(name):
+        raise OSError("source is gone")
+
+    monkeypatch.setattr(code_fingerprint, "read_module_source", gone)
+
+    result = run(parts)
+
+    assert result.deck.slides and redone(before, counts(parts)) == (False, False, True)
+
+
+def test_a_checkpoint_saved_before_the_code_was_part_of_the_fingerprint_is_ignored_and_redone(tmp_path):
+    """攔的 bug：升級之後，舊版程式存的字與摘要（指紋沒有程式那幾項）被沿用或讓工作當掉。
+    用真的存檔：舊公式存的字與摘要要被當成沒有、重做；沒變的說話者區分照樣沿用；整份順利做完。"""
+    out = str(tmp_path)
+    cfg = settings(output_dir=out)
+    store = JsonCheckpointStore()
+    parts = make(checkpoints=store)
+    stale_title = "舊版存的摘要"
+
+    # 舊版的公式：字只有（模型、提示、ALIGN_VERSION），摘要沒有 adapter、規則與時間
+    old_words = diarized_pipeline.stage_fingerprint("multi", cfg.whisper_model, "", diarized_pipeline.ALIGN_VERSION)
+    plan = [(a.min_slides, a.max_slides, format_window(a.window, SPEAKERS))
+            for a in allocate_slides(chunk_turns(TURNS, SPEAKERS, 6000), cfg.min_slides, cfg.max_slides)]
+    old_conversation = diarized_pipeline.stage_fingerprint(
+        "multi", cfg.model, cfg.num_ctx, cfg.min_slides, cfg.max_slides, 6000,
+        diarized_pipeline.PROMPT_VERSION, False, plan)
+    store.save_diarization(out, URL, diarized_pipeline.diarization_fingerprint(parts.diarizer.fingerprint, None),
+                           DiarizerOutput(FIXTURE.turns, 0.0))
+    store.save_words(out, URL, old_words,
+                     WordTranscript("abcdefghijk", "舊版存的標題", 120.0, "zh", FIXTURE.words))
+    store.save_conversation(out, URL, old_conversation, (Slide(1, stale_title, ("[[S1]]：舊的",), 5.0),), 1)
+
+    deck = run(parts, cfg).deck
+
+    assert deck.video_title == CLIP.title and stale_title not in [s.title for s in deck.slides]
+    assert len(parts.words.calls) == 1 and len(parts.conversation.calls) >= 1
+    assert len(parts.diarizer.calls) == 0                         # 沒變的階段照樣沿用
+    assert [(p.speaker, p.turn) for s in deck.slides for p in s.points][0] == ("S1", at("今天我們"))
+
+
+def test_a_new_recognition_with_the_same_text_but_other_times_does_not_reuse_the_summary():
+    """攔的 bug：窗的文字沒有時間。辨識重做之後文字剛好一樣、時間卻不同，存下來的重點與頁的時間就是舊的。"""
+    parts = resumable()
+    before = counts(parts)
+    shift = 0.5
+    parts.words.fingerprint = "fake-words-code-2"
+    parts.words._words = tuple(dataclasses.replace(w, start=w.start + shift, end=w.end + shift)
+                               for w in FIXTURE.words)
+    parts.diarizer.version = "2.0"
+    parts.diarizer.output = DiarizerOutput(
+        tuple(SpeakerTurn(t.start + shift, t.end + shift, t.speaker) for t in FIXTURE.turns), 0.0)
+
+    result = run(parts)
+
+    assert redone(before, counts(parts)) == (True, True, True)
+    assert result.deck.slides[0].timestamp == 5.0 + shift
+    assert all(p.start >= 5.0 + shift for s in result.deck.slides for p in s.points)
+
+
+def test_a_new_recognition_with_the_same_text_and_times_still_reuses_the_summary():
+    """上面那一條的對照：辨識程式換了版、結果一樣，就不必再問一次模型。"""
+    parts = resumable()
+    before = counts(parts)
+    parts.words.fingerprint = "fake-words-code-2"
+
+    run(parts)
+
+    assert redone(before, counts(parts)) == (False, True, False)
 
 
 # --- 窗與模型 ---
@@ -627,6 +762,60 @@ def test_an_unreliable_diarization_fails_before_any_model_call():
         run(parts, speaker_count=2)
     assert parts.conversation.calls == [] and parts.renderer.rendered == []
     assert parts.audio.events[-1] == "cleanup"
+
+
+def test_the_helper_that_adds_voices_really_adds_one_published_speaker_each():
+    """測試用的人數要對：3 位原有的說話者再加幾個，發佈的清單就是幾個。"""
+    for extra in (0, 1, 9, 10):
+        turns = build_turns(assign_speakers(
+            with_extra_voices(extra).words, normalize_turns(with_extra_voices(extra).output.turns)))
+        listed = summarize_speakers(turns)
+        assert len(listed) == 3 + extra
+        assert [s.kind for s in listed].count("participant") == 2
+        assert list(turns[:len(TURNS)]) == list(TURNS)
+
+
+def test_more_than_twelve_voices_fail_before_any_model_call_and_keep_the_finished_stages():
+    """攔的 bug：第 13 個聲音一路走到新聞服務才被擋下來——GPU 先花了整段模型呼叫的時間，
+    還把這樣的區分結果當成可以發佈的。這裡 13 個原始聲音（2 位主要發言者、11 個其他聲音）。"""
+    parts = crowd_parts(10)
+    with pytest.raises(AttributionUnreliable) as raised:
+        run(parts)
+    message = str(raised.value)
+    assert "2 位主要發言者" in message and "11 個其他聲音" in message
+    assert "共 13 個" in message and "上限 12 個" in message and "--speakers N" in message
+    assert parts.conversation.calls == [] and parts.renderer.rendered == []
+    assert parts.sections.timestamps == []
+    assert stored(parts) == ["diarization", "words"] and parts.checkpoints.cleared == []
+    assert parts.audio.events[-1] == "cleanup"
+
+
+def test_a_rerun_after_too_many_voices_does_not_diarize_or_recognize_again():
+    """存檔留著，所以操作者換個做法（例如指定人數）之後，語音辨識不必重來。"""
+    parts = crowd_parts(10)
+    with pytest.raises(AttributionUnreliable):
+        run(parts)
+    with pytest.raises(AttributionUnreliable):
+        run(parts)
+    assert len(parts.diarizer.calls) == 1 and len(parts.words.calls) == 1
+    assert parts.conversation.calls == []
+
+
+def test_exactly_twelve_voices_are_published_with_the_usual_warning_for_many_minor_voices():
+    parts = crowd_parts(9)
+    deck = run(parts).deck
+    assert len(deck.speakers) == 12
+    assert (deck.diarization.found_speakers, deck.diarization.minor_speakers) == (2, 10)
+    assert deck.diarization.status == "warn" and "many_minor" in deck.diarization.warnings
+    assert len(parts.conversation.calls) >= 1 and parts.checkpoints.cleared == [("OUT", URL)]
+
+
+def test_a_given_speaker_count_does_not_change_the_limit():
+    """--speakers N 只是告訴區分器有幾個人；發佈的上限還是 12 個。"""
+    parts = crowd_parts(10)
+    with pytest.raises(AttributionUnreliable, match="已指定 4 人.*共 13 個.*上限 12 個"):
+        run(parts, speaker_count=4)
+    assert parts.conversation.calls == []
 
 
 def test_a_diarizer_that_finds_a_different_count_than_asked_publishes_with_a_warning():

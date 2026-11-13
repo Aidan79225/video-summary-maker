@@ -42,6 +42,7 @@ from collections.abc import Callable
 from ..domain.entities import DiarizerOutput, SpeakerTurn
 from ..domain.errors import DiarizationUnavailable, OperationCancelled
 from ..domain.ports import CancelCheck, ProgressCallback
+from ..usecases.code_fingerprint import code_fingerprint
 from . import pyannote_worker as worker
 
 logger = logging.getLogger(__name__)
@@ -161,8 +162,14 @@ class PyannoteSpeakerDiarizer:
 
     @property
     def fingerprint(self) -> str:
-        """引擎＋版本＋模型：換了其中之一，存檔裡舊的說話者區分結果就不會被拿來冒充。"""
-        raw = json.dumps([self.engine, self.version, self.model], ensure_ascii=False)
+        """引擎＋版本＋模型＋程式：換了其中之一，存檔裡舊的說話者區分結果就不會被拿來冒充。
+
+        程式是這一側（本模組）與實際跑的工作行程腳本（self._worker_path）的原始碼：區段怎麼整理、
+        交疊怎麼算改了，套件版本沒變也不能沿用舊結果。讀不到腳本或原始碼時，指紋對不上任何舊存檔
+        （見 usecases/code_fingerprint.py），不 raise。與 token、裝置、逾時等設定無關。
+        """
+        code = code_fingerprint([__name__], files=[self._worker_path])
+        raw = json.dumps([self.engine, self.version, self.model, code], ensure_ascii=False)
         return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
 
     @property

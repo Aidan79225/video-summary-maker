@@ -8,7 +8,15 @@ from __future__ import annotations
 import hashlib
 from types import SimpleNamespace
 
-from slidebox.domain.entities import AudioClip, DiarizerOutput, RawPoint, RawSlide, Settings
+from slidebox.domain.entities import (
+    AudioClip,
+    DiarizerOutput,
+    RawPoint,
+    RawSlide,
+    Settings,
+    SpeakerTurn,
+    Word,
+)
 from slidebox.domain.errors import OperationCancelled
 from slidebox.usecases.build_deck import BuildDeckUseCase
 from slidebox.usecases.conversation import MAX_BULLETS
@@ -73,6 +81,35 @@ def good_reply(call) -> tuple[RawSlide, ...]:
     return tuple(slides)
 
 
+def with_extra_voices(count: int) -> SimpleNamespace:
+    """三人對談之後，再接 count 個各只說一句話的聲音（每個都有自己的原始標籤）。
+
+    回傳 (words, output)，可以直接餵給 FakeWordTranscriber 與 FakeDiarizer。對談本身沒有變：
+    S1、S2 是主要發言者，S3 是對談裡的來電者（其他聲音），所以發佈的說話者清單有 3 + count 個，
+    而且 use case 算出來的前面幾段仍然是 conversation_support.TURNS。"""
+    words = list(FIXTURE.words)
+    turns = list(FIXTURE.turns)
+    clock = words[-1].end + 1.0
+    segment = words[-1].segment + 1
+    for k in range(count):
+        label = f"SPEAKER_{3 + k:02d}"
+        begin = clock
+        for char in "路過的聲音補一句。":
+            words.append(Word(clock, clock + 0.2, char, segment))
+            clock += 0.2
+        turns.append(SpeakerTurn(begin, clock, label))
+        clock += 1.0
+        segment += 1
+    return SimpleNamespace(words=tuple(words), output=DiarizerOutput(tuple(turns), 0.0))
+
+
+def crowd_parts(extra_voices: int, **overrides):
+    """make()，但說話者區分與語音辨識換成 with_extra_voices(extra_voices) 的結果。"""
+    voices = with_extra_voices(extra_voices)
+    return make(diarizer=FakeDiarizer(output=voices.output), words=FakeWordTranscriber(words=voices.words),
+                **overrides)
+
+
 class FakeDiarizer:
     """比照 SpeechDiarizer：便宜的 available()，diarize() 回傳腳本裡的結果。"""
 
@@ -111,9 +148,11 @@ class FakeDiarizer:
 
 
 class FakeWordTranscriber:
-    """比照 WordTranscriber：回傳手寫對談的字（每個字都有時間）。"""
+    """比照 WordTranscriber：回傳手寫對談的字（每個字都有時間）。
+    fingerprint 是它「這一版程式」的指紋；測試改它，就是在模擬辨識程式改了。"""
 
     def __init__(self, words=None, language: str = "zh", error: Exception | None = None, on_transcribe=None):
+        self.fingerprint = "fake-words-code-1"
         self._words = tuple(FIXTURE.words if words is None else words)
         self._language = language
         self.error = error
@@ -138,9 +177,11 @@ class FakeWordTranscriber:
 
 class FakeConversation:
     """比照 ConversationSummarizer。replies 依序回答每一次呼叫：一個 tuple[RawSlide,...]、一個例外，
-    或一個 callable(call)；用完之後（或沒給）就用 default（預設是這個窗裡全部通過檢查的重點）。"""
+    或一個 callable(call)；用完之後（或沒給）就用 default（預設是這個窗裡全部通過檢查的重點）。
+    fingerprint 是它「這一版程式」的指紋；測試改它，就是在模擬提示詞或回應解析改了。"""
 
     def __init__(self, replies=(), default=good_reply, on_call=None):
+        self.fingerprint = "fake-conversation-code-1"
         self._replies = list(replies)
         self._default = default
         self._on_call = on_call
@@ -303,4 +344,5 @@ def run(parts, cfg=None, speaker_count=None, speech_hint=None, progress=None, ca
 
 __all__ = ["CLIP", "FIXTURE", "POOL", "SPEAKERS", "SPLIT_AT", "TURNS", "TWO_WINDOWS", "URL", "CancelDuring",
            "FakeConversation", "FakeDiarizer", "FakeMultiCheckpoints", "FakeWordTranscriber", "FlakyRenderer",
-           "QuietAudio", "at", "good_points", "good_reply", "make", "run", "settings"]
+           "QuietAudio", "at", "crowd_parts", "good_points", "good_reply", "make", "run", "settings",
+           "with_extra_voices"]

@@ -18,6 +18,7 @@ from dataclasses import dataclass, replace
 from ..domain.entities import DiarizationReport, Settings, Slide, SpeakerInfo, Turn
 from ..domain.errors import AttributionUnreliable, SummarizerOutputInvalid
 from ..domain.ports import CancelCheck, ConversationSummarizer, ProgressCallback
+from .code_fingerprint import code_fingerprint, unreadable_marker
 from .conversation import (
     PROMPT_VERSION,
     Allocation,
@@ -58,22 +59,65 @@ def diarization_fingerprint(diarizer_fingerprint: str, speaker_count: int | None
     return stage_fingerprint("diarize", diarizer_fingerprint, speaker_count)
 
 
-def words_fingerprint(whisper_model: str, speech_hint: str | None) -> str:
-    """語音辨識：模型與提示。ALIGN_VERSION 也算進來——改了 transcribe_words 的參數或對齊之前的
-    字的處理，要升版，舊的字才不會被拿來冒充。"""
-    return stage_fingerprint("multi", whisper_model, speech_hint or "", ALIGN_VERSION)
+def words_fingerprint(whisper_model: str, speech_hint: str | None, adapter: str = "") -> str:
+    """語音辨識：模型與提示，加上辨識器自己報的程式版本（adapter：辨識參數、字的整理的原始碼）。
+
+    ALIGN_VERSION 也算進來。辨識參數與字的整理改了，adapter 的指紋會自己跟著變，不必靠人記得升版；
+    ALIGN_VERSION 留給「原始碼看不出來」的改動（例如換了校正用的資料）。
+    """
+    return stage_fingerprint("multi", whisper_model, speech_hint or "", ALIGN_VERSION, adapter)
+
+
+# 摘要的結果由這些模組的程式決定：逐點檢查（conversation、quotes、names、numerals）、說話者清單與
+# 能不能引用（speakers）、重試與可靠度門檻（diarized_pipeline）、指紋怎麼算（code_fingerprint）。
+# 它們的原始碼雜湊進摘要存檔的指紋：改了其中任何一個，舊規則放行的摘要就不會被新規則沿用。
+# 這一組必須涵蓋驗證規則在 usecases 底下 import 的所有模組，
+# tests/slidebox/test_diarized_pipeline.py 會比對，新增 import 卻漏列會失敗。
+RULE_MODULES = tuple(f"{__package__}.{name}" for name in (
+    "code_fingerprint", "conversation", "diarized_pipeline", "names", "numerals", "quotes", "speakers"))
+
+
+def rules_fingerprint() -> str:
+    """RULE_MODULES 目前的原始碼指紋；每次呼叫都重新讀（改了檔案馬上反映，測試也才換得掉）。"""
+    return code_fingerprint(RULE_MODULES)
+
+
+def adapter_fingerprint(part: object) -> str:
+    """零件（辨識器、對談摘要器）自己報的「我是哪一版程式」（它的 fingerprint）。
+
+    沒有、不是文字或是空的，就用這個行程專屬的隨機標記：不知道是哪一版，就不沿用任何舊存檔
+    （寧可重做，不冒充），工作本身照常進行。
+    """
+    try:
+        value = getattr(part, "fingerprint")
+    except Exception:  # noqa: BLE001 零件的 fingerprint 自己出錯，也當作不知道
+        value = None
+    return value if isinstance(value, str) and value else unreadable_marker(type(part).__name__)
+
+
+def timeline_fingerprint(turns: Sequence[Turn]) -> str:
+    """每一段話的編號、起訖時間與說話者。窗的文字沒有時間：換了辨識設定而文字剛好一樣，
+    存下來的重點裡的時間（點的 start、頁的 timestamp）就是舊的，不能沿用。"""
+    return stage_fingerprint("timeline", [[t.index, t.start, t.end, t.speaker] for t in turns])
 
 
 def conversation_fingerprint(settings: Settings, chunk_chars: int,
-                             plan: Sequence[tuple[int, int, str]], quote_only: bool = False) -> str:
+                             plan: Sequence[tuple[int, int, str]], quote_only: bool = False,
+                             *, adapter: str = "", rules: str | None = None, timeline: str = "") -> str:
     """摘要：模型、頁數範圍、窗的大小、提示版本、是否只顯示原話，以及餵給模型的每個窗（頁數範圍與文字）。
 
     plan 是每個窗的 (min_slides, max_slides, 窗的文字)：說話者區分、語音辨識、對齊或分段變了，
     窗的文字就變了，舊的摘要不會被拿來冒充。detailed 不算：多人模式用不到它。
     quote_only 算進來：只顯示原話與一般模式留下的重點不同，換了設定就要重做這一步。
+
+    程式也算進來，不靠人記得升版：rules 是驗證規則的原始碼指紋（沒給就現讀 rules_fingerprint()）、
+    adapter 是對談摘要器自己報的程式版本（提示詞、取樣設定、回應解析）、timeline 是每段話的時間。
+    PROMPT_VERSION 仍然算進來，給「原始碼看不出來」的改動。
     """
-    return stage_fingerprint("multi", settings.model, settings.num_ctx, settings.min_slides,
-                             settings.max_slides, chunk_chars, PROMPT_VERSION, bool(quote_only), list(plan))
+    return stage_fingerprint(
+        "multi", settings.model, settings.num_ctx, settings.min_slides, settings.max_slides, chunk_chars,
+        PROMPT_VERSION, bool(quote_only), list(plan), adapter,
+        rules_fingerprint() if rules is None else rules, timeline)
 
 
 # --- 逐窗的摘要 ---
