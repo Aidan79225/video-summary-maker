@@ -164,13 +164,23 @@ def test_08_a_quote_with_changed_or_invented_words_is_dropped():
 # --- 9：已知的限制（沒有檢查擋得住）---
 
 
-def test_09_known_limit_a_period_or_rate_changed_inside_a_paraphrase_is_not_caught():
-    """每個月寫成每日：數字、否定、名字、出處都對，沒有任何一關看得出來；靠提示要求「用 quote 的字」降低機率。"""
+def test_09_a_period_or_rate_changed_inside_a_paraphrase_is_caught_for_the_listed_words():
+    """每個月寫成每日：數字、否定、名字、出處都對，只有「意思互相排斥的說法」那一關看得出來（每天／每週／每個月／
+    每年、去年／今年／明年、增加／減少…，見 _OPPOSED）。"""
     lines = [("S1", "每個月補助三千元，期限到年底。"), ("S2", "好的。")]
 
     kept, result = judge(lines, RawPoint(0, "每日補助三千元，期限到年底", quote="每個月補助三千元，期限到年底"))
 
-    assert [p.text for p in kept] == ["每日補助三千元，期限到年底"] and not result.dropped_by_code
+    assert kept == [] and codes(result) == {"polarity_flip": 1}
+
+
+def test_09_known_limit_a_period_or_rate_that_is_not_in_the_word_lists_is_not_caught():
+    """月薪寫成年薪：數字、否定、名字、出處都對，詞表裡沒有這組詞，沒有任何一關看得出來；靠提示要求「用 quote 的字」降低機率。"""
+    lines = [("S1", "月薪三十萬，期限到年底。"), ("S2", "好的。")]
+
+    kept, result = judge(lines, RawPoint(0, "年薪三十萬，期限到年底", quote="月薪三十萬，期限到年底"))
+
+    assert [p.text for p in kept] == ["年薪三十萬，期限到年底"] and not result.dropped_by_code
 
 
 # --- 10：複述對方的話再反駁 ---

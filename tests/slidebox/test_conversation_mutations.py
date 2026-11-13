@@ -21,7 +21,7 @@ from dataclasses import dataclass, field
 import pytest
 
 from slidebox.domain.entities import RawPoint, RawSlide
-from slidebox.usecases import conversation
+from slidebox.usecases import conversation, numerals
 from slidebox.usecases.conversation import Window, validate_points
 from slidebox.usecases.quotes import QuoteLocation, QuoteSpan
 
@@ -58,6 +58,11 @@ def the_quote_as_written(_turn_text, quote):
     return QuoteSpan(str(quote), 0, len(str(quote)))
 
 
+def ask_the_first_turn(_turn, by_index, _first):
+    """沒有「回答回應的是最近的問題」：很短的回答一律接到對談開頭的話。"""
+    return [by_index[0]]
+
+
 @dataclass(frozen=True)
 class Scenario:
     safeguard: str                       # conversation 模組裡的名稱
@@ -72,6 +77,7 @@ class Scenario:
     good: tuple = GOOD
     window: object = None
     extra: dict = field(default_factory=dict)
+    module: object = conversation        # 措施所在的模組（預設是 conversation）
 
 
 def tri(speaker: str, turn: int, text: str):
@@ -136,6 +142,24 @@ CARRIER_TURNS, CARRIER_GOOD = with_anchors(("S2", "名額不夠，不是嗎？�
 # 逐字稿用來稱呼人的名字
 NAME_TURNS, NAME_GOOD = with_anchors(("S1", "阿翔，請問名額不夠的問題要怎麼解決？"),
                                      ("S2", "名額不夠，很多家長排不到，排了兩年也沒有消息。"))
+
+# 意思被寫反：原話說增加、文字寫減少（數字、否定、名字、出處都對，只有「意思相反的說法」那一關看得出來）
+FLIP_TURNS, FLIP_GOOD = with_anchors(("S1", "今天我們來談明年的預算，先請教您的看法。"),
+                                     ("S2", "明年的預算將會增加兩成，用在托育和長照上面。"))
+# 雙重否定被寫成單一的否定
+DOUBLE_NEGATION_TURNS, DOUBLE_NEGATION_GOOD = with_anchors(("S1", "今天我們來談明年的預算，先請教您的看法。"),
+                                                            ("S2", "我們不得不增加預算，否則整個計畫會停擺。"))
+# 很短的回答：先問了舊的事，後來又問了新的問題，回答的是新的問題
+OLD_QUESTION_TURNS, OLD_QUESTION_GOOD = with_anchors(
+    ("S1", "我們明年的預算要增加兩成，你同意嗎？"), ("S2", "這個我們還要再研究。"),
+    ("S1", "那你們願意取消現在的補助嗎？"), ("S2", "沒有。"))
+# 換個說法的複述：也就是說…（共同的特徵剛好 20%，只靠「複述的字眼放寬」才認得出來）
+REWORDED_ECHO_TURNS, REWORDED_ECHO_GOOD = with_anchors(
+    ("S1", "今天來談這個議題，先請教您的看法。"), ("S2", "這個計畫的失敗率非常高，過去五年有一半都延誤了。"),
+    ("S1", "也就是說五年來半數計畫延遲。"))
+# 單位被換成另一種：二十年寫成二十人
+UNIT_TURNS, UNIT_GOOD = with_anchors(("S1", "今天我們來談明年的預算和稅制，先請教您的看法。"),
+                                     ("S2", "這個案子前後花了二十年才完成，參與的人員一共有四十人。"))
 
 SCENARIOS: dict[str, Scenario] = {
     # 兩個重點的 turn 編號互換：quote 在哪一輪，就改歸那一輪的人；沒有這道措施，內容和引用的輪對不上，兩個都被丟掉
@@ -276,6 +300,33 @@ SCENARIOS: dict[str, Scenario] = {
         turns=PRONOUN_TURNS, speakers=TWO, good=PRONOUN_GOOD, extra={"quote_only": True},
         kept_with=(), reason="quote 不能直接當重點顯示",
         kept_without=(tri("S2", 0, quoted("他們的名額不夠，很多家長排不到")),)),
+    # --- 審查之後多加的措施 ---
+    "opposite_wording": Scenario(
+        "_polarity_flip_problem", nothing,
+        (RawPoint(1, "明年預算將減少兩成", quote="明年的預算將會增加兩成"),),
+        turns=FLIP_TURNS, speakers=TWO, good=FLIP_GOOD,
+        kept_with=(), kept_without=(tri("S2", 1, "明年預算將減少兩成"),), reason="意思可能寫反了"),
+    "double_negation_written_as_a_single_negation": Scenario(
+        "_double_negation_problem", nothing,
+        (RawPoint(1, "不得增加預算，否則計畫停擺", quote="我們不得不增加預算，否則整個計畫會停擺"),),
+        turns=DOUBLE_NEGATION_TURNS, speakers=TWO, good=DOUBLE_NEGATION_GOOD,
+        kept_with=(), kept_without=(tri("S2", 1, "不得增加預算，否則計畫停擺"),), reason="雙重否定"),
+    "short_answer_answers_the_nearest_question": Scenario(
+        "_asked_turns", ask_the_first_turn,
+        (RawPoint(3, "否認明年的預算要增加兩成", quote="沒有。", context=(0,)),),
+        turns=OLD_QUESTION_TURNS, speakers=TWO, good=OLD_QUESTION_GOOD,
+        kept_with=(), kept_without=(tri("S2", 3, "否認明年的預算要增加兩成"),),
+        reason="回答緊接著回應的那一輪"),
+    "reworded_echo_with_an_explicit_restating_phrase": Scenario(
+        "ECHO_NEAR_RATIO", 0.25,
+        (RawPoint(2, "指出五年來半數計畫延遲", quote="也就是說五年來半數計畫延遲"),),
+        turns=REWORDED_ECHO_TURNS, speakers=TWO, good=REWORDED_ECHO_GOOD,
+        kept_with=(), kept_without=(tri("S1", 2, "指出五年來半數計畫延遲"),), reason="複述"),
+    "unit_swapped_for_another_unit": Scenario(
+        "_label_swapped", nothing,
+        (RawPoint(1, "案子前後花了二十人才完成", quote="這個案子前後花了二十年才完成"),),
+        module=numerals, turns=UNIT_TURNS, speakers=TWO, good=UNIT_GOOD,
+        kept_with=(), kept_without=(tri("S2", 1, "案子前後花了二十人才完成"),), reason="不是人"),
 }
 
 
@@ -299,7 +350,7 @@ def test_the_safeguard_stops_the_bad_point(name):
 @pytest.mark.parametrize("name", SCENARIOS)
 def test_without_the_safeguard_the_outcome_changes(name, monkeypatch):
     scenario = SCENARIOS[name]
-    monkeypatch.setattr(conversation, scenario.safeguard, scenario.off)
+    monkeypatch.setattr(scenario.module, scenario.safeguard, scenario.off)
 
     kept, problems = outcome(scenario)
 

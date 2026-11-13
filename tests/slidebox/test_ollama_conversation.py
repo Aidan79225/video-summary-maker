@@ -175,7 +175,7 @@ def test_prompt_schema_and_sampling_are_pinned_to_the_prompt_version(sent):
         [body["messages"][0]["content"], body["format"], body["options"]["temperature"], body["think"]],
         ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()
     assert (conv.PROMPT_VERSION, digest) == (
-        2, "413f7b23c2554506af0cb482cb880166eaffcb91c43261e01c1dfe0b12dcf394")
+        3, "5701ae1eb4c8e10e49e822e20cf66f2adf9a27403e00a9e4ee1f13b00c1e575d")
 
 
 def _prompt_example():
@@ -191,9 +191,10 @@ def _prompt_example():
     return tuple(turns), mod.parse_conversation_response(output.strip())
 
 
-def test_every_quote_in_the_prompt_example_is_found_by_the_quote_check_except_the_one_character_answer():
-    """攔的 bug：提示的範例和檢查脫節——範例教模型這樣抄，檢查卻不收。唯一的例外是單字的「對」：
-    太短，一定核對不過（提示照做過實驗的原樣保留，所以這一點一定會被丟掉；丟掉是安全的方向）。"""
+def test_every_quote_in_the_prompt_example_is_found_by_the_quote_check():
+    """攔的 bug：提示的範例和檢查脫節——範例教模型這樣抄，檢查卻不收。以前範例有一個單字的「對」：
+    太短，一定核對不過，模型照著做的每一個單字回答都白白被丟掉（還算進丟棄比例）；現在範例改成兩個字的
+    「沒錯」，單字的回答由提示明講不要寫成重點。"""
     turns, slides = _prompt_example()
     by_index = {t.index: t for t in turns}
     citable = conv.citable_ids(make_speakers("participant", "participant", "participant"))
@@ -202,9 +203,14 @@ def test_every_quote_in_the_prompt_example_is_found_by_the_quote_check_except_th
     results = [(p, locate_quote(p.quote, by_index[p.turn], turns, citable)) for p in points]
 
     assert len(points) == 8
-    assert [p.quote for p, found in results if found.turn is None] == ["對"]
-    assert all(found.turn.index == p.turn for p, found in results if found.turn is not None)
-    assert "太短" in next(found.problem for _, found in results if found.turn is None)
+    assert [p.quote for p, found in results if found.turn is None] == []
+    assert all(found.turn.index == p.turn for p, found in results)
+
+
+def test_the_prompt_tells_the_model_not_to_write_points_for_one_character_answers():
+    prompt = mod.conversation_system_prompt()
+    assert "只有一個字的回答（對、嗯、好、是）程式核對不了出處" in prompt
+    assert '"quote": "對"' not in prompt
 
 
 def test_the_example_in_the_prompt_follows_the_text_rules_it_teaches():

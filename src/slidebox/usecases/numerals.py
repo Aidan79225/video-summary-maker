@@ -10,6 +10,8 @@
 2. 百分比一律換成「百分數」比較：百分之N、N% 是 N；N成 是 10×N；N成M（口語的「四成二」）是 10×N+M。
    所以 四成二 = 42%，而 五十五成 ≠ 55%。重點裡的一個「數字＋實體單位」（分鐘、小時、元、人…）
    若那段話裡同一個數值只出現在百分比，就是單位被改掉，丟掉。
+3. 同一個數值，單位換成另一種也不行：二十年 → 二十人、兩百萬人 → 兩百萬元、三成 → 三倍。
+   那段話裡這個數值只以別種單位出現（沒有一處是不帶單位的、也沒有一處是重點用的單位），就丟掉。
 
 規則（number_problem）：重點裡每一個需要依據的數字，都要在被引用的那段話裡找得到「同值、同種類」的數字。
 找不到才回傳原因（繁體中文，可以原樣放進重試提示）；全部找得到回傳 None。
@@ -46,8 +48,10 @@ _UNIT_CHARS_AFTER = frozenset("年月日號歲週周成倍元塊點分鐘秒時�
 # 「實體單位」：數字後面跟著這些，表示數量（不是百分比）。長的在前，只看開頭符合的第一個。
 _ABSOLUTE_UNITS = (
     "分鐘", "小時", "公里", "公尺", "公頃", "公分", "個月", "人次",
-    "天", "年", "週", "周", "元", "人", "戶", "座", "間", "棟", "輛", "份", "張", "次",
+    "天", "年", "週", "周", "元", "人", "戶", "座", "間", "棟", "輛", "份", "張", "次", "倍",
 )
+# 寫法不同、單位其實一樣
+_SAME_LABEL = {"周": "週"}
 
 # 「百分之」換成這個不會出現在文字裡的控制字元：否則 百分之十二 的「百」會被讀成數字 100。
 _PERCENT_MARK = "\x01"
@@ -58,13 +62,19 @@ PLAIN = "plain"            # 一般的數字（數值本身，可能帶實體單
 
 @dataclass(frozen=True)
 class NumberMention:
-    """文字裡的一個數字：原樣的寫法、數值、種類（PERCENT／PLAIN）、後面緊接的實體單位、位置。"""
+    """文字裡的一個數字：原樣的寫法、數值、種類（PERCENT／PLAIN）、後面緊接的實體單位、位置。
+
+    label 是這個數字說的是哪一種量：百分比是 "%"、N成 是 "成"、一般數字是緊接著的實體單位（沒有就是空的）；
+    base 是拿來和別處「同一個數字」對照的數值（N成 是 N，不是 10×N）。
+    """
     raw: str
     value: Fraction
     kind: str
     unit: str
     start: int
     end: int
+    label: str = ""
+    base: Fraction | None = None
 
 
 def _int_value(run: str) -> Fraction | None:
@@ -166,7 +176,7 @@ def _mentions(flat: str) -> list[NumberMention]:
             continue
         after = flat[match.end():match.end() + 2]
         if flat[max(0, match.start() - 1):match.start()] == _PERCENT_MARK or after.startswith("%"):
-            found.append(NumberMention(raw, value, PERCENT, "", match.start(), match.end()))
+            found.append(NumberMention(raw, value, PERCENT, "", match.start(), match.end(), "%", value))
             continue
         if after.startswith("成"):
             percent = value * 10
@@ -176,10 +186,10 @@ def _mentions(flat: str) -> list[NumberMention]:
                 percent += digit                        # 四成二 = 42%
                 end += 1
                 skip_until = end
-            found.append(NumberMention(raw + "成", percent, PERCENT, "", match.start(), end))
+            found.append(NumberMention(raw + "成", percent, PERCENT, "", match.start(), end, "成", value))
             continue
         unit = next((u for u in _ABSOLUTE_UNITS if after.startswith(u)), "")
-        found.append(NumberMention(raw, value, PLAIN, unit, match.start(), match.end()))
+        found.append(NumberMention(raw, value, PLAIN, unit, match.start(), match.end(), unit, value))
     return found
 
 
@@ -226,6 +236,17 @@ def _copied_whole(raw: str, support_text: str) -> bool:
     return False
 
 
+def _label_swapped(mention: NumberMention, support: list[NumberMention]) -> str | None:
+    """這個帶著單位的數字，在那段話裡是不是只以別種單位出現（二十年 對 二十人、三成 對 三倍）：回傳那些單位。
+
+    只要有一處沒有單位（可能只是漏了單位）、或有一處就是重點用的單位，就看不出來，回傳 None。
+    """
+    labels = {_SAME_LABEL.get(m.label, m.label) for m in support if m.base == mention.base}
+    if not labels or "" in labels or _SAME_LABEL.get(mention.label, mention.label) in labels:
+        return None
+    return "、".join(sorted(labels))
+
+
 def number_problem(text: str, support_text: str) -> str | None:
     """重點 text 裡的數字有沒有哪一個在 support_text（被引用的那段話）裡找不到「同值同種類」的對應。
 
@@ -252,6 +273,11 @@ def number_problem(text: str, support_text: str) -> str | None:
         if mention.unit and mention.value in support_percent and mention.value not in support_plain:
             return (f"數字「{mention.raw}{mention.unit}」在被引用的那段話裡是百分比，不是{mention.unit}"
                     f"（數字與單位請照抄）")
+        if mention.label:
+            swapped = _label_swapped(mention, support)
+            if swapped:
+                return (f"數字「{mention.raw}{mention.label}」在被引用的那段話裡是「{swapped}」，不是"
+                        f"{mention.label}（數字與單位請照抄）")
         if _copied_whole(mention.raw, support_text):
             continue
         if mention.value in support_plain or mention.value in support_percent:

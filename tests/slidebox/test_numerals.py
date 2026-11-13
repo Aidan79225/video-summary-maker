@@ -398,3 +398,55 @@ def test_the_reason_quotes_exactly_the_percentage_the_point_wrote():
     problem = number_problem("增加了四成二，其餘照舊", "增加了四成三，其餘照舊")
 
     assert problem == "數字「四成二」不在被引用的那段話裡（百分比的數值對不上；數字與單位請照抄）"
+
+
+# --- 同一個數值換成另一種單位（二十年 → 二十人、三成 → 三倍）---
+
+
+@pytest.mark.parametrize("text, support", [
+    ("案子前後花了二十人才完成", "這個案子前後花了二十年才完成，參與的人員一共有四十人"),
+    ("造成兩百萬元受災", "這次災害造成兩百萬人受災，政府預計撥款一百億元救助"),
+    ("今年出口比去年成長三倍", "今年的出口比去年成長了三成，進口則是成長兩成左右"),
+    ("成長四倍", "成長了四成二"),
+    ("要等三年", "排隊要等三個月"),
+    ("開三天", "開三小時"),
+    ("三百次", "三百人次"),                                   # 人次不是次：寧可擋下，不猜
+])
+def test_the_same_value_with_another_unit_is_rejected(text, support):
+    problem = number_problem(text, support)
+
+    assert problem is not None and "請照抄" in problem
+
+
+@pytest.mark.parametrize("text, support", [
+    ("花了二十年", "花了二十年"),
+    ("花了二十週", "花了二十周"),                              # 週與周是同一個單位
+    ("花了二十人", "花了二十年，另外還有二十人"),                  # 那段話兩種單位都說過
+    ("花了二十人", "花了二十，另外還有別的"),                     # 那段話有一處沒有單位：可能只是漏了，看不出來
+    ("成長三倍", "成長了三倍"),
+    ("成長三成", "成長了百分之三十"),                            # 寫法不同、單位一樣
+    ("共二十名", "共二十人"),                                  # 名不在單位表裡：不比
+])
+def test_the_same_value_with_the_same_or_an_unknowable_unit_is_fine(text, support):
+    assert number_problem(text, support) is None
+
+
+def test_the_reason_for_a_swapped_unit_names_both_units():
+    problem = number_problem("案子前後花了二十人才完成", "這個案子前後花了二十年才完成")
+
+    assert "二十人" in problem and "年" in problem
+
+
+def test_every_number_says_what_kind_of_quantity_it_is_and_what_it_is_compared_by():
+    year, percent, tenths, sign = (mentions(text)[0] for text in ("二十年", "百分之十二", "三成五", "30%"))
+
+    assert (year.label, year.base) == ("年", Fraction(20))
+    assert (percent.label, percent.base) == ("%", Fraction(12))
+    assert (tenths.label, tenths.base) == ("成", Fraction(3))             # 三成五 = 35%，但拿來比的是 3
+    assert (sign.label, sign.base) == ("%", Fraction(30))
+
+
+def test_a_multiple_is_a_unit_of_its_own_not_a_bare_number():
+    """三倍有單位「倍」：那段話只有「三成」時，不能再把它當成沒有單位的 3 放行。"""
+    assert mentions("成長三倍")[0].unit == "倍"
+    assert number_problem("成長百分之三", "成長了三倍") is not None

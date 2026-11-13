@@ -39,7 +39,7 @@ from .speakers import FILLER_CHARS, PARTICIPANT, UNDECIDED, clock, squash
 # 提示詞或驗證規則改了就加一，存檔的指紋跟著變，舊的結果不會被拿來冒充新的。
 # 2：每個重點先照抄一段原文（quote）、說話者由 quote 所在的那一輪決定；數字改比「數值與單位」；
 #    問句只看帶著重點的句子；文字裡不可以有逐字稿用來稱呼人的名字；提示詞整份換掉。
-PROMPT_VERSION = 2
+PROMPT_VERSION = 3
 
 # --- 切窗 ---
 CHUNK_CHARS_ENV = "SLIDEBOX_CHUNK_CHARS"
@@ -64,6 +64,9 @@ MIN_SHARED_RATIO = 0.25
 ANCHOR_RADIUS = 3
 # 兩段的相符程度差不到「重點字數 × 這個比例」就算一樣好
 TIE_MARGIN = 0.1
+# 複述對方的話時（「您剛才提到…」「也就是說…」）常常換個說法：最近這幾位別人的發言，共同的特徵只要這個比例就算
+ECHO_NEAR_TURNS = 4
+ECHO_NEAR_RATIO = 0.2
 MIN_POINTS_PER_SLIDE = 2
 MAX_BULLETS = 4
 MAX_PROBLEMS = 12
@@ -252,6 +255,7 @@ QUESTION_STATED_AS_FACT = "question_stated_as_fact"
 ECHO = "echo"
 REPORTED_SPEECH = "reported_speech"
 ROLE_NOT_SAID = "role_not_said"
+POLARITY_FLIP = "polarity_flip"
 BAD_INLINE_QUOTE = "bad_inline_quote"
 DUPLICATE_POINT = "duplicate_point"
 SLIDE_TOO_SMALL = "slide_too_small"
@@ -334,9 +338,11 @@ _LABEL_WORDS = (
 _QUOTED_RE = re.compile(r"「[^」]*」|『[^』]*』|“[^”]*”|\"[^\"]*\"")
 _QUOTE_BODY_RE = re.compile(r"「([^」]*)」|『([^』]*)』|“([^”]*)”|\"([^\"]*)\"")
 # 「我國」「自我」是一般用語，不是視角問題（與單人模式的判斷一致）
-# 機關、公司的第一人稱（本部、本公司…）與自謙的稱呼（小弟）也是；「本部分」「本會期」是一般用語
+# 機關、公司的第一人稱（本部、本公司…）與自謙的稱呼（小弟）也是；「本部分」「本會期」是一般用語，
+# 「成本會」「日本會」「基本部分」這類詞只是剛好含有「本」
 _FIRST_PERSON_RE = re.compile(
-    r"我們|我方|本席|咱們|咱|本人|在下|敝|小弟|本公司|本校|本局|本院|本部(?!分)|本會(?!期)|(?<!自)我(?![國們方])")
+    r"我們|我方|本席|咱們|咱|本人|在下|敝|小弟|"
+    r"(?<![成資基根原版日樣標副股課劇腳])本(?:公司|校|局|院|部(?!分)|會(?!期))|(?<!自)我(?![國們方])")
 
 _SURNAMES = ("陳林黃張李王吳劉蔡楊許鄭謝郭洪邱曾廖賴徐周葉蘇莊呂江何蕭羅高潘朱簡鍾彭游詹胡施沈余趙盧梁顏柯孫魏"
              "翁戴范宋方鄧杜傅侯曹薛丁卓阮馬董溫唐藍蔣石古紀姚連馮歐程湯田康姜汪白鄒尤巫黎塗龔嚴韓袁金童陸夏柳邵")
@@ -364,6 +370,8 @@ _TOKEN_RE = re.compile(r"[0-9a-z]+|[㐀-鿿]+")
 # 「不同」「不少」「是否」「未來」「非常」這類普通詞不是否定
 _NEGATION_RE = re.compile(r"不(?![僅只但管論過如妨同少斷久時錯然勝禁])|沒|無(?!論)|非(?!常)|未(?!來)|(?<!是)否(?!則)")
 _NEGATION_CHARS = "不沒無非未否"
+# 是非問句的字眼：「是不是」「有沒有」「是否」裡的「不」「沒」「否」是在問，不是否定
+_YES_NO_FORM_RE = re.compile(r"是不是|有沒有|有無|會不會|能不能|可不可以|可不可|對不對|好不好|行不行|要不要|是否|能否|可否")
 
 # 很短的回答：整段只有「對」「不是」這類字。內容要靠 context 補
 _YES_RE = re.compile(r"(?:對|是|好|行|沒錯|對的|是的|可以|當然|正確|同意|贊成|有)+")
@@ -381,14 +389,19 @@ _NO_LEADS = (
 # Whisper 常常不給問號：「請問…」「您怎麼看…」「為什麼…」「難道…」「怎麼可能…」也是問句（反問也是）
 _QUESTION_RE = re.compile(
     r"[？?]|嗎|呢|是不是|對不對|好不好|行不行|有沒有|能不能|可不可以|是否|對吧|是吧|"
-    r"請問|請教|想問|怎麼看|為什麼|為何|難道|何必|怎麼可能|您怎麼|你怎麼")
+    r"請問|請教|想問|怎麼看|(?<!是)為什麼|(?<!是)為何|難道|何必|怎麼可能|您怎麼|你怎麼")     # 「這也是為什麼…」是陳述
 _ASK_RE = re.compile(
-    r"詢問|追問|請教|請問|提問|質疑|質問|反問|想知道|想了解|問(?!題)|是否|能否|可否|有沒有|是不是|對不對|"
+    r"詢問|追問|請教|請問|提問|質疑|質問|質詢|反問|想知道|想了解|問(?!題)|是否|能否|可否|有沒有|是不是|對不對|"
     r"如何|怎麼|怎樣|為何|為什麼|什麼|哪|多少|嗎|呢")
 _RESTATING_RE = re.compile(
     r"[？?]|嗎|呢|是不是|對不對|對吧|是吧|是否|有沒有|"
     r"剛才|剛剛|方才|您說|你說|妳說|您提到|你提到|他說|她說|他們說|所說|意思是|也就是說|換句話說|"
     r"你是說|您是說|說過|[「『“]")
+
+# 複述對方的字眼（對著對方說，不含一般的問句語氣詞，也不含「他說」「所說」這類說第三者的）：
+# 「您剛才提到…」「所以你是說…」「也就是說…」
+_RESTATE_PHRASE_RE = re.compile(
+    r"[您你妳](?:剛才|剛剛|方才)|[您你妳](?:說|提到|提過|是說)|[您你妳]的意思|也就是說|換句話說")
 
 # 轉述第三方的話（有人說、網友說、根據報導、部長表示、專家預測、聽說…）：說話者是在轉述別人的說法，
 # 不是自己的主張。第三方在影片外，比對不到「更早的另一位說話者」，所以另外用字眼擋
@@ -403,15 +416,43 @@ _LEAD_IN_RE = re.compile(r"[^。！？!?\n：:]{0,40}[：:]\s*$")
 _LEAD_IN_FRAME_RE = re.compile(r"引用|引述|轉述|說法|傳言|報導|聽說|據說")
 # 改顯示原話時，原話前面若有這些條件字眼，單獨顯示會缺少條件
 _CONDITION_RE = re.compile(r"如果|假如|要是|萬一|假設|只要|除非|若|就算|即使|倘若|雖然")
-_HEDGE_RE = re.compile(r"可能|也許|或許|大概|似乎|好像|聽說|據說|不確定|未必")
+_HEDGE_RE = re.compile(r"可能|也許|或許|大概|似乎|好像|聽說|據說|不確定|未必|懷疑")
 _CLAUSE_PUNCT = "，。！？；：,.!?;:、…「『“"
+# 語音辨識常常只用空白分段、不加標點。空白前面那一段若是以「我不同意」「可能」「如果」這類管著後面整句的字眼收尾，
+# 後面那一段還是被它管著；其他情況（「大概要兩個人天 因為…」「這個不要省 這種事情…」）空白就是子句的邊界
+_GOVERNING_STANCE = ("不覺得", "不相信", "不知道", "不清楚", "不保證", "不承認")
+_GOVERNING_TAIL_RE = re.compile(
+    "(?:" + "|".join((_CONDITION_RE.pattern, _HEDGE_RE.pattern, *map(re.escape, (*_NO_LEADS, *_GOVERNING_STANCE))))
+    + ")[啦啊吧喔哦呀嘛]?$")
+_LAST_SPACES_RE = re.compile(r"\s+(?=\S*$)")
 # 文字自己標明是轉述，就不是把別人的話說成他的主張
 _SAYS_REPORTED = ("轉述", "引述", "轉達")
 # 文字裡的稱謂若不是那段話自己說的，就是模型加上去的（市長已承諾…）
 _ROLE_WORD_RE = re.compile(
     r"市長|縣長|部長|院長|署長|局長|處長|議員|總統|總理|主席|教授|記者(?!會)|發言人|官員|老師|醫師|委員(?!會)")
 
+# 意思互相排斥的說法：文字（「」以外）只用了其中一邊、quote 與最貼近的原文只有另一邊，就是把意思寫反了
+# （增加→減少、反對→支持、去年→明年、每個月→每天…）。每一組有幾「邊」，每一邊是幾個同義的說法。
+# 第二個值是 True 的（立場）：被「不」「沒」否定的說法算成另一邊（不同意 ≈ 反對）；其他的否定不好判斷，不算。
+_OPPOSED = (
+    ((("增加", "增長", "成長", "上升", "上漲", "提高", "擴大", "上調", "調漲", "高於", "多於"),
+      ("減少", "衰退", "下降", "下跌", "降低", "縮小", "下調", "調降", "低於", "少於")), False),
+    ((("支持", "贊成", "同意", "認同"), ("反對",)), True),
+    ((("之前", "以前", "先前"), ("之後", "以後")), False),
+    ((("尚未", "還沒"), ("已經",)), False),
+    ((("大多數", "多數", "大部分"), ("所有", "全部")), False),
+    ((("去年",), ("今年",), ("明年",)), False),
+    ((("上個月",), ("這個月", "本月"), ("下個月",)), False),
+    ((("上週", "上周"), ("這週", "這周", "本週", "本周"), ("下週", "下周")), False),
+    ((("每天", "每日"), ("每週", "每周"), ("每個月", "每月"), ("每年",)), False),
+)
+# 雙重否定（不得不、不是不…）：寫成單一的否定，意思整個反過來
+_DOUBLE_NEGATION_RE = re.compile(
+    r"(?:不得|不能|不會|不可|不是|沒有|並非|未嘗|無|莫|非)不(?![僅只但管論過如妨同少斷久時錯然勝禁])"
+    r"(?P<tail>[^，。！？；：,.!?;:…\s]{2})")
+
 _CLAUSE_RE = re.compile(r"([^，。！？；：,.!?;:…]+)([，。！？；：,.!?;:…]*)")
+_CLAUSE_BODY_RE = re.compile(r"[^，。！？；：,.!?;:…、\s]+")      # 標點與空白都隔開子句（語音辨識常常只用空白）
 _TRAILING_PUNCT = "，。！？；：,.!?;:… \t　"
 _TEXT_TRAILING = "。．.；;！!？?，,、 \t　"
 
@@ -449,6 +490,7 @@ def validate_points(
     in_window = [by_index[i] for i in range(first, last + 1) if i in by_index]
     citable = citable_ids(speakers)
     names = detect_names("\n".join(t.text for t in in_window))
+    lead_in = [by_index[i] for i in range(first - ANCHOR_RADIUS, first) if i in by_index]   # 窗不重疊：窗頭的複述要看前一窗的尾巴
 
     problems: list[str] = []
     codes: Counter[str] = Counter()
@@ -460,7 +502,7 @@ def validate_points(
         for number, raw_point in enumerate(raw.points, 1):
             proposed += 1
             where = f"第 {page} 頁第 {number} 點"
-            check = _check_point(raw_point, by_index, in_window, citable, first, last, names, quote_only)
+            check = _check_point(raw_point, by_index, in_window, citable, first, last, names, quote_only, lead_in)
             if check.point is None:
                 assert check.problem is not None                 # 沒有點就一定有原因
                 codes[check.problem.code] += 1
@@ -521,8 +563,9 @@ def _check_point(
     last: int,
     names: frozenset[str] = frozenset(),
     quote_only: bool = False,
+    lead_in: Sequence[Turn] = (),
 ) -> PointCheck:
-    """逐關檢查一個點（關卡與順序見 validate_points）。
+    """逐關檢查一個點（關卡與順序見 validate_points）。lead_in 是這個窗開頭之前的幾輪，只用來認出複述。
 
     順序是刻意的：先擋文字本身的問題，再用 quote 決定這個點屬於哪一輪（也就是誰說的），之後才看內容；
     內容檢查都對著「quote 所在的那一輪」，所以不會有「quote 在甲說的話裡、內容卻對著乙說的話」的點通過。
@@ -560,10 +603,12 @@ def _check_point(
     if polarity:
         anchor = turn
         context = [by_index[i] for i in _context_ids(raw, turn, first, by_index)]
-        problem = _answer_problem(polarity, text, claim, context)
+        asked = _asked_turns(turn, by_index, first)
+        problem = _answer_problem(polarity, text, claim, context, asked)
         if problem:
             return PointCheck(problem=problem)
-        support_text = " ".join(t.text for t in (*context, turn))
+        in_context = {t.index for t in context}
+        support_text = " ".join(t.text for t in (*(t for t in asked if t.index in in_context), turn))
         earlier: list[Turn] = []                      # 回答的字是「對」，沒有可複述的內容
     else:
         radius = [by_index[i] for i in range(max(first, turn.index - ANCHOR_RADIUS),
@@ -578,7 +623,7 @@ def _check_point(
         if problem:
             return PointCheck(problem=problem)
         support_text = anchor.text
-        earlier = [t for t in in_window if t.index < anchor.index]
+        earlier = [t for t in (*lead_in, *in_window) if t.index < anchor.index]
 
     problem = (_number_problem(text, support_text) or _negation_problem(text, support_text)
                or _role_problem(text, support_text))
@@ -586,14 +631,15 @@ def _check_point(
         return PointCheck(problem=_at(problem, anchor))
 
     evidence, is_question = _evidence(anchor.text, claim)
-    problem = _reported_speech_problem(text, raw.quote, anchor.text)
+    problem = _reported_speech_problem(text, raw.quote, anchor.text) or _polarity_flip_problem(
+        text, f"{raw.quote} {evidence}")
     if problem:
         return PointCheck(problem=_at(problem, anchor))
     problem = _question_problem(is_question, text)
     if problem:
         return PointCheck(problem=_at(problem, anchor))
 
-    source = _echo_source(anchor, claim, earlier)
+    source = _echo_source(anchor, claim, earlier, raw.quote)
     if source is not None:
         return PointCheck(problem=Problem(ECHO, (
             f"T{anchor.index} 是在複述 T{source.index} 另一位說話者的話，不是這位說話者自己的主張")))
@@ -676,8 +722,7 @@ def _quote_to_show(turn: Turn, quote: str, names: frozenset[str]) -> QuoteSpan |
     if _REPORTED_RE.search(span.text) or _lead_in_reports(span.flat, span.start):
         return "原話是在轉述別人的說法（有人說、根據報導…），不是這位說話者自己的主張"
     before = span.flat[:span.start]
-    clause_start = max((before.rfind(char) for char in _CLAUSE_PUNCT), default=-1) + 1
-    lost = before[clause_start:]                       # 同一個子句裡被截掉的前半（我不同意…、可能…）
+    lost = _lost_lead(before)                          # 同一個子句裡被截掉的前半（我不同意…、可能…）
     if (_NEGATION_RE.search(lost) or _HEDGE_RE.search(lost) or _CONDITION_RE.search(lost)
             or any(word in lost for word in _NO_LEADS)):
         return "原話前面（同一個子句）有否定、條件或語氣詞，單獨顯示會缺少它們"
@@ -685,6 +730,16 @@ def _quote_to_show(turn: Turn, quote: str, names: frozenset[str]) -> QuoteSpan |
     if _CONDITION_RE.search(before[sentence_start:]):
         return "原話前面有「如果…」之類的條件，單獨顯示會缺少條件"
     return span
+
+
+def _lost_lead(before: str) -> str:
+    """quote 前面被截掉的字（和它同一個子句的前半）：標點隔開子句；空白隔開的前一段，除非是以管著後面的字眼
+    （我不同意、可能、如果…）收尾，不算在內——語音辨識的逐字稿沒有標點，整輪是一長串用空白分開的話。"""
+    clause = before[max((before.rfind(char) for char in _CLAUSE_PUNCT), default=-1) + 1:]
+    boundary = _LAST_SPACES_RE.search(clause)
+    if boundary is None or _GOVERNING_TAIL_RE.search(clause[:boundary.start()]):
+        return clause
+    return clause[boundary.end():]
 
 
 def _wording_hit(text: str, names: frozenset[str]) -> str | None:
@@ -838,9 +893,9 @@ def _grams(text: str) -> frozenset[str]:
     return frozenset(out)
 
 
-def _is_supported(shared: int, total: int) -> bool:
-    """共同的特徵至少 2 個，且至少占重點特徵的 25%。"""
-    return total > 0 and shared >= MIN_SHARED_GRAMS and shared >= MIN_SHARED_RATIO * total - _EPS
+def _is_supported(shared: int, total: int, ratio: float = MIN_SHARED_RATIO) -> bool:
+    """共同的特徵至少 2 個，且至少占重點特徵的 25%（ratio 可以放寬）。"""
+    return total > 0 and shared >= MIN_SHARED_GRAMS and shared >= ratio * total - _EPS
 
 
 def _pick_anchor(
@@ -872,23 +927,51 @@ def _pick_anchor(
     return winner
 
 
-def _echo_source(anchor: Turn, claim: frozenset[str], earlier: Sequence[Turn]) -> Turn | None:
+def _echo_source(anchor: Turn, claim: frozenset[str], earlier: Sequence[Turn],
+                 quote: object = None) -> Turn | None:
     """被引用的那段是不是在複述別人先說過的話（問「您剛才說…對嗎」、引述對方）。
 
-    條件：那段話有問句或引述的語氣，而且更早有另一位說話者的一段話同樣（或更）符合這個重點。
+    條件：那段話有問句或引述的語氣，而且更早有另一位說話者的一段話符合這個重點：
+    - 帶著這個重點的那一小段（子句和它前面的兩個子句）有對著對方複述的字眼（您剛才提到…、所以你是說…、
+      也就是說…；一般的問句語氣詞與「他說」不算）：
+      複述的人常常換個說法，所以對方的話不必比複述的人自己的話更符合，最近幾位別人的發言只要有五分之一的
+      特徵相同就算（ECHO_NEAR_RATIO）；
+    - 複述的字眼在同一段話的別處、或只是問句的語氣：對方的話要同樣（或更）符合這個重點。
     這種情況重點是被複述的人主張的，不能算在複述的人頭上。
     """
     if not _RESTATING_RE.search(anchor.text):
         return None
     total = len(claim)
     mine = len(claim & _grams(anchor.text))
-    for turn in reversed(earlier):
-        if turn.speaker == anchor.speaker:
-            continue
+    explicit = bool(_RESTATE_PHRASE_RE.search(_carrier_region(anchor.text, claim, quote)))
+    others = [t for t in reversed(earlier) if t.speaker != anchor.speaker]
+    for position, turn in enumerate(others):
         theirs = len(claim & _grams(turn.text))
-        if _is_supported(theirs, total) and theirs >= mine:
+        ratio = ECHO_NEAR_RATIO if explicit and position < ECHO_NEAR_TURNS else MIN_SHARED_RATIO
+        if _is_supported(theirs, total, ratio) and (explicit or theirs >= mine):
             return turn
     return None
+
+
+def _carrier_region(text: str, claim: frozenset[str], quote: object = None) -> str:
+    """這段話裡帶著重點的那一小段：和重點共用的字最多的那個子句，加上它前面緊接著的兩個子句（「您剛才提到，」這類引言）。
+
+    只看這一小段：一段沒有標點的長話裡別的地方出現「他們說」，不表示這個重點是複述來的。
+    quote 只是這輪裡的一段時，帶著重點的子句要在 quote 的範圍裡：回答先複述一句、再講自己的做法，
+    quote 只引自己的做法，那句複述就不是這個重點的來源（它前面緊接著的兩個子句還是算引言）。
+    沒有任何一個子句和重點共用字就是空的（不算有複述的字眼）。
+    """
+    located = contiguous_span(text, quote) if isinstance(quote, str) and quote else None
+    bodies = list(_CLAUSE_BODY_RE.finditer(located.flat if located else text))
+    clauses = [body.group(0) for body in bodies]
+    scores = [len(claim & _grams(clause)) for clause in clauses]
+    if located:
+        scores = [score if body.end() > located.start and body.start() < located.end else 0
+                  for score, body in zip(scores, bodies)]
+    if not scores or max(scores) == 0:
+        return ""
+    best = scores.index(max(scores))
+    return " ".join(clauses[max(0, best - 2):best + 1])
 
 
 # --- 數字、否定、問句、回答 ---
@@ -900,9 +983,15 @@ def _number_problem(text: str, support_text: str) -> Problem | None:
     return Problem(NUMBER_MISMATCH, message) if message else None
 
 
+def _without_yes_no_forms(text: str) -> str:
+    """把是非問句的字眼換成同樣長的空白（字的位置不變）：「是否同意」的「否」、「有沒有」的「沒」不是否定。"""
+    return _YES_NO_FORM_RE.sub(lambda match: "　" * len(match.group(0)), text)
+
+
 def _negation_problem(text: str, support_text: str) -> Problem | None:
     """重點有否定（不、沒、無…），被引用的那段話卻一個否定字都沒有：多半是把意思寫反了。"""
-    if _NEGATION_RE.search(_outside_quotes(text)) and not any(ch in support_text for ch in _NEGATION_CHARS):
+    if (_NEGATION_RE.search(_without_yes_no_forms(_outside_quotes(text)))
+            and not any(ch in support_text for ch in _NEGATION_CHARS)):
         return Problem(NEGATION_MISMATCH, "重點有否定的說法，但被引用的那段話沒有，意思可能寫反了")
     return None
 
@@ -916,6 +1005,56 @@ def _role_problem(text: str, support_text: str) -> Problem | None:
     return None
 
 
+def _polarity_flip_problem(text: str, spoken: str) -> Problem | None:
+    """文字用了意思相反的另一邊（增加→減少、反對→支持、去年→明年…），或把雙重否定寫成單一的否定。
+
+    spoken 是 quote 加上最貼近重點的原文：文字用的那一邊，原話一個都沒有、卻有另一邊，才算寫反了；
+    原話兩邊都有、或文字兩邊都有，就看不出來，不擋。
+    """
+    written = _outside_quotes(text)
+    for sides, flips in _OPPOSED:
+        mine, theirs = _opposed_marks(written, sides, flips), _opposed_marks(spoken, sides, flips)
+        if mine and theirs and not mine.keys() & theirs.keys():
+            ours, said = next(iter(mine.values())), next(iter(theirs.values()))
+            return Problem(POLARITY_FLIP, (
+                f"文字寫的是「{ours}」，原話說的是「{said}」，意思可能寫反了；請照原話的說法寫"))
+    return _double_negation_problem(written, spoken)
+
+
+def _opposed_marks(text: str, sides: Sequence[Sequence[str]], flips: bool) -> dict[int, str]:
+    """text 用了哪幾邊（邊的編號 → 第一個遇到的說法）。"""
+    found: dict[int, str] = {}
+    plain = _without_yes_no_forms(text)
+    for side, words in enumerate(sides):
+        for word in words:
+            start = 0
+            while (at := text.find(word, start)) >= 0:
+                start = at + len(word)
+                if not any(char in _NEGATION_CHARS for char in plain[max(0, at - 2):at]):
+                    found.setdefault(side, word)
+                elif flips and len(sides) == 2:
+                    found.setdefault(1 - side, "不" + word)
+    return found
+
+
+def _double_negation_problem(written: str, spoken: str) -> Problem | None:
+    """原話說的是雙重否定（不得不增加），文字卻寫成單一的否定（不得增加）：意思整個反過來。"""
+    plain = _without_yes_no_forms(written)
+    for match in _DOUBLE_NEGATION_RE.finditer(_without_yes_no_forms(spoken)):    # 「是不是不願意」是在問，不是雙重否定
+        tail = match.group("tail")
+        idiom = match.group(0)[:-len(tail)]
+        at = written.find(tail)
+        if at < 0 or idiom in written:
+            continue
+        if not any(char in _NEGATION_CHARS for char in plain[max(0, at - 3):at]):
+            continue                                    # 文字沒有否定：把雙重否定改寫成肯定，意思沒變
+        if any(found.group("tail") == tail for found in _DOUBLE_NEGATION_RE.finditer(plain)):
+            continue                                    # 文字自己也是雙重否定（並非不願意）
+        return Problem(POLARITY_FLIP, (
+            f"原話說的是雙重否定「{idiom}{tail}」，文字卻寫成單一的否定，意思反過來了；請照原話寫"))
+    return None
+
+
 def _reported_speech_problem(text: str, quote: object, turn_text: str) -> Problem | None:
     """quote 是在轉述第三方的話（有人說、網友說、根據報導…），或前面緊接著這樣的引言：不能寫成說話者自己的主張。
 
@@ -923,8 +1062,10 @@ def _reported_speech_problem(text: str, quote: object, turn_text: str) -> Proble
     """
     if text.startswith(_SAYS_REPORTED):
         return None
-    match = _REPORTED_RE.search(quote if isinstance(quote, str) else "")
-    if match:
+    quoted = quote if isinstance(quote, str) else ""
+    match = _REPORTED_RE.search(quoted)
+    # 轉述的是字眼後面的話：重點寫的是前面自己的做法、沒有用到後面那一句，就不是把別人的話寫成他的主張
+    if match and len(_grams(text) & _grams(quoted[match.start():])) >= MIN_SHARED_GRAMS:
         return Problem(REPORTED_SPEECH, _reported_message(match.group(0)))
     located = contiguous_span(turn_text, quote)
     if located is not None and _lead_in_reports(located.flat, located.start):
@@ -961,10 +1102,44 @@ def _answer_polarity(turn_text: str) -> str | None:
     return None
 
 
-def _answer_problem(polarity: str, text: str, claim: frozenset[str], context: Sequence[Turn]) -> Problem | None:
+def _asked_turns(turn: Turn, by_index: Mapping[int, Turn], first: int) -> list[Turn]:
+    """這句很短的回答回應的是誰的話：往前（ANCHOR_RADIUS 輪內、不超出窗）別人說的話裡，最近的一句問句；
+    都不是問句就是最近的一輪。再加上它前面緊接著、同一位說話者的幾輪（一段長問題被切成幾輪）。
+    前面沒有別人說的話就是空的。
+
+    「對」「沒有」回答的是最近的那個問題，不是更早的話：問了新的問題之後，回答不能再接到舊的內容。
+    """
+    low = max(first, turn.index - ANCHOR_RADIUS)
+    nearby = [by_index[i] for i in range(turn.index - 1, low - 1, -1) if i in by_index]
+    others = [t for t in nearby if t.speaker != turn.speaker]
+    if not others:
+        return []
+    chosen = next((t for t in others if _QUESTION_RE.search(t.text)), others[0])
+    asked = [chosen]
+    index = chosen.index - 1
+    while index >= low and index in by_index and by_index[index].speaker == chosen.speaker:
+        asked.append(by_index[index])
+        index -= 1
+    return asked
+
+
+def _answer_problem(polarity: str, text: str, claim: frozenset[str], context: Sequence[Turn],
+                    asked: Sequence[Turn] | None = None) -> Problem | None:
+    """很短的回答：context 要是它緊接著回應的那一輪（asked 的第一個），內容要對得上那個人說的話，立場要寫成表態。
+
+    asked 是 None（呼叫的人沒有查）就只看 context 自己對不對得上。
+    """
     if not context:
         return Problem(SHORT_ANSWER_NO_CONTEXT, "被引用的是很短的回答（對、不是…），必須在 context 填上它回應的上文 turn")
-    shared = len(claim & _grams(" ".join(t.text for t in context)))
+    in_context = {t.index for t in context}
+    if asked is None:
+        asked = context
+    elif not asked:
+        return Problem(SHORT_ANSWER_CONTEXT_MISMATCH, "這句回答前面（三輪內）沒有別人說的話可以回應")
+    elif asked[0].index not in in_context:
+        return Problem(SHORT_ANSWER_CONTEXT_MISMATCH, (
+            f"context 必須是這句回答緊接著回應的那一輪（T{asked[0].index}）；回答不能接到更早、不是它回應的話"))
+    shared = len(claim & _grams(" ".join(t.text for t in asked if t.index in in_context)))
     if not _is_supported(shared, len(claim)):
         return Problem(SHORT_ANSWER_CONTEXT_MISMATCH, "內容和它回應的上文（context）對不上")
     leads = _YES_LEADS if polarity == "yes" else _NO_LEADS
