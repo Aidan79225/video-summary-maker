@@ -23,13 +23,14 @@ tests/slidebox/test_ollama_conversation.py 釘住這些內容的雜湊，改了�
 """
 from __future__ import annotations
 
+import http.client
 import json
 import re
 from collections.abc import Sequence
 from typing import cast
 
 from ..domain.entities import RawPoint, RawSlide
-from ..domain.errors import SummarizerOutputInvalid
+from ..domain.errors import SummarizerOutputInvalid, SummarizerUnavailable
 from ..domain.ports import CancelCheck, ProgressCallback
 from ..usecases.code_fingerprint import code_fingerprint
 from . import ollama_summarizer
@@ -164,17 +165,54 @@ def conversation_schema(citable_turns: Sequence[int]) -> dict:
 
 
 # --- 回應解析 ---
+#
+# 模型的回應是不可信的資料。這一層對任何輸入只有兩種結果：RawSlide，或 SummarizerOutputInvalid
+# （summarize_windows 會帶著原因重問一次）。不會有第三種：沒接住的 RecursionError、ValueError
+# 會讓整個工作以 traceback 當掉、也不重問。錯誤訊息裡也不放模型寫的東西，因為訊息會被抄進重問的提示。
 
-_THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
-_TURN_REF_RE = re.compile(r"^\s*\[?\s*T?\s*(\d+)\s*\]?\s*$", re.IGNORECASE)
+_THINK_OPEN_RE = re.compile(r"<think>", re.IGNORECASE)
+_THINK_CLOSE_RE = re.compile(r"</think>", re.IGNORECASE)
+# 「12」「T12」「[T12]」這幾種寫法，前後可以有空白。每兩個 \s* 之間都隔著一個非空白的字元，
+# 回溯才不會變成多次方：模型寫在 turn 裡的字串長度沒有上限
+_TURN_REF_RE = re.compile(r"^\s*(?:\[\s*)?(?:T\s*)?(\d+)\s*(?:\]\s*)?$", re.IGNORECASE)
 # 回應前後有客套話或 Markdown 圍欄時，最多從這麼多個「{」試著讀出 JSON
 _MAX_BRACE_TRIES = 20
+
+
+def _strip_thinking(text: str) -> str:
+    """去掉所有 <think>…</think>（不分大小寫、可以跨行）；沒有收尾的 <think> 原樣留著。
+
+    結果和 re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL | re.IGNORECASE) 一模一樣，但是線性的：
+    那個寫法對每一個沒有收尾的 <think> 都掃到字串尾才放棄，兩萬個就是十幾億步。這裡第一個 <think>
+    後面找不到 </think>，後面的 <think> 更找不到，直接收工。
+    """
+    kept: list[str] = []
+    position = 0
+    while True:
+        opened = _THINK_OPEN_RE.search(text, position)
+        closed = _THINK_CLOSE_RE.search(text, opened.end()) if opened else None
+        if opened is None or closed is None:
+            break
+        kept.append(text[position:opened.start()])
+        position = closed.end()
+    kept.append(text[position:])
+    return "".join(kept)
+
+
+def _decode_at(decoder: json.JSONDecoder, text: str, start: int) -> object:
+    """從 text[start] 讀一個 JSON 值；讀不了就回 None：語法錯、巢狀太深、整數位數超過上限都一樣。"""
+    try:
+        return decoder.raw_decode(text, start)[0]
+    except (ValueError, RecursionError):          # JSONDecodeError 是 ValueError 的一種
+        return None
 
 
 def _load_json(payload: str) -> object:
     """模型的回應 → JSON。先照原樣讀；不行就去掉思考殘留，從每個「{」試著讀出一個有 slides 的物件。
 
     這樣 Markdown 圍欄、前後的客套話（包括裡面有大括號的）都不會讓整個窗白跑一次。
+    讀不了的一律是 SummarizerOutputInvalid：json 對巢狀太深丟 RecursionError、對位數超過 4300 的整數
+    丟普通的 ValueError（不是 JSONDecodeError），兩種都要接住。
     """
     if not isinstance(payload, str):
         raise SummarizerOutputInvalid("模型回應不是文字")
@@ -183,21 +221,22 @@ def _load_json(payload: str) -> object:
     try:
         return json.loads(payload)
     except (json.JSONDecodeError, TypeError) as e:
-        error = e
-    cleaned = _THINK_RE.sub("", payload)
+        reason = str(e)                           # 只有出錯的位置，沒有模型寫的字
+    except RecursionError:
+        reason = "巢狀太深"
+    except ValueError:
+        reason = "裡面有位數超過上限的整數"
+    cleaned = _strip_thinking(payload)
     decoder = json.JSONDecoder()
     start = cleaned.find("{")
     for _ in range(_MAX_BRACE_TRIES):
         if start < 0:
             break
-        try:
-            value, _ = decoder.raw_decode(cleaned, start)
-        except json.JSONDecodeError:
-            value = None
+        value = _decode_at(decoder, cleaned, start)
         if isinstance(value, dict) and "slides" in value:
             return value
         start = cleaned.find("{", start + 1)
-    raise SummarizerOutputInvalid(f"模型回應不是合法的 JSON：{error}")
+    raise SummarizerOutputInvalid(f"模型回應不是合法的 JSON：{reason}")
 
 
 def _turn_ref(value: object) -> object:
@@ -207,7 +246,23 @@ def _turn_ref(value: object) -> object:
     if isinstance(value, str):
         match = _TURN_REF_RE.match(value)
         if match:
-            return int(match.group(1))
+            try:
+                return int(match.group(1))
+            except ValueError:                    # 位數超過 Python 轉換整數的上限：不是任何一輪的編號
+                return value                      # 原樣留著，檢查會以「turn 必須是整數編號」退回
+    return value
+
+
+def _text(value: object) -> str:
+    """模型給的文字欄位。不是文字、或是存不下的文字（孤立的代理碼位：模型在 JSON 裡寫了 \\ud800 之類，
+    寫不成 UTF-8）都當作沒給，後面的檢查會以「空的」退回；不然它會一路走到存檔才以 UnicodeEncodeError 當掉。"""
+    if not isinstance(value, str):
+        return ""
+    if not value.isascii():
+        try:
+            value.encode("utf-8")
+        except UnicodeEncodeError:
+            return ""
     return value
 
 
@@ -224,6 +279,7 @@ def parse_conversation_response(payload: str) -> tuple[RawSlide, ...]:
     只有「連 slides 陣列都拿不到」才 raise；個別欄位缺失或格式不對一律降級，是否退回、為什麼退回
     交給 validate_points 決定——退回的判準只有一處，被退回的點也會算進「模型提出的點數」。
     編號不是整數的點，turn 照原值留著（None、"abc"…），validate_points 會以「turn 必須是整數編號」丟掉它。
+    文字欄位不是文字、或是寫不成 UTF-8 的文字，也算格式不對（見 _text）。
     """
     data = _load_json(payload)
     if not isinstance(data, dict) or not isinstance(data.get("slides"), list):
@@ -233,10 +289,9 @@ def parse_conversation_response(payload: str) -> tuple[RawSlide, ...]:
         if not isinstance(raw, dict):
             slides.append(RawSlide(title="", points=()))
             continue
-        title = raw.get("title")
         points = raw.get("points")
         slides.append(RawSlide(
-            title=title if isinstance(title, str) else "",
+            title=_text(raw.get("title")),
             points=tuple(_parse_point(p) for p in points) if isinstance(points, list) else (),
         ))
     return tuple(slides)
@@ -245,17 +300,69 @@ def parse_conversation_response(payload: str) -> tuple[RawSlide, ...]:
 def _parse_point(raw: object) -> RawPoint:
     if not isinstance(raw, dict):
         return RawPoint(turn=cast(int, None), text="")
-    text = raw.get("text")
-    quote = raw.get("quote")
     return RawPoint(
         turn=cast(int, _turn_ref(raw.get("turn"))),     # 不是整數的原值留給 validate_points 退回
-        text=text if isinstance(text, str) else "",
+        text=_text(raw.get("text")),
         context=_context_refs(raw.get("context")),
-        quote=quote if isinstance(quote, str) else "",  # 缺了或不是文字就是空的：validate_points 以 bad_quote 丟掉
+        quote=_text(raw.get("quote")),                  # 缺了或不是文字就是空的：validate_points 以 bad_quote 丟掉
     )
 
 
 # --- HTTP ---
+
+
+class _CallerError(Exception):
+    """呼叫端的 progress 或 is_cancelled 自己出了錯：包起來穿過 _stream_chat，出來再原樣丟回去。
+    那是程式的錯，不是模型的回應壞掉，不能被當成「模型輸出無效」而重問。"""
+
+    def __init__(self, error: Exception):
+        super().__init__(type(error).__name__)
+        self.error = error
+
+
+# _stream_chat 與單人模式共用，只接 JSONDecodeError 與 OSError，這裡不改它。串流裡的壞資料會讓它丟出沒人接的
+# 例外：不是合法 UTF-8 的一行（UnicodeDecodeError）、巢狀太深（RecursionError）、整數位數超過上限（ValueError）、
+# 不是物件的事件或訊息（AttributeError）、不是文字的內容（TypeError）
+_BAD_STREAM_DATA = (UnicodeError, RecursionError, ValueError, AttributeError, TypeError)
+
+
+def _read_reply(host: str, body: dict, timeout: float, progress: ProgressCallback,
+                is_cancelled: CancelCheck | None) -> str:
+    """呼叫 /api/chat、把串流拼成模型的回應。串流裡的壞資料一律是 SummarizerOutputInvalid
+    （訊息只有例外的種類，沒有模型寫的字），summarize_windows 會重問一次。
+
+    不是「模型的回應壞了」的錯不算在內：呼叫端自己的 progress／is_cancelled 出錯（程式的錯）、連線之前的錯
+    （網址寫錯之類，設定的問題）都原樣往上丟；連線在串流中被截斷（http.client 的 IncompleteRead 之類，
+    _stream_chat 只接了 OSError）和連線被重置一樣，是 SummarizerUnavailable。
+    """
+    reading = False
+    failed: Exception | None = None
+
+    def guarded(call, *args):
+        try:
+            return call(*args)
+        except _BAD_STREAM_DATA as e:
+            raise _CallerError(e) from e
+
+    def cancelled() -> bool:
+        nonlocal reading
+        reading = True        # _stream_chat 每收到一行、讀它之前問一次：問過了，就是已經在讀串流
+        return is_cancelled is not None and guarded(is_cancelled)
+
+    try:
+        return ollama_summarizer._stream_chat(
+            host, body, timeout, lambda frac, status: guarded(progress, frac, status), cancelled,
+            "整理對談重點中")
+    except _CallerError as e:
+        failed = e.error                      # 在 except 外面丟：不帶「During handling of…」的包裝
+    except _BAD_STREAM_DATA as e:
+        if not reading:
+            raise
+        raise SummarizerOutputInvalid(f"模型回應的串流資料壞了（{type(e).__name__}）") from e
+    except http.client.HTTPException as e:
+        raise SummarizerUnavailable(
+            f"與 Ollama（{host}）的連線異常中斷，收到的回應不完整：{type(e).__name__}") from e
+    raise failed
 
 
 class OllamaConversationSummarizer:
@@ -303,6 +410,5 @@ class OllamaConversationSummarizer:
                 "temperature": 0.2,     # 要穩定、貼著原話，不要創意
             },
         }
-        reply = ollama_summarizer._stream_chat(
-            self._host, body, self._timeout, progress, is_cancelled, "整理對談重點中")
-        return parse_conversation_response(reply)
+        return parse_conversation_response(
+            _read_reply(self._host, body, self._timeout, progress, is_cancelled))
