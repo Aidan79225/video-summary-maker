@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Sequence
 from typing import TYPE_CHECKING
 
 from .domain.entities import Brief, RawSlide, Settings, Slide
@@ -134,6 +135,7 @@ class CurrentSettingsConversationSummarizer:
         window_text: str,
         first_turn: int,
         last_turn: int,
+        citable_turns: Sequence[int],
         min_slides: int,
         max_slides: int,
         hint: str,
@@ -142,8 +144,8 @@ class CurrentSettingsConversationSummarizer:
     ) -> tuple[RawSlide, ...]:
         s = self._settings
         impl = self._factory(s.ollama_host, s.model, s.num_ctx)
-        return impl.summarize_window(window_text, first_turn, last_turn, min_slides, max_slides,
-                                     hint, progress, is_cancelled)
+        return impl.summarize_window(window_text, first_turn, last_turn, citable_turns, min_slides,
+                                     max_slides, hint, progress, is_cancelled)
 
 
 def build_diarizer() -> PyannoteSpeakerDiarizer:
@@ -155,6 +157,7 @@ def build_usecase(
     settings: Settings,
     diarizer: PyannoteSpeakerDiarizer | None = None,
     chunk_chars: int = DEFAULT_CHUNK_CHARS,
+    quote_only: bool = False,
 ) -> BuildDeckUseCase:
     """組好一條完整的 pipeline。
 
@@ -199,11 +202,12 @@ def build_usecase(
         rewriter=CurrentSettingsSlideRewriter(settings),
         # 停了可以接著做：逐字稿、摘要、摘要卡存在輸出資料夾的 .slidebox_cache/
         checkpoints=JsonCheckpointStore(),
-        # 多人模式（speaker_mode="diarize"）：每個字帶時間的語音辨識、對談重點的摘要器、窗的大小。
-        # 單人與議會的工作完全不經過這三個。
+        # 多人模式（speaker_mode="diarize"）：每個字帶時間的語音辨識、對談重點的摘要器、窗的大小、
+        # 要不要把每個重點都換成核對過的原話（安全模式）。單人與議會的工作完全不經過這四個。
         word_transcriber=transcriber,
         conversation=CurrentSettingsConversationSummarizer(settings),
         chunk_chars=chunk_chars,
+        quote_only=quote_only,
     )
 
 

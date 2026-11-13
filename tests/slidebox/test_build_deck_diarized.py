@@ -5,6 +5,7 @@
 """
 from __future__ import annotations
 
+import dataclasses
 import os
 
 import pytest
@@ -49,6 +50,12 @@ def stored(parts):
     return parts.checkpoints.stages("OUT", URL)
 
 
+def without_counters(report):
+    """沿用存檔時沒有重新檢查，report 裡內部用的計數（原話、丟掉的分類）是空的；其餘都要一樣。"""
+    return dataclasses.replace(report, rescued_points=None, contradicted_points=None,
+                               unverifiable_points=None, anchor_conflicts=None)
+
+
 def bad(turn: int, text: str = "他認為補助應該加倍") -> RawPoint:
     """開頭是代名詞：一定被檢查丟掉。"""
     return RawPoint(turn, text)
@@ -64,7 +71,7 @@ def test_a_diarized_job_publishes_points_attributed_by_the_program():
     deck = result.deck
     by_index = {t.index: t for t in TURNS}
     assert deck.speaker_mode == "diarize" and deck.brief is None
-    assert len(deck.slides) == 1 and len(deck.slides[0].points) == 7
+    assert [len(s.points) for s in deck.slides] == [4, 3]            # 七個重點，每頁最多四個
     for slide in deck.slides:
         for point in slide.points:
             assert point.speaker == by_index[point.turn].speaker
@@ -85,6 +92,8 @@ def test_the_deck_carries_the_speaker_list_the_report_and_the_transcript():
     assert (report.status, report.warnings, report.requested_speakers) == ("ok", (), None)
     assert (report.found_speakers, report.minor_speakers) == (2, 1)
     assert (report.proposed_points, report.kept_points) == (7, 7)
+    assert (report.rescued_points, report.contradicted_points,
+            report.unverifiable_points, report.anchor_conflicts) == (0, 0, 0, 0)
     assert deck.transcript_text == transcript_lines(TURNS)
     assert deck.source_note == diarized_pipeline.SOURCE_NOTE
     assert deck.video_title == CLIP.title
@@ -134,7 +143,7 @@ def test_the_final_status_reports_the_page_count_and_the_source_note():
     seen = []
     run(make(), progress=lambda frac, status: seen.append((frac, status)))
     frac, status = seen[-1]
-    assert frac == 1.0 and status.startswith("完成，共 1 頁") and diarized_pipeline.SOURCE_NOTE in status
+    assert frac == 1.0 and status.startswith("完成，共 2 頁") and diarized_pipeline.SOURCE_NOTE in status
 
 
 def test_the_progress_bar_never_goes_backwards():
@@ -295,7 +304,8 @@ def test_a_rerun_after_the_last_step_failed_reuses_everything_and_downloads_no_a
     assert len(parts.diarizer.calls) == 1 and len(parts.words.calls) == 1
     assert len(parts.conversation.calls) == 2                       # 第一次的兩個窗，第二次一個都沒再問
     fresh = run(make(TWO_WINDOWS))
-    assert result.deck.slides == fresh.deck.slides and result.deck.diarization == fresh.deck.diarization
+    assert result.deck.slides == fresh.deck.slides
+    assert result.deck.diarization == without_counters(fresh.deck.diarization)
     assert result.deck.speakers == fresh.deck.speakers
 
 
@@ -308,7 +318,10 @@ def test_a_resumed_job_reports_the_same_counts_as_a_fresh_one():
     fresh = run(make(conversation=FakeConversation([one_in_five_bad]))).deck.diarization
     resumed = run(parts).deck.diarization
     assert (fresh.proposed_points, fresh.kept_points) == (5, 4)
-    assert resumed == fresh and len(parts.conversation.calls) == 1
+    assert (fresh.rescued_points, fresh.contradicted_points,
+            fresh.unverifiable_points, fresh.anchor_conflicts) == (0, 1, 0, 0)
+    assert resumed == without_counters(fresh) and len(parts.conversation.calls) == 1
+    assert (resumed.rescued_points, resumed.contradicted_points) == (None, None)      # 沒有重新檢查，不亂填
 
 
 CHANGES = [

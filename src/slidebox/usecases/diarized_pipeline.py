@@ -23,6 +23,7 @@ from .conversation import (
     Allocation,
     CheckedSlide,
     ValidationResult,
+    citable_turn_ids,
     format_window,
     render_slide,
     validate_points,
@@ -64,14 +65,15 @@ def words_fingerprint(whisper_model: str, speech_hint: str | None) -> str:
 
 
 def conversation_fingerprint(settings: Settings, chunk_chars: int,
-                             plan: Sequence[tuple[int, int, str]]) -> str:
-    """摘要：模型、頁數範圍、窗的大小、提示版本，以及餵給模型的每個窗（頁數範圍與文字）。
+                             plan: Sequence[tuple[int, int, str]], quote_only: bool = False) -> str:
+    """摘要：模型、頁數範圍、窗的大小、提示版本、是否只顯示原話，以及餵給模型的每個窗（頁數範圍與文字）。
 
     plan 是每個窗的 (min_slides, max_slides, 窗的文字)：說話者區分、語音辨識、對齊或分段變了，
     窗的文字就變了，舊的摘要不會被拿來冒充。detailed 不算：多人模式用不到它。
+    quote_only 算進來：只顯示原話與一般模式留下的重點不同，換了設定就要重做這一步。
     """
     return stage_fingerprint("multi", settings.model, settings.num_ctx, settings.min_slides,
-                             settings.max_slides, chunk_chars, PROMPT_VERSION, list(plan))
+                             settings.max_slides, chunk_chars, PROMPT_VERSION, bool(quote_only), list(plan))
 
 
 # --- 逐窗的摘要 ---
@@ -80,13 +82,24 @@ def conversation_fingerprint(settings: Settings, chunk_chars: int,
 @dataclass(frozen=True)
 class WindowOutcome:
     """一個窗的結果。proposed／kept 是模型提出與通過檢查的重點數；skipped 是整個窗沒有任何
-    主要發言者可以引用，所以沒有送給模型。"""
+    主要發言者可以引用，所以沒有送給模型。
+
+    rescued 是留下的點裡顯示原話的點數；contradicted／unverifiable／slide_rule 是丟掉的點的三類
+    （和 ValidationResult 一樣，proposed − kept 是三類的和）；anchor_conflicts 是 contradicted 裡
+    「內容出自別輪」的點數；dropped_by_code 是每個原因碼丟了幾個。
+    """
     allocation: Allocation
     slides: tuple[CheckedSlide, ...]
     proposed: int
     kept: int
     skipped: bool = False
     trimmed_pages: int = 0
+    rescued: int = 0
+    contradicted: int = 0
+    unverifiable: int = 0
+    slide_rule: int = 0
+    anchor_conflicts: int = 0
+    dropped_by_code: tuple[tuple[str, int], ...] = ()
 
 
 def dropped_ratio(proposed: int, kept: int) -> float:
@@ -106,15 +119,16 @@ def _quality(result: ValidationResult) -> tuple[bool, int, int]:
 def fit_to_range(result: ValidationResult, max_slides: int) -> tuple[ValidationResult, int]:
     """頁數超過這個窗的上限時只留前面幾頁（模型多寫的頁不會送去抓影片片段、截圖）。
 
-    被砍掉的頁不算「被檢查丟掉」：提出與留下的點數都扣掉它們的點，否則多寫幾頁就會被當成歸屬不可靠。
-    回傳（調整後的結果, 被砍掉的頁數）。
+    被砍掉的頁不算「被檢查丟掉」：提出與留下的點數都扣掉它們的點（顯示原話的點也從 rescued 扣掉），
+    否則多寫幾頁就會被當成歸屬不可靠。回傳（調整後的結果, 被砍掉的頁數）。
     """
     if len(result.slides) <= max_slides:
         return result, 0
     cut = result.slides[max_slides:]
     removed = sum(len(s.points) for s in cut)
     return (replace(result, slides=result.slides[:max_slides],
-                    proposed=result.proposed - removed, kept=result.kept - removed),
+                    proposed=result.proposed - removed, kept=result.kept - removed,
+                    rescued=result.rescued - sum(s.rescued for s in cut)),
             len(cut))
 
 
@@ -137,6 +151,7 @@ def summarize_windows(
     progress: ProgressCallback,
     check: Callable[[], None],
     cancelled: CancelCheck,
+    quote_only: bool = False,
 ) -> tuple[WindowOutcome, ...]:
     """一個窗一個窗地問模型、檢查它提出的重點。
 
@@ -145,6 +160,9 @@ def summarize_windows(
     被丟掉的少的，還是一樣就用第一次），再交給整份的比例檢查決定。模型的回應格式壞掉
     （SummarizerOutputInvalid）也算一次；兩次都壞才放棄。連不上模型（SummarizerUnavailable）
     不在這裡處理，原樣往上丟。沒有任何主要發言者可以引用的窗不送給模型（沒有東西可以引用）。
+
+    每次呼叫都把這個窗裡可以引用的 turn 編號交給模型（它的 turn 欄位只能從這裡面選）。
+    quote_only 是安全模式：留下的每個重點都顯示 quote 的原話（見 conversation.validate_points）。
     """
     outcomes: list[WindowOutcome] = []
     total = len(allocations)
@@ -156,6 +174,7 @@ def summarize_windows(
             outcomes.append(WindowOutcome(allocation, (), 0, 0, skipped=True))
             continue
         text = format_window(window, speakers)
+        citable_turns = citable_turn_ids(window, speakers)
 
         def inner(frac: float | None, status: str, number: int = number, where: str = where) -> None:
             progress((number - 1) / total, f"{where}：{status}")
@@ -169,7 +188,7 @@ def summarize_windows(
                      f"整理{where}對談…" if attempt == 1 else f"{where}不合要求，重試一次…")
             try:
                 raw = conversation.summarize_window(
-                    text, window.first_turn, window.last_turn, allocation.min_slides,
+                    text, window.first_turn, window.last_turn, citable_turns, allocation.min_slides,
                     allocation.max_slides, hint, inner, cancelled)
             except SummarizerOutputInvalid as e:
                 if attempt == ATTEMPTS and best is None:
@@ -177,37 +196,97 @@ def summarize_windows(
                         f"{where}的模型輸出重試後仍不符合要求（{e}）。可以試試換一個模型。") from e
                 hint = retry_hint([str(e)])
                 continue
-            result, cut = fit_to_range(validate_points(raw, turns, speakers, window), allocation.max_slides)
+            result, cut = fit_to_range(
+                validate_points(raw, turns, speakers, window, quote_only), allocation.max_slides)
             if best is None or _quality(result) > _quality(best):
                 best, trimmed = result, cut
             if _acceptable(result):
                 break
             hint = retry_hint(result.problems)
         assert best is not None                  # 迴圈裡不是 return 就是 raise 或有結果
-        outcomes.append(WindowOutcome(allocation, best.slides, best.proposed, best.kept,
-                                      trimmed_pages=trimmed))
+        outcomes.append(WindowOutcome(
+            allocation, best.slides, best.proposed, best.kept, trimmed_pages=trimmed,
+            rescued=best.rescued, contradicted=best.contradicted, unverifiable=best.unverifiable,
+            slide_rule=best.slide_rule, anchor_conflicts=best.anchor_conflicts,
+            dropped_by_code=best.dropped_by_code))
     return tuple(outcomes)
 
 
+@dataclass(frozen=True)
+class AttributionCounts:
+    """一份摘要（所有窗加起來）的點數：模型提出幾個、留下幾個、其中幾個顯示原話，丟掉的分三類。
+
+    contradicted：檢查發現文字有問題（數字、否定、問句、稱呼、複述、內容出自別輪…）；
+    unverifiable：查不出來（引文不是某一輪的原文、或內容找不到依據又不能改用原話）；
+    slide_rule：同一頁重複、或那一頁留下的點太少。anchor_conflicts 是 contradicted 裡
+    「內容出自別輪發言，與 quote 所在的輪不一致」的點數。
+    """
+    proposed: int
+    kept: int
+    rescued: int
+    contradicted: int
+    unverifiable: int
+    slide_rule: int
+    anchor_conflicts: int
+
+
+def attribution_counts(outcomes: Sequence[WindowOutcome]) -> AttributionCounts:
+    return AttributionCounts(
+        proposed=sum(o.proposed for o in outcomes), kept=sum(o.kept for o in outcomes),
+        rescued=sum(o.rescued for o in outcomes), contradicted=sum(o.contradicted for o in outcomes),
+        unverifiable=sum(o.unverifiable for o in outcomes), slide_rule=sum(o.slide_rule for o in outcomes),
+        anchor_conflicts=sum(o.anchor_conflicts for o in outcomes))
+
+
+def describe_drops(contradicted: int, unverifiable: int, slide_rule: int, anchor_conflicts: int = 0) -> str:
+    """丟掉的點的分類，給訊息與記錄用；沒有任何分類（手工組的結果）就回傳空字串。"""
+    if not (contradicted or unverifiable or slide_rule):
+        return ""
+    text = f"有問題 {contradicted}、查不出來 {unverifiable}、同頁規則 {slide_rule}"
+    if anchor_conflicts:
+        text += f"；內容出自別輪 {anchor_conflicts}"
+    return text
+
+
+def summary_line(counts: AttributionCounts) -> str:
+    """一份摘要做完後記一行：提出、留下（含顯示原話的）、丟掉與丟掉的分類。"""
+    text = f"對談重點：模型提出 {counts.proposed} 個，留下 {counts.kept} 個"
+    if counts.rescued:
+        text += f"（其中 {counts.rescued} 個直接引用原話）"
+    dropped = counts.proposed - counts.kept
+    if dropped > 0:
+        text += f"；丟掉 {dropped} 個"
+        split = describe_drops(counts.contradicted, counts.unverifiable, counts.slide_rule, counts.anchor_conflicts)
+        if split:
+            text += f"（{split}）"
+    return text
+
+
 def check_reliability(outcomes: Sequence[WindowOutcome]) -> None:
-    """有一段一頁都留不下來、或整份被丟掉的重點太多，就 raise AttributionUnreliable（訊息帶數字）。"""
+    """有一段一頁都留不下來、或整份被丟掉的重點太多，就 raise AttributionUnreliable（訊息帶數字與分類）。"""
     total = len(outcomes)
     for number, outcome in enumerate(outcomes, 1):
         if outcome.skipped or outcome.slides:
             continue
         window = outcome.allocation.window
+        split = describe_drops(outcome.contradicted, outcome.unverifiable, outcome.slide_rule,
+                               outcome.anchor_conflicts)
         raise AttributionUnreliable(
             f"第 {number}/{total} 段對談（T{window.first_turn}–T{window.last_turn}）沒有任何一頁通過程式檢查"
-            f"（模型提出 {outcome.proposed} 個重點、留下 {outcome.kept} 個）；"
-            f"寧可不發佈，也不寫錯是誰說的")
-    proposed, kept = totals(outcomes)
+            f"（模型提出 {outcome.proposed} 個重點、留下 {outcome.kept} 個）"
+            + (f"；丟掉的原因：{split}" if split else "")
+            + "；寧可不發佈，也不寫錯是誰說的")
+    counts = attribution_counts(outcomes)
+    proposed, kept = counts.proposed, counts.kept
     if proposed <= 0:
         raise AttributionUnreliable("沒有任何一段對談整理出重點；不發佈")
     if dropped_ratio(proposed, kept) > MAX_DROPPED_RATIO:
+        split = describe_drops(counts.contradicted, counts.unverifiable, counts.slide_rule, counts.anchor_conflicts)
         raise AttributionUnreliable(
             f"模型提出的 {proposed} 個重點裡，有 {proposed - kept} 個沒有通過程式檢查"
-            f"（{dropped_ratio(proposed, kept):.0%}，上限 {MAX_DROPPED_RATIO:.0%}）；"
-            f"說話者的歸屬不可靠，不發佈")
+            f"（{dropped_ratio(proposed, kept):.0%}，上限 {MAX_DROPPED_RATIO:.0%}）"
+            + (f"；丟掉的原因：{split}" if split else "")
+            + "；說話者的歸屬不可靠，不發佈")
 
 
 def totals(outcomes: Sequence[WindowOutcome]) -> tuple[int, int]:

@@ -151,9 +151,10 @@ def test_the_conversation_forwarder_uses_the_settings_of_the_moment_and_passes_e
     settings.model = "b"                                        # 建好之後換模型：下一個窗就要用新的
     progress, cancelled = (lambda frac, status: None), (lambda: False)
 
-    assert forwarder.summarize_window("[T3] S1：甲", 3, 7, 1, 2, "上次的問題", progress, cancelled) == ("slides",)
+    assert forwarder.summarize_window(
+        "[T3] S1：甲", 3, 7, (3, 5, 7), 1, 2, "上次的問題", progress, cancelled) == ("slides",)
     assert built == [(settings.ollama_host, "b", settings.num_ctx)]
-    assert received == [("[T3] S1：甲", 3, 7, 1, 2, "上次的問題", progress, cancelled)]
+    assert received == [("[T3] S1：甲", 3, 7, (3, 5, 7), 1, 2, "上次的問題", progress, cancelled)]
 
 
 def test_the_pipeline_has_the_multi_speaker_parts_wired_in():

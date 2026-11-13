@@ -21,6 +21,8 @@
     SLIDEBOX_DIARIZATION_DEVICE   說話者區分的裝置：auto（預設）／cpu／cuda；
                                   驅動與映像的 CUDA 版本不合時用 cpu
     SLIDEBOX_CHUNK_CHARS          多人對談切窗的字數預算（1000–20000，預設 6000）
+    SLIDEBOX_QUOTE_ONLY           設成 1／true／yes 開啟「只顯示原話」的安全模式：多人模式留下的
+                                  每個重點都是逐字稿裡核對過的原話，不用模型改寫的字（預設關）
 """
 import os
 import sys
@@ -37,7 +39,12 @@ from slidebox.infrastructure.ollama_summarizer import (
     OllamaFollowUpJudge,
     OllamaTopicClassifier,
 )
-from slidebox.usecases.conversation import CHUNK_CHARS_ENV, parse_chunk_chars
+from slidebox.usecases.conversation import (
+    CHUNK_CHARS_ENV,
+    QUOTE_ONLY_ENV,
+    parse_chunk_chars,
+    parse_quote_only,
+)
 from slidebox_api.app import create_app
 from slidebox_api.jobs import JobKind, JobStore
 from slidebox_api.runner import (
@@ -93,8 +100,9 @@ def build_executor(settings: Settings) -> ByKindExecutor:
     # VRAM，每個工作重建一次等於每次重付。
     diarizer = build_diarizer()
     chunk_chars = parse_chunk_chars(os.environ.get(CHUNK_CHARS_ENV))
+    quote_only = parse_quote_only(os.environ.get(QUOTE_ONLY_ENV))
     deck = SlideboxExecutor(
-        build_usecase(settings, diarizer=diarizer, chunk_chars=chunk_chars), settings)
+        build_usecase(settings, diarizer=diarizer, chunk_chars=chunk_chars, quote_only=quote_only), settings)
     # 分類器的 host、num_ctx 與預設模型在這裡就取值定下來：SlideboxExecutor 會
     # 把摘要工作指定的模型寫進共用的 settings，分類不能跟著它變。num_ctx 跟
     # 摘要同一個，Ollama 才不會在兩種工作之間重新載入模型。

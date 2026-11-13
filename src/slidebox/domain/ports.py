@@ -306,6 +306,7 @@ class ConversationSummarizer(Protocol):
         window_text: str,
         first_turn: int,
         last_turn: int,
+        citable_turns: Sequence[int],
         min_slides: int,
         max_slides: int,
         hint: str,
@@ -314,8 +315,14 @@ class ConversationSummarizer(Protocol):
     ) -> tuple[RawSlide, ...]:
         """window_text 是 format_window() 的產出（`[T12] S1：…` 一行一段話）。
 
+        citable_turns 是這個窗裡可以引用的 turn 編號（說話者是主要發言者的那些；其他聲音與無法判斷
+        的段落不在裡面，它們在 window_text 裡標成 X）。實作要把它做成 schema 裡 turn 的列舉
+        （conversation_schema），模型想引用 X 也寫不出來；不可以是空的（沒有可以引用的段落就不該
+        送出這個窗，use case 會略過它）。
+
         回傳的重點只能引用 first_turn..last_turn 之間的編號；超出的由程式檢查丟掉，
-        這裡不必信任也不必過濾。hint 非空時是上一次被程式檢查退回的原因。
+        這裡不必信任也不必過濾。hint 非空時是上一次被程式檢查退回的原因。每個點的 quote 是模型
+        照抄的原文，由程式核對（說話者是 quote 所在那一輪的說話者）。
 
         回應不是合法的結構時 raise SummarizerOutputInvalid；連不上模型時 raise
         SummarizerUnavailable。取消的規則與 Summarizer 相同。

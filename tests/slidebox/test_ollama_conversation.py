@@ -4,19 +4,24 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import re
 import urllib.error
 
 import pytest
 
-from slidebox.domain.entities import RawPoint, RawSlide
+from slidebox.domain.entities import RawPoint, RawSlide, Turn
 from slidebox.domain.errors import OperationCancelled, SummarizerOutputInvalid, SummarizerUnavailable
 from slidebox.infrastructure import ollama_conversation as mod
 from slidebox.infrastructure import ollama_summarizer
 from slidebox.usecases import conversation as conv
+from slidebox.usecases.names import detect_names
+from slidebox.usecases.quotes import locate_quote
 
-from .conversation_support import at, run
+from .conversation_support import SPEAKERS, TURNS, WHOLE, at, run
+from .speaker_fixtures import make_speakers
 
 WINDOW_TEXT = "[T3] S1：今天我們來談少子化。\n[T4] S2：現金補助有幫助。"
+CITABLE = (3, 4)
 
 
 class FakeResponse:
@@ -49,8 +54,8 @@ def _reply(*slides) -> str:
 
 
 GOOD_REPLY = _reply({"title": "補助政策", "points": [
-    {"turn": 3, "text": "詢問目前補助政策的看法", "context": []},
-    {"turn": 4, "text": "現金補助有幫助", "context": []},
+    {"quote": "今天我們來談少子化", "turn": 3, "text": "詢問目前補助政策的看法", "context": []},
+    {"quote": "現金補助有幫助", "turn": 4, "text": "現金補助有幫助", "context": []},
 ]})
 
 
@@ -69,10 +74,11 @@ def sent(monkeypatch):
 
 
 def _summarize(hint="", is_cancelled=None, num_ctx=32768, host="http://gpu:11434/", progress=None,
-               min_slides=2, max_slides=4):
+               min_slides=2, max_slides=4, citable=CITABLE):
     summarizer = mod.OllamaConversationSummarizer(host, "qwen3.5:9b", num_ctx)
     return summarizer.summarize_window(
-        WINDOW_TEXT, 3, 4, min_slides, max_slides, hint, progress or (lambda frac, status: None), is_cancelled)
+        WINDOW_TEXT, 3, 4, citable, min_slides, max_slides, hint, progress or (lambda frac, status: None),
+        is_cancelled)
 
 
 # --- 提示：不洩漏任何身分，只有該給的東西 ---
@@ -80,19 +86,26 @@ def _summarize(hint="", is_cancelled=None, num_ctx=32768, host="http://gpu:11434
 
 FORBIDDEN_IN_THE_PROMPT = (
     "講者", "發言者", "說話者", "主持人", "來賓", "嘉賓", "受訪者", "被訪者", "與談人", "提問者", "回答者",
-    "委員", "部長", "院長", "市長", "議員", "局長", "總統", "教授", "老師", "先生", "小姐", "女士",
+    "委員", "部長", "院長", "市長", "議員", "局長", "總統", "教授", "老師", "先生", "小姐", "女士", "主任",
     "頻道", "影片標題", "影片說明",       # 「投影片」是提示裡正常的用語，所以不能只擋「影片」
 )
+# 提示裡唯一的稱謂：一個虛構的「王主任」，用來教模型「逐字稿裡的稱呼一個都不要寫」。規則裡一次、範例裡一次，不多不少
+ALLOWED_NAME = "王主任"
 
 
-def test_the_system_prompt_has_no_role_words_names_or_titles():
+def test_the_system_prompt_has_no_role_words_names_or_titles_except_the_one_made_up_example():
     """攔的 bug：提示裡出現「講者」「主持人」之類的字，模型就學著這樣稱呼——而誰說了什麼是程式決定的，
-    不是模型。姓名與職稱更不能出現：模型看不到它們，也就不可能猜。"""
+    不是模型。姓名與職稱更不能出現：模型看不到它們，也就不可能猜。唯一的例外是虛構的「王主任」，
+    而且只能出現兩次（規則一次、範例一次）；除去這兩處，檢查器禁用的稱呼與找得出來的稱謂一個都不能有。"""
     prompt = mod.conversation_system_prompt()
+    assert prompt.count(ALLOWED_NAME) == 2
+    rest = prompt.replace(ALLOWED_NAME, "")
     for word in FORBIDDEN_IN_THE_PROMPT:
-        assert word not in prompt, word
+        assert word not in rest, word
     for word in conv._LABEL_WORDS:            # 檢查器禁用的稱呼，提示裡也一個都不能有
-        assert word not in prompt, word
+        assert word not in rest, word
+    assert detect_names(rest) == frozenset()
+    assert detect_names(prompt) == {ALLOWED_NAME}
 
 
 def test_the_system_prompt_states_every_rule_the_model_must_follow():
@@ -100,15 +113,20 @@ def test_the_system_prompt_states_every_rule_the_model_must_follow():
     for rule in (
         "turn",                       # 引用編號
         "context",                    # 很短的回答要附上文
-        "不帶主詞",                    # 沒有主詞的短句
-        "「他」「她」「對方」",         # 不用代名詞
-        "第一人稱",                    # 不用第一人稱
-        "問題和回答不要合併",           # 一個重點一位說話者
-        "「詢問…」「追問…」",           # 問句寫成詢問
-        "複述對方說過的話",             # 複述不算複述者的主張
-        "逐字照抄",                    # 引文要逐字
-        "指定範圍內的編號",             # 只能引用範圍內的編號
-        "只輸出 JSON",
+        "先從逐字稿裡「照抄」一小段原文放進 quote",       # 先抄原文，再填編號，最後才寫 text
+        "連續、逐字的一段",              # quote 要連續、逐字
+        "不可以跨輪",                   # quote 不可以接兩輪
+        "整輪都不到 8 個字，就整輪照抄",   # 很短的一輪整輪抄
+        "誰說的，由程式根據你引用的 turn 自己標上",  # 說話者是程式查的
+        "不是 X 的編號",                # 只能引用範圍內、不是 X 的編號
+        "一個重點只寫 quote 所在那一輪",  # 一個重點一輪
+        "沒有主詞的短句",                # 不帶主詞
+        "不用代名詞",                   # 不用代名詞
+        "不用第一人稱",                  # 不用第一人稱
+        "問題和回答是不同人說的",          # 一個重點一位說話者
+        "「詢問…」「追問…」",            # 問句寫成詢問
+        "複述前面別人剛說過的話",          # 複述不算複述者的主張
+        "只輸出一個 JSON 物件",
         "繁體中文",
     ):
         assert rule in prompt, rule
@@ -117,14 +135,14 @@ def test_the_system_prompt_states_every_rule_the_model_must_follow():
 def test_the_user_prompt_has_only_the_range_the_lines_and_the_hint():
     """攔的 bug：使用者訊息夾帶影片標題、頻道、說明或總長度——模型看到姓名與職稱就會把它們寫進重點。"""
     assert mod.conversation_user_prompt(WINDOW_TEXT, 3, 4, 2, 4) == (
-        "請整理成 2 到 4 頁投影片。\n\n"
-        "只能引用編號 T3 到 T4 的話。\n\n"
-        "以下是對談：\n" + WINDOW_TEXT)
+        "這個片段的發言編號是 T3 到 T4，turn 只能填 3 到 4 之間的整數。\n"
+        "請整理成 2 到 4 頁。\n\n"
+        "以下是逐字稿：\n" + WINDOW_TEXT + "\n")                  # 以換行結尾：和實驗送出的請求逐字相同
     assert mod.conversation_user_prompt(WINDOW_TEXT, 3, 4, 2, 4, "上次被退回的原因：…") == (
-        "請整理成 2 到 4 頁投影片。\n\n"
-        "只能引用編號 T3 到 T4 的話。\n\n"
+        "這個片段的發言編號是 T3 到 T4，turn 只能填 3 到 4 之間的整數。\n"
+        "請整理成 2 到 4 頁。\n\n"
         "上次被退回的原因：…\n\n"
-        "以下是對談：\n" + WINDOW_TEXT)
+        "以下是逐字稿：\n" + WINDOW_TEXT + "\n")
 
 
 def test_the_request_carries_nothing_but_the_prompts(sent):
@@ -152,7 +170,47 @@ def test_prompt_schema_and_sampling_are_pinned_to_the_prompt_version(sent):
         [body["messages"][0]["content"], body["format"], body["options"]["temperature"], body["think"]],
         ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()
     assert (conv.PROMPT_VERSION, digest) == (
-        1, "416035d30d8329bfe6c18242f604803046332f68f0b129cd39fdbe183ad97106")
+        2, "413f7b23c2554506af0cb482cb880166eaffcb91c43261e01c1dfe0b12dcf394")
+
+
+def _prompt_example():
+    """提示裡的範例：逐字稿（照 format_window 的樣子）與範例的輸出。"""
+    example = mod.conversation_system_prompt().split("【範例】\n", 1)[1]
+    transcript, output = example.split("輸出：\n", 1)
+    turns = []
+    for line in transcript.split("逐字稿：\n", 1)[1].splitlines():
+        match = re.match(r"\[T(\d+)\] (S\d+|X)：(.*)$", line)
+        index = int(match.group(1))
+        turns.append(Turn(index, index * 10.0, index * 10.0 + 9.0, "S0" if match.group(2) == "X" else match.group(2),
+                          match.group(3)))
+    return tuple(turns), mod.parse_conversation_response(output.strip())
+
+
+def test_every_quote_in_the_prompt_example_is_found_by_the_quote_check_except_the_one_character_answer():
+    """攔的 bug：提示的範例和檢查脫節——範例教模型這樣抄，檢查卻不收。唯一的例外是單字的「對」：
+    太短，一定核對不過（提示照做過實驗的原樣保留，所以這一點一定會被丟掉；丟掉是安全的方向）。"""
+    turns, slides = _prompt_example()
+    by_index = {t.index: t for t in turns}
+    citable = conv.citable_ids(make_speakers("participant", "participant", "participant"))
+    points = [p for s in slides for p in s.points]
+
+    results = [(p, locate_quote(p.quote, by_index[p.turn], turns, citable)) for p in points]
+
+    assert len(points) == 8
+    assert [p.quote for p, found in results if found.turn is None] == ["對"]
+    assert all(found.turn.index == p.turn for p, found in results if found.turn is not None)
+    assert "太短" in next(found.problem for _, found in results if found.turn is None)
+
+
+def test_the_example_in_the_prompt_follows_the_text_rules_it_teaches():
+    turns, slides = _prompt_example()
+    names = detect_names("\n".join(t.text for t in turns))
+
+    assert names == {ALLOWED_NAME}                      # 範例的逐字稿裡有稱謂，所以範例的重點更要示範不寫它
+    for point in (p for s in slides for p in s.points):
+        assert conv._text_problem(point.text) is None, point.text
+        assert conv._name_problem(point.text, names) is None, point.text
+    assert all(conv._title_problem(s.title) is None for s in slides)
 
 
 # --- 請求本身 ---
@@ -180,9 +238,12 @@ def test_the_context_size_is_the_one_it_was_given(sent):
     assert sent["body"]["options"]["num_ctx"] == 16384
 
 
-def test_the_format_is_the_conversation_schema(sent):
+def test_the_format_is_the_conversation_schema_for_the_citable_turns_of_the_window(sent):
     _summarize()
-    assert sent["body"]["format"] == mod.conversation_schema()
+    assert sent["body"]["format"] == mod.conversation_schema(CITABLE)
+    _summarize(citable=(4, 9, 3))
+    assert sent["body"]["format"]["properties"]["slides"]["items"]["properties"]["points"]["items"][
+        "properties"]["turn"]["enum"] == [3, 4, 9]
 
 
 def test_the_timeout_is_ten_minutes_by_default(sent):
@@ -199,15 +260,55 @@ def test_progress_is_reported_while_the_answer_streams(sent):
 # --- schema ---
 
 
-def test_the_schema_requires_every_field_and_types_the_turn_as_an_integer():
-    schema = mod.conversation_schema()
+def _point_schema(citable):
+    schema = mod.conversation_schema(citable)
     slide = schema["properties"]["slides"]["items"]
-    point = slide["properties"]["points"]["items"]
+    return schema, slide, slide["properties"]["points"]["items"]
+
+
+def test_the_schema_requires_every_field_and_limits_the_turn_to_the_citable_ones():
+    schema, slide, point = _point_schema((4, 3))
     assert schema["required"] == ["slides"]
     assert slide["required"] == ["title", "points"]
-    assert point["required"] == ["turn", "text", "context"]
-    assert point["properties"]["turn"] == {"type": "integer"}
+    assert point["required"] == ["quote", "turn", "text", "context"]
+    assert point["properties"]["quote"] == {"type": "string"}
+    assert point["properties"]["turn"] == {"type": "integer", "enum": [3, 4]}
     assert point["properties"]["context"] == {"type": "array", "items": {"type": "integer"}}
+
+
+def test_the_schema_lists_the_fields_in_the_order_the_model_writes_them():
+    """欄位的順序就是輸出的順序：先照抄原文（quote），再填編號，最後才寫重點。"""
+    _, _, point = _point_schema((3,))
+    assert list(point["properties"]) == ["quote", "turn", "text", "context"]
+
+
+def test_the_turn_enum_is_sorted_and_has_no_repeats():
+    _, _, point = _point_schema([9, 3, 3, 5, 9])
+    assert point["properties"]["turn"]["enum"] == [3, 5, 9]
+
+
+def test_a_window_with_exactly_one_citable_turn_has_a_one_value_enum():
+    _, _, point = _point_schema((7,))
+    assert point["properties"]["turn"]["enum"] == [7]
+
+
+def test_thousands_of_citable_turns_all_go_into_the_enum():
+    turns = list(range(10_000, 13_000))[::-1]
+    _, _, point = _point_schema(turns)
+    assert point["properties"]["turn"]["enum"] == sorted(turns) and len(turns) == 3000
+
+
+@pytest.mark.parametrize("bad", [[], (), [1, True], [1, "2"], [1, 2.0], [None]])
+def test_turns_that_cannot_be_a_grammar_are_a_programming_error(bad):
+    """沒有任何可以引用的 turn：空的 enum 是無解的文法，Ollama 會卡住或亂回——送來就是程式錯了。"""
+    with pytest.raises(ValueError):
+        mod.conversation_schema(bad)
+
+
+def test_a_window_with_no_citable_turn_is_never_sent(sent):
+    with pytest.raises(ValueError):
+        _summarize(citable=())
+    assert "url" not in sent and "body" not in sent
 
 
 # --- 回應解析 ---
@@ -216,16 +317,37 @@ def test_the_schema_requires_every_field_and_types_the_turn_as_an_integer():
 def test_a_well_formed_reply_becomes_raw_slides(sent):
     assert _summarize() == (
         RawSlide("補助政策", (
-            RawPoint(3, "詢問目前補助政策的看法", ()),
-            RawPoint(4, "現金補助有幫助", ()),
+            RawPoint(3, "詢問目前補助政策的看法", (), "今天我們來談少子化"),
+            RawPoint(4, "現金補助有幫助", (), "現金補助有幫助"),
         )),
     )
 
 
 def test_context_turns_are_carried_to_the_raw_point():
     slides = mod.parse_conversation_response(_reply(
-        {"title": "t", "points": [{"turn": 7, "text": "同意補助要加倍", "context": [5, 6]}]}))
-    assert slides[0].points[0] == RawPoint(7, "同意補助要加倍", (5, 6))
+        {"title": "t", "points": [{"quote": "沒錯", "turn": 7, "text": "同意補助要加倍", "context": [5, 6]}]}))
+    assert slides[0].points[0] == RawPoint(7, "同意補助要加倍", (5, 6), "沒錯")
+
+
+def test_the_quote_is_carried_to_the_raw_point_untouched():
+    quote = " 名額不夠，  很多家長排不到 "
+    slides = mod.parse_conversation_response(_reply(
+        {"title": "t", "points": [{"quote": quote, "turn": 7, "text": "x", "context": []}]}))
+    assert slides[0].points[0].quote == quote                # 整理空白、標點是核對的事，不是剖析的事
+
+
+@pytest.mark.parametrize("given", [None, 5, ["名額不夠"], {"q": 1}, True])
+def test_a_missing_or_non_text_quote_becomes_an_empty_one_that_the_checks_reject(given):
+    point = {"turn": 0, "text": "詢問目前補助政策的看法", "context": []}
+    if given is not None:
+        point["quote"] = given
+    slides = mod.parse_conversation_response(_reply({"title": "補助與托育", "points": [point]}))
+    assert slides[0].points[0].quote == ""
+
+    result = conv.validate_points(slides, TURNS, SPEAKERS, WHOLE)
+
+    assert (result.proposed, result.kept, result.unverifiable) == (1, 0, 1)      # 算進提出的點數、算在查不出來
+    assert "quote 是空的" in result.problems[0]
 
 
 @pytest.mark.parametrize("wrap", [
@@ -289,9 +411,9 @@ def test_malformed_pieces_degrade_instead_of_failing_the_whole_reply():
     assert slides[1] == RawSlide("", ())
     points = slides[2].points
     assert len(points) == 3                                  # 每個被提出的點都留著，才算得進「提出的點數」
-    assert points[0] == RawPoint(None, "", ())
-    assert points[1] == RawPoint(3, "", ())
-    assert points[2] == RawPoint(None, "沒有 turn", ())
+    assert points[0] == RawPoint(None, "", (), "")
+    assert points[1] == RawPoint(3, "", (), "")
+    assert points[2] == RawPoint(None, "沒有 turn", (), "")
 
 
 @pytest.mark.parametrize("given,expected", [

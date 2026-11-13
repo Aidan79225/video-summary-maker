@@ -60,12 +60,13 @@ from .chapters import (
 from .conversation import DEFAULT_CHUNK_CHARS, allocate_slides, chunk_turns, format_window
 from .diarized_pipeline import (
     assemble,
+    attribution_counts,
     check_reliability,
     conversation_fingerprint,
     diarization_fingerprint,
     source_note,
     summarize_windows,
-    totals,
+    summary_line,
     words_fingerprint,
 )
 from .naming import deck_folder_name
@@ -123,6 +124,7 @@ class BuildDeckUseCase:
         word_transcriber: WordTranscriber | None = None,
         conversation: ConversationSummarizer | None = None,
         chunk_chars: int = DEFAULT_CHUNK_CHARS,
+        quote_only: bool = False,
     ):
         # 做完的貴步驟存起來，停了可以接著做；None 時每次都從頭來（測試多半這樣用）
         self._checkpoints = checkpoints
@@ -130,6 +132,8 @@ class BuildDeckUseCase:
         self._word_transcriber = word_transcriber
         self._conversation = conversation
         self._chunk_chars = chunk_chars
+        # 安全模式（SLIDEBOX_QUOTE_ONLY）：多人模式留下的每個重點都顯示被核對過的原話
+        self._quote_only = quote_only
         self._audio = audio
         self._transcriber = transcriber
         self._diarizer = diarizer
@@ -291,18 +295,21 @@ class BuildDeckUseCase:
         allocations = allocate_slides(
             chunk_turns(turns, speakers, self._chunk_chars), settings.min_slides, settings.max_slides)
         plan = [(a.min_slides, a.max_slides, format_window(a.window, speakers)) for a in allocations]
-        conversation_fp = conversation_fingerprint(settings, self._chunk_chars, plan)
+        conversation_fp = conversation_fingerprint(settings, self._chunk_chars, plan, self._quote_only)
         saved = ck.load_conversation(settings.output_dir, url, conversation_fp) if ck else None
+        counts = None
         if saved is not None:
             slides, proposed = saved
             cb(_P_SUMMARY, "沿用上次整理好的對談重點")
         else:
             outcomes = summarize_windows(
                 self._conversation, allocations, turns, speakers,
-                self._scaled(cb, _P_SUBTITLES, _P_SUMMARY), check, cancelled)
+                self._scaled(cb, _P_SUBTITLES, _P_SUMMARY), check, cancelled, self._quote_only)
+            counts = attribution_counts(outcomes)
+            cb(None, summary_line(counts))               # 提出／留下／原話／丟掉的分類，記在工作的進度紀錄裡
             check_reliability(outcomes)
             slides = assemble(outcomes)
-            proposed = totals(outcomes)[0]
+            proposed = counts.proposed
             trimmed = sum(o.trimmed_pages for o in outcomes)
             if trimmed:
                 cb(None, f"有 {trimmed} 頁超出頁數上限，只留前面的頁")
@@ -310,6 +317,9 @@ class BuildDeckUseCase:
                 ck.save_conversation(settings.output_dir, url, conversation_fp, slides, proposed)
         report = replace(report, proposed_points=proposed,
                          kept_points=sum(len(s.points) for s in slides))
+        if counts is not None:                           # 沿用存檔時沒有重新檢查，這幾個數字留空
+            report = replace(report, rescued_points=counts.rescued, contradicted_points=counts.contradicted,
+                             unverifiable_points=counts.unverifiable, anchor_conflicts=counts.anchor_conflicts)
 
         return self._publish(
             url, settings, cb, check, cancelled, video_title=words.title, video_id=words.video_id,

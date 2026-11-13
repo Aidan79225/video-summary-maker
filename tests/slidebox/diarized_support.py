@@ -11,6 +11,7 @@ from types import SimpleNamespace
 from slidebox.domain.entities import AudioClip, DiarizerOutput, RawPoint, RawSlide, Settings
 from slidebox.domain.errors import OperationCancelled
 from slidebox.usecases.build_deck import BuildDeckUseCase
+from slidebox.usecases.conversation import MAX_BULLETS
 
 from .conversation_support import SPEAKERS, TURNS, at
 from .fakes import (
@@ -41,25 +42,35 @@ def settings(**overrides) -> Settings:
     return Settings(**values)
 
 
-# 每一筆是（那一段話的開頭, 通過檢查的重點）。重點的文字刻意不用「我們」「他」之類的字。
+# 每一筆是（那一段話的開頭, 通過檢查的重點, 照抄的原文 quote）。重點的文字刻意不用「我們」「他」之類的字。
 POOL = (
-    ("今天我們", "詢問目前補助政策的看法"),
-    ("現金補助", "現金補助有幫助，但托育資源更重要"),
-    ("那公共托育", "詢問公共托育現在有什麼不足"),
-    ("名額不夠，很多", "名額不夠，家長排了兩年沒有消息"),
-    ("謝謝邱委員", "詢問預算要怎麼編才夠"),
-    ("預算大約", "預算大約要三千億，比去年多了兩成"),
-    ("我想說的是", "主張公共托育一定要先做"),
+    ("今天我們", "詢問目前補助政策的看法", "先請教您怎麼看目前的補助政策"),
+    ("現金補助", "現金補助有幫助，但托育資源更重要", "現金補助有幫助，但不能只靠現金"),
+    ("那公共托育", "詢問公共托育現在有什麼不足", "那公共托育現在有什麼不足"),
+    ("名額不夠，很多", "名額不夠，家長排了兩年沒有消息", "名額不夠，很多家長排不到，排了兩年也沒有消息"),
+    ("謝謝邱委員", "詢問預算要怎麼編才夠", "那預算要怎麼編才夠"),
+    ("預算大約", "預算大約要三千億，比去年多了兩成", "預算大約要三千億，比去年多了兩成"),
+    ("我想說的是", "主張公共托育一定要先做", "公共托育一定要先做"),
 )
 
 
 def good_points(first: int = 0, last: int = 10**6) -> tuple[RawPoint, ...]:
-    return tuple(RawPoint(at(prefix), text) for prefix, text in POOL if first <= at(prefix) <= last)
+    return tuple(RawPoint(at(prefix), text, quote=quote)
+                 for prefix, text, quote in POOL if first <= at(prefix) <= last)
 
 
 def good_reply(call) -> tuple[RawSlide, ...]:
-    """這個窗裡所有通過檢查的重點，放在一頁。"""
-    return (RawSlide("補助與托育", good_points(call.first_turn, call.last_turn)),)
+    """這個窗裡所有通過檢查的重點。每頁最多 MAX_BULLETS 個（超過的點檢查會在計數前扣掉），
+    點數盡量平均分在幾頁裡：7 個分成 4＋3，5 個分成 3＋2。"""
+    points = good_points(call.first_turn, call.last_turn)
+    pages = max(1, -(-len(points) // MAX_BULLETS))
+    base, extra = divmod(len(points), pages)
+    slides, start = [], 0
+    for page in range(pages):
+        size = base + (1 if page < extra else 0)
+        slides.append(RawSlide("補助與托育", points[start:start + size]))
+        start += size
+    return tuple(slides)
 
 
 class FakeDiarizer:
@@ -136,10 +147,11 @@ class FakeConversation:
         self.calls: list[SimpleNamespace] = []
         self.saw_cancel = False
 
-    def summarize_window(self, window_text, first_turn, last_turn, min_slides, max_slides, hint,
-                         progress, is_cancelled=None):
+    def summarize_window(self, window_text, first_turn, last_turn, citable_turns, min_slides, max_slides,
+                         hint, progress, is_cancelled=None):
         call = SimpleNamespace(window_text=window_text, first_turn=first_turn, last_turn=last_turn,
-                               min_slides=min_slides, max_slides=max_slides, hint=hint)
+                               citable_turns=tuple(citable_turns), min_slides=min_slides,
+                               max_slides=max_slides, hint=hint)
         self.calls.append(call)
         progress(None, "生成中")
         if self._on_call is not None:

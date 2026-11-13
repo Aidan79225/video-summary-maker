@@ -136,6 +136,16 @@ class DiarizationReport:
     # 模型提出的重點數，與通過程式檢查而留下來的重點數
     proposed_points: int = 0
     kept_points: int = 0
+    # 下面四個只給記錄與 AttributionUnreliable 的訊息看，**不在 API 契約裡**（payload 不輸出）。
+    # None = 這次沒有重新檢查（沿用上次存的對談重點），不是 0。
+    # rescued_points：留下的點裡，改用「原話」代替模型改寫的點數（見 usecases/conversation.py 的混合條列）
+    rescued_points: int | None = None
+    # contradicted_points：程式檢查發現文字有問題而丟掉的點數（數字、問句、複述、姓名、代名詞…）
+    contradicted_points: int | None = None
+    # unverifiable_points：無法核對出處而丟掉的點數（引文不在任何一輪、內容找不到依據又不能改用原話）
+    unverifiable_points: int | None = None
+    # anchor_conflicts：其中內容出自 quote 所在那一輪以外的點數（contradicted_points 的一部分）
+    anchor_conflicts: int | None = None
 
 
 @dataclass(frozen=True)
@@ -157,10 +167,13 @@ class RawPoint:
     """模型回傳、尚未檢查的重點：只有它引用的 turn 編號，沒有說話者。
 
     context 是回答很短（對、不是）時，模型補充的上文 turn 編號。
+    quote 是模型從逐字稿「照抄」的一小段原文（先抄、再填 turn、最後才寫 text）：程式拿它找出
+    真正說這段話的那一輪，說話者就是那一輪的說話者。預設空字串（沒有引文的點無法核對，會被丟掉）。
     """
     turn: int
     text: str
     context: tuple[int, ...] = ()
+    quote: str = ""
 
 
 @dataclass(frozen=True)

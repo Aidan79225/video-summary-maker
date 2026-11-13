@@ -288,26 +288,42 @@ def test_other_voices_and_undecidable_turns_cannot_be_cited():
         assert "不能引用" in problems_of(result)
 
 
-def test_a_wrong_cited_turn_next_door_is_corrected_to_the_turn_that_really_says_it():
-    extra, result = run(RawPoint(at("謝謝邱委員"), "預算大約要三千億，比去年多了兩成"))
+def test_a_wrong_cited_turn_is_corrected_to_the_one_turn_that_holds_the_quote():
+    said = "預算大約要三千億，比去年多了兩成"
+
+    extra, result = run(RawPoint(at("謝謝邱委員"), said, quote=said))
 
     assert [(p.speaker, p.turn) for p in extra] == [("S2", at("預算大約"))]
-    assert f"已改引內容符合的 T{at('預算大約')}" in problems_of(result)
+    assert f"已改引有這段原文的 T{at('預算大約')}" in problems_of(result)
 
 
-def test_a_cited_turn_too_far_from_the_real_one_is_dropped():
-    extra, result = run(RawPoint(at("今天我們"), "預算大約要三千億，比去年多了兩成"))
+def test_a_cited_turn_far_from_the_real_one_is_corrected_too_because_the_quote_decides():
+    said = "預算大約要三千億，比去年多了兩成"
 
-    assert extra == [] and "找不到依據" in problems_of(result)
+    extra, _ = run(RawPoint(at("今天我們"), said, quote=said))
+
+    assert [(p.speaker, p.turn) for p in extra] == [("S2", at("預算大約"))]
+
+
+def test_a_claim_the_quoted_turn_does_not_say_is_shown_as_the_quote_never_as_written():
+    quote = "先請教您怎麼看目前的補助政策"
+
+    extra, result = run(RawPoint(at("今天我們"), "預算大約要三千億，比去年多了兩成", quote=quote))
+
+    assert [(p.speaker, p.turn, p.text) for p in extra] == [("S1", 0, f"「{quote}」")]
+    assert result.rescued == 1 and result.unverifiable == 0 and "預算" not in extra[0].text
 
 
 def test_turns_of_two_speakers_that_fit_equally_well_cannot_be_told_apart():
     turns, good = with_anchors(("S1", "托育名額不夠，家長排不到。"), ("S2", "托育名額不夠，家長排不到。"),
                                ("S1", "謝謝大家今天的參與。"))
 
-    extra, result = run(RawPoint(2, "托育名額不夠，家長排不到"), turns=turns, speakers=TWO, good=good)
+    # quote 在 T2，內容卻只有 T0、T1 說過，而且兩位說話者一樣符合：不能猜是誰
+    extra, result = run(RawPoint(2, "托育名額不夠，家長排不到", quote="謝謝大家今天的參與"),
+                        turns=turns, speakers=TWO, good=good)
 
     assert extra == [] and "無法確定是誰說的" in problems_of(result)
+    assert result.contradicted == 1 and result.anchor_conflicts == 0
 
 
 def test_a_cited_turn_that_ties_with_its_confirmation_still_counts_for_the_speaker_who_said_it():
@@ -384,10 +400,22 @@ def test_text_too_short_or_too_long_is_rejected():
 # --- 重點檢查：內容要有依據 ---
 
 
-def test_a_claim_that_the_conversation_never_said_is_rejected():
+def test_a_claim_that_the_conversation_never_said_is_never_shown_as_written():
     extra, result = run(RawPoint(at("名額不夠"), "宣布將立法禁止外送平台"))
 
-    assert extra == [] and "找不到依據" in problems_of(result)
+    # 模型寫的字不會出現；頂多改顯示那一輪裡照抄的原話（說話者不變）
+    assert [(p.speaker, p.turn) for p in extra] == [("S2", at("名額不夠"))]
+    assert extra[0].text.startswith("「名額不夠") and "外送" not in extra[0].text
+    assert result.rescued == 1
+
+
+def test_a_claim_nobody_said_is_dropped_when_the_quote_cannot_stand_alone_either():
+    turns, good = with_anchors(("S2", "他們說名額不夠，很多家長排不到，排了兩年也沒有消息。"), ("S1", "謝謝您的說明。"))
+
+    extra, result = run(RawPoint(0, "宣布將立法禁止外送平台"), turns=turns, speakers=TWO, good=good)
+
+    assert extra == [] and result.rescued == 0 and result.unverifiable == 1
+    assert "找不到依據" in problems_of(result) and "也不能改用原話" in problems_of(result)
 
 
 def test_a_wrong_number_is_rejected_and_the_right_one_is_kept():
@@ -428,23 +456,38 @@ def test_a_statement_inside_a_turn_that_also_asks_something_is_not_treated_as_a_
 # --- 重點檢查：很短的回答 ---
 
 
+def answer_turns(answer="沒錯。"):
+    """一句不相干的話、一個問題、一個很短的回答（編號 0、1、2），後面再接兩段讓那一頁留得住的話。"""
+    return with_anchors(("S1", "今天天氣很好，我們來談別的事情。"), ("S1", "是不是還要提高保母的薪資？"), ("S2", answer))
+
+
 def test_a_one_word_answer_needs_the_question_it_answers_as_context():
-    answer = at("對。")
-    question = answer - 1
+    turns, good = answer_turns()
+    claim = "同意還要提高保母的薪資"
 
-    with_context, _ = run(RawPoint(answer, "同意還要提高保母的薪資", context=(question,)))
-    no_context, bare = run(RawPoint(answer, "同意還要提高保母的薪資"))
-    wrong_context, _ = run(RawPoint(answer, "同意還要提高保母的薪資", context=(0,)))
+    with_context, _ = run(RawPoint(2, claim, context=(1,)), turns=turns, speakers=TWO, good=good)
+    no_context, bare = run(RawPoint(2, claim), turns=turns, speakers=TWO, good=good)
+    wrong_context, _ = run(RawPoint(2, claim, context=(0,)), turns=turns, speakers=TWO, good=good)
 
-    assert [(p.speaker, p.turn, p.evidence) for p in with_context] == [("S2", answer, "對")]
+    assert [(p.speaker, p.turn, p.evidence) for p in with_context] == [("S2", 2, "沒錯")]
     assert no_context == [] and "必須在 context" in problems_of(bare)
     assert wrong_context == []
 
 
-def test_a_one_word_answer_cannot_be_written_as_the_question_it_answers():
+def test_a_single_character_answer_cannot_be_cited_at_all():
     answer = at("對。")
 
-    extra, result = run(RawPoint(answer, "詢問還要提高保母的薪資", context=(answer - 1,)))
+    for quote in ("對", "對。", ""):
+        extra, result = run(RawPoint(answer, "同意還要提高保母的薪資", context=(answer - 1,), quote=quote))
+
+        assert extra == [], quote
+        assert result.unverifiable == 1 and "quote" in problems_of(result)
+
+
+def test_a_one_word_answer_cannot_be_written_as_the_question_it_answers():
+    turns, good = answer_turns()
+
+    extra, result = run(RawPoint(2, "詢問還要提高保母的薪資", context=(1,)), turns=turns, speakers=TWO, good=good)
 
     assert extra == [] and "只能寫成表態" in problems_of(result)
 
@@ -460,19 +503,20 @@ def test_a_no_answer_must_be_written_as_a_refusal_not_an_agreement():
 
 
 def test_an_answer_whose_content_is_not_in_the_context_is_rejected():
-    answer = at("對。")
+    turns, good = answer_turns()
 
-    extra, result = run(RawPoint(answer, "同意提高托育補助", context=(answer - 1,)))
+    extra, result = run(RawPoint(2, "同意提高托育補助", context=(1,)), turns=turns, speakers=TWO, good=good)
 
     assert extra == [] and "對不上" in problems_of(result)
 
 
 def test_context_must_come_just_before_the_answer():
-    answer = at("對。")
+    turns, good = answer_turns()
 
-    extra, _ = run(RawPoint(answer, "同意還要提高保母的薪資", context=(answer + 1, answer, -1, True)))
+    extra, result = run(RawPoint(2, "同意還要提高保母的薪資", context=(3, 2, -1, True)),
+                        turns=turns, speakers=TWO, good=good)
 
-    assert extra == []
+    assert extra == [] and "必須在 context" in problems_of(result)
 
 
 # --- 重點檢查：複述與引文 ---
@@ -503,11 +547,13 @@ def test_a_quote_must_be_found_word_for_word_in_one_turn_of_the_same_speaker():
         ("S1", "我不同意這個做法，因為名額不夠，家長排了兩年還是排不到，這樣不公平。"),
         ("S2", "那政府打算怎麼處理這件事情呢。"),
         ("S1", "我認為應該立刻增加公共托育的名額，而且要把保母的薪資一起調整。"))
-    verbatim = RawPoint(0, "指出「名額不夠，家長排了兩年還是排不到」")
-    other_speakers_words = RawPoint(0, "指出「這樣不公平，那政府打算怎麼處理這件事情」")
-    too_short = RawPoint(0, "指出「名額不夠」")
-    unbalanced = RawPoint(0, "指出「名額不夠，家長排了兩年還是排不到")
-    spliced_same_speaker = RawPoint(0, "指出「這樣不公平，我認為應該立刻增加公共托育的名額」")
+    spoken = "名額不夠，家長排了兩年還是排不到"
+    verbatim = RawPoint(0, "指出「名額不夠，家長排了兩年還是排不到」", quote=spoken)
+    other_speakers_words = RawPoint(0, "指出「這樣不公平，那政府打算怎麼處理這件事情」", quote="那政府打算怎麼處理這件事情")
+    too_short = RawPoint(0, "指出「名額不夠」", quote=spoken)
+    unbalanced = RawPoint(0, "指出「名額不夠，家長排了兩年還是排不到", quote=spoken)
+    spliced_same_speaker = RawPoint(0, "指出「這樣不公平，我認為應該立刻增加公共托育的名額」",
+                                    quote="我認為應該立刻增加公共托育的名額")
 
     extra, result = run(verbatim, other_speakers_words, too_short, unbalanced, spliced_same_speaker,
                         turns=turns, speakers=TWO, good=good)
@@ -572,13 +618,14 @@ def test_the_canonical_wire_example_comes_out_exactly_as_the_contract_says():
     window = chunk_turns(turns, speakers)[0]
     raw = [
         RawSlide("補助政策與托育名額", (
-            RawPoint(0, "詢問目前補助政策的成效"),
-            RawPoint(1, "現金補助有幫助，但托育資源更重要"),
-            RawPoint(2, "追問公共托育現在有什麼不足"),
-            RawPoint(3, "公共托育名額不夠，家長排了兩年沒有消息"))),
+            RawPoint(0, "詢問目前補助政策的成效", quote="先請教您怎麼看目前的補助政策"),
+            RawPoint(1, "現金補助有幫助，但托育資源更重要", quote="現金補助有幫助，但不能只靠現金，托育資源更重要"),
+            RawPoint(2, "追問公共托育現在有什麼不足", quote="那公共托育現在有什麼不足"),
+            RawPoint(3, "公共托育名額不夠，家長排了兩年沒有消息", quote="名額不夠，很多家長排不到，排了兩年也沒有消息"))),
         RawSlide("預算怎麼編", (
-            RawPoint(5, "詢問預算要怎麼編才夠"),
-            RawPoint(6, "主張把公共托育的名額加倍，並提高保母的薪資"))),
+            RawPoint(5, "詢問預算要怎麼編才夠", quote="那預算要怎麼編才夠"),
+            RawPoint(6, "主張把公共托育的名額加倍，並提高保母的薪資",
+                     quote="至少要把公共托育的名額加倍，還要提高保母的薪資"))),
     ]
 
     result = validate_points(raw, turns, speakers, window)
@@ -608,7 +655,7 @@ def test_the_canonical_wire_example_comes_out_exactly_as_the_contract_says():
     assert slides[1].timestamp == 69.0
 
 
-# --- 性質：說話者永遠來自被引用的那一段，引錯會被改正或丟掉 ---
+# --- 性質：說話者永遠來自 quote 所在的那一輪，內容對不上就丟掉或只顯示原話 ---
 
 # 沒有虛字、否定字、數字、人稱、稱呼的字，隨機湊出來的「話」彼此不會有共同的字組
 _POOL = list("山水火土金木花草鳥魚蟲獸石海河湖雨雪雲風雷電星月光影聲色味香書畫琴棋詩酒茶米麥稻鐵銅銀玉珠寶鏡燈橋塔牆屋")
@@ -631,8 +678,13 @@ def synthetic(rng: random.Random):
     return make_turns(*lines), speakers
 
 
+def kept_points(turns, speakers, window, *points):
+    result = validate_points([RawSlide("標題", tuple(points))], turns, speakers, window)
+    return [p for s in result.slides for p in s.points]
+
+
 @pytest.mark.parametrize("seed", range(60))
-def test_a_kept_point_rests_on_the_turn_that_contains_its_words_and_takes_that_turns_speaker(seed):
+def test_a_kept_point_rests_on_the_turn_that_holds_its_quote_and_takes_that_turns_speaker(seed):
     rng = random.Random(seed)
     turns, speakers = synthetic(rng)
     window = chunk_turns(turns, speakers)[0]
@@ -640,16 +692,41 @@ def test_a_kept_point_rests_on_the_turn_that_contains_its_words_and_takes_that_t
 
     for source in turns:
         claim = "說明" + source.text[1:9]
+        quote = source.text[:-1]
         for offset in (-5, -3, -2, -1, 0, 1, 2, 3, 5):
             cited = source.index + offset
             if not 0 <= cited < len(turns):
                 continue
-            slide = RawSlide("標題", (RawPoint(cited, claim), RawPoint(cited, claim + "的內容")))
 
-            kept = [p for s in validate_points([slide], turns, speakers, window).slides for p in s.points]
+            kept = kept_points(turns, speakers, window,
+                               RawPoint(cited, claim, quote=quote), RawPoint(cited, claim + "的內容", quote=quote))
 
-            if (source.speaker not in citable or turns[cited].speaker not in citable
-                    or abs(offset) > conversation.ANCHOR_RADIUS):
-                assert kept == []          # 出處不能引用、引用了不能引用的段落、或離出處太遠
-            else:
+            if source.speaker not in citable or turns[cited].speaker not in citable:
+                assert kept == []          # 原文在不能引用的人那裡，或引用了不能引用的段落
+            else:                          # 引錯編號沒關係：找原文所在的那一輪，說話者也從那一輪查
                 assert [(p.turn, p.speaker) for p in kept] == [(source.index, source.speaker)] * 2
+
+
+@pytest.mark.parametrize("seed", range(40))
+def test_content_from_one_turn_with_the_quote_of_another_is_never_written_under_the_quotes_speaker(seed):
+    rng = random.Random(1000 + seed)
+    turns, speakers = synthetic(rng)
+    window = chunk_turns(turns, speakers)[0]
+    citable = {s.id for s in speakers if s.kind == "participant"}
+
+    for source in turns:
+        claim = "說明" + source.text[1:9]
+        for holder in turns:
+            if holder.index == source.index:
+                continue
+            body = holder.text[:-1]
+            quotes = (body[:8], body[-8:])
+            near = abs(source.index - holder.index) <= conversation.ANCHOR_RADIUS
+
+            kept = kept_points(turns, speakers, window, *(RawPoint(holder.index, claim, quote=q) for q in quotes))
+
+            if holder.speaker not in citable or near:
+                assert kept == []          # 內容出自附近另一輪：丟掉，不改歸給任何一方
+            else:                          # 內容在附近找不到依據：只剩照抄的原話，說話者是原話那一輪的
+                assert [(p.turn, p.speaker, p.text) for p in kept] == [
+                    (holder.index, holder.speaker, f"「{q}」") for q in quotes]

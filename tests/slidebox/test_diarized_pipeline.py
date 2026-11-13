@@ -200,8 +200,13 @@ def run_windows(conversation, turns, speakers, allocations, *, check=None, cance
     return outcomes, seen
 
 
+# 每一段話整段照抄當 quote：一定通過 quote 的核對（單段、連續）
+QUOTES = {number: text for number, (_, text) in enumerate(LINES)}
+
+
 def reply_citing(*cites):
-    return lambda call: (RawSlide("標題", tuple(RawPoint(turn, text) for turn, text in cites)),)
+    return lambda call: (RawSlide("標題", tuple(
+        RawPoint(turn, text, quote=QUOTES.get(turn, "")) for turn, text in cites)),)
 
 
 GOOD = ((0, "詢問今年的預算編列有沒有增加"), (1, "今年的預算大約增加了兩成左右"))
@@ -213,6 +218,7 @@ def test_a_window_is_sent_with_its_text_turn_range_and_page_range():
     outcomes, _ = run_windows(conversation, turns, speakers, allocations)
     (call,) = conversation.calls
     assert (call.first_turn, call.last_turn, call.min_slides, call.max_slides, call.hint) == (0, 3, 2, 3, "")
+    assert call.citable_turns == (0, 1, 2, 3)
     assert call.window_text.startswith("[T0] S1：請問今年的預算編列有沒有增加\n[T1] S2：")
     assert [(o.proposed, o.kept, o.skipped) for o in outcomes] == [(2, 2, False)]
 
@@ -234,7 +240,8 @@ def test_a_window_nobody_citable_spoke_in_is_not_sent_to_the_model():
 def test_the_cancel_check_runs_before_every_model_call():
     turns, speakers, allocations = _setup(*LINES)
     seen = []
-    conversation = FakeConversation([reply_citing((0, "詢問今年的預算編列有沒有增加"), (3, "錯誤的內容")), reply_citing(*GOOD)])
+    # 第一次有一個點引用了不存在的段落：丟掉一半，所以要重問一次
+    conversation = FakeConversation([reply_citing((0, "詢問今年的預算編列有沒有增加"), (90, "錯誤的內容")), reply_citing(*GOOD)])
     run_windows(conversation, turns, speakers, allocations, check=lambda: seen.append(len(conversation.calls)))
     assert seen == [0, 1]                    # 第一次與重問之前各檢查一次，都在呼叫之前
 
