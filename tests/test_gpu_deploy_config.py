@@ -36,6 +36,7 @@ from slidebox.usecases.conversation import (
 )
 from slidebox.usecases.diarized_pipeline import MAX_DROPPED_RATIO, AttributionCounts, summary_line
 from slidebox.usecases.quotes import MAX_RESCUED_QUOTE_CHARS, MIN_QUOTE_CHARS, QUOTE_MIN_LONGEST
+from slidebox.usecases.speakers import MAX_PARTICIPANTS, MAX_PUBLISHED_SPEAKERS
 
 ROOT = Path(__file__).resolve().parents[1]
 DIARIZATION_SETTINGS = (TOKEN_ENV, MODE_ENV, DEVICE_ENV, CHUNK_CHARS_ENV, QUOTE_ONLY_ENV)
@@ -321,6 +322,16 @@ def test_the_readme_numbers_about_checking_points_are_the_codes_numbers():
                    f"每頁最多顯示 {MAX_BULLETS} 個重點"):
         assert needle in section, needle
     assert MAX_DROPPED_RATIO == 0.25 and "四分之一" in section
+
+
+def test_the_readme_limits_on_the_number_of_voices_are_the_codes_numbers():
+    """攔的 bug：發佈上限改了（或新聞服務改了、這邊跟著改），說明還寫著舊的數字，
+    操作者就不知道 13 個聲音為什麼失敗、也不知道該怎麼辦。"""
+    section = _multi_speaker_section()
+    assert f"主要發言者超過 {MAX_PARTICIPANTS} 位" in section
+    assert f"合計超過 {MAX_PUBLISHED_SPEAKERS} 個" in section
+    assert f"最多 {MAX_PUBLISHED_SPEAKERS} 個" in section
+    assert "--speakers N" in section
 
 
 def test_the_readme_names_only_error_codes_that_exist():
