@@ -157,6 +157,29 @@ def test_the_conversation_forwarder_uses_the_settings_of_the_moment_and_passes_e
     assert received == [("[T3] S1：甲", 3, 7, (3, 5, 7), 1, 2, "上次的問題", progress, cancelled)]
 
 
+def test_the_conversation_forwarder_reports_the_code_version_of_the_summarizer_it_forwards_to():
+    """攔的 bug：包在外面的這一層沒有指紋，use case 就拿不到「摘要程式是哪一版」，
+    要嘛沿用不該沿用的存檔，要嘛永遠不能沿用。"""
+    from slidebox.composition import CurrentSettingsConversationSummarizer
+    from slidebox.infrastructure.ollama_conversation import OllamaConversationSummarizer
+
+    settings = Settings(output_dir="OUT", model="a")
+    forwarder = CurrentSettingsConversationSummarizer(settings)
+    assert forwarder.fingerprint == OllamaConversationSummarizer("http://h", "other", 1).fingerprint
+    settings.model = "b"
+    assert forwarder.fingerprint == OllamaConversationSummarizer("http://h", "other", 1).fingerprint
+
+
+def test_the_real_multi_speaker_parts_each_report_a_code_version_the_use_case_can_use():
+    from slidebox.composition import build_usecase
+    from slidebox.usecases.diarized_pipeline import adapter_fingerprint
+
+    usecase = build_usecase(Settings(output_dir="OUT"))
+    for part in (usecase._word_transcriber, usecase._conversation):
+        assert not adapter_fingerprint(part).startswith("unreadable:"), type(part).__name__
+    assert len(usecase._diarizer.fingerprint) == 16
+
+
 def test_the_pipeline_has_the_multi_speaker_parts_wired_in():
     from slidebox.composition import CurrentSettingsConversationSummarizer, build_usecase
     from slidebox.infrastructure.pyannote_diarizer import PyannoteSpeakerDiarizer

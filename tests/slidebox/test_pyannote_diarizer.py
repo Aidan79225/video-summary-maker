@@ -286,10 +286,62 @@ def test_the_fingerprint_exists_even_when_the_package_is_not_installed(tmp_path)
     assert diarizer.version == "" and re.fullmatch(r"[0-9a-f]{16}", diarizer.fingerprint)
 
 
-def test_the_fingerprint_formula_is_pinned(tmp_path):
-    """指紋是存檔的鍵（引擎、版本、模型）：公式一改，所有存檔都對不上——要改就是有意的。
-    版本改成從另一個環境量，公式沒變：同一個版本、同一個模型，算出同一個指紋。"""
-    assert make(tmp_path, version="4.0.7", model="m1").fingerprint == "bb473b952417aabb"
+def test_the_fingerprint_follows_the_worker_script_that_actually_runs(tmp_path):
+    """攔的 bug：工作行程的腳本改了（區段怎麼整理、交疊怎麼算），指紋卻沒變——舊腳本區分出來的結果
+    被當成新腳本的。同一個版本、同一個模型、同一份腳本，算出同一個指紋（與版本是從哪個環境量到的無關）；
+    腳本一個字不同，指紋就不同。只驗性質，不釘雜湊值。"""
+    base = make(tmp_path, version="4.0.7", model="m1").fingerprint
+    assert make(tmp_path, version="4.0.7", model="m1").fingerprint == base
+    assert make(tmp_path, "succeed(overlap_seconds=1.5)", version="4.0.7", model="m1").fingerprint != base
+
+
+def test_the_worker_script_is_fingerprinted_by_its_text_and_not_by_its_line_endings(tmp_path):
+    """Windows 簽出的 CRLF 與容器裡的 LF 是同一份腳本：換機器、重建映像，存檔不能因此全部作廢。"""
+    (tmp_path / "lf").mkdir()
+    (tmp_path / "crlf").mkdir()
+    text = b"print('worker')\nprint('again')\n"
+    (tmp_path / "lf" / "pyannote_worker.py").write_bytes(text)
+    (tmp_path / "crlf" / "pyannote_worker.py").write_bytes(text.replace(b"\n", b"\r\n"))
+
+    def fingerprint_of(folder: str) -> str:
+        return PyannoteSpeakerDiarizer(
+            token=TOKEN, version_finder=lambda: "4.0.7", spec_finder=lambda n: object(), model_name="m",
+            worker_path=str(tmp_path / folder / "pyannote_worker.py")).fingerprint
+
+    assert fingerprint_of("lf") == fingerprint_of("crlf")
+
+
+def test_the_fingerprint_follows_the_adapters_own_source(tmp_path, monkeypatch):
+    from slidebox.usecases import code_fingerprint as cf
+
+    diarizer = make(tmp_path)
+    base = diarizer.fingerprint
+    real = cf.read_module_source
+    monkeypatch.setattr(cf, "read_module_source",
+                        lambda name: real(name) + "\n# 改過\n" if name == mod.__name__ else real(name))
+    assert diarizer.fingerprint != base
+
+
+def test_the_real_worker_file_is_part_of_the_default_fingerprint(tmp_path):
+    """沒有注入腳本路徑時，指紋讀的就是真的 pyannote_worker.py（不是別的檔案）。"""
+    default = PyannoteSpeakerDiarizer(token=TOKEN, version_finder=lambda: "4.0.7", spec_finder=lambda n: object())
+    copy = tmp_path / "pyannote_worker.py"
+    copy.write_bytes(REAL_WORKER.read_bytes())
+    same = PyannoteSpeakerDiarizer(token=TOKEN, version_finder=lambda: "4.0.7", spec_finder=lambda n: object(),
+                                   worker_path=str(copy))
+    assert default.fingerprint == same.fingerprint
+    copy.write_bytes(copy.read_bytes() + b"\n# edited\n")
+    assert default.fingerprint != same.fingerprint
+
+
+def test_an_unreadable_worker_script_still_gives_a_fingerprint_that_matches_nothing(tmp_path):
+    """腳本不見了：指紋照樣算得出來（不 raise），而且對不上任何舊存檔。"""
+    present = make(tmp_path)
+    base = present.fingerprint
+    missing = PyannoteSpeakerDiarizer(token=TOKEN, version_finder=lambda: "4.0.7", spec_finder=lambda n: object(),
+                                      worker_path=str(tmp_path / "no_such_worker.py"), model_name="test-model")
+    assert re.fullmatch(r"[0-9a-f]{16}", missing.fingerprint) and missing.fingerprint != base
+    assert missing.fingerprint == missing.fingerprint
 
 
 def test_a_version_lookup_that_raises_means_no_version():

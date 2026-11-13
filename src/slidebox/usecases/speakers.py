@@ -26,8 +26,10 @@ from ..domain.entities import (
 )
 from ..domain.errors import AttributionUnreliable
 
-# 對齊與分段的演算法版本：改了對齊或分段的行為就加一，存檔的指紋跟著變，
-# 舊的說話者歸屬不會被拿來冒充新的。
+# 手動的版本號，會進語音辨識（字）的存檔指紋，給「原始碼看不出來」的改動用：
+# 例如換了校正用的資料、辨識的前處理改在別的地方。辨識參數與辨識器、正體修正的原始碼，
+# 已經由辨識器的 fingerprint 自動算進去（whisper_transcriber.WORD_OPTIONS），不必靠人記得升版；
+# 本模組（對齊、分段、說話者清單）的原始碼則自動算進摘要存檔的指紋（diarized_pipeline.RULE_MODULES）。
 ALIGN_VERSION = 1
 
 # 無法判斷是誰的代號。模型看到的是固定的 X（不能引用），逐字稿上是 [[S0]]。

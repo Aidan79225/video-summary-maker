@@ -18,6 +18,8 @@
 提示詞、schema、下面的取樣設定（temperature、think）改了，要手動升
 usecases/conversation.py 的 PROMPT_VERSION，否則存檔裡舊提示產生的摘要會被當成新提示的。
 tests/slidebox/test_ollama_conversation.py 釘住這些內容的雜湊，改了沒升版本時會失敗。
+這是人記得的那一道；另一道不靠人：fingerprint 把這個模組與 ollama_summarizer 的原始碼雜湊進摘要存檔的
+指紋，提示詞、取樣設定或回應解析改了，舊的摘要自己就不會被沿用。
 """
 from __future__ import annotations
 
@@ -29,7 +31,12 @@ from typing import cast
 from ..domain.entities import RawPoint, RawSlide
 from ..domain.errors import SummarizerOutputInvalid
 from ..domain.ports import CancelCheck, ProgressCallback
+from ..usecases.code_fingerprint import code_fingerprint
 from . import ollama_summarizer
+
+# 決定「同樣的窗會得到什麼摘要」的程式：提示詞、schema、取樣設定、回應解析（本模組），
+# 以及送出請求、讀串流的 ollama_summarizer。它們的原始碼就是這個摘要器的指紋
+CODE_MODULES = (__name__, f"{__package__}.ollama_summarizer")
 
 _SYSTEM = """你是對話整理助手。使用者會給你一段多人對話逐字稿的片段，請把它整理成幾頁投影片。
 
@@ -259,6 +266,12 @@ class OllamaConversationSummarizer:
         self._model = model
         self._num_ctx = num_ctx
         self._timeout = timeout
+
+    @property
+    def fingerprint(self) -> str:
+        """這一版摘要程式的指紋（CODE_MODULES 的原始碼）。主機與模型不算在內：模型在存檔指紋的別的欄位，
+        主機只是連到哪裡。讀不到原始碼時指紋對不上任何舊存檔（見 usecases/code_fingerprint.py）。"""
+        return code_fingerprint(CODE_MODULES)
 
     def summarize_window(
         self,

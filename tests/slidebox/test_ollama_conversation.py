@@ -519,3 +519,34 @@ def test_an_error_event_from_ollama_is_reported_as_unavailable(monkeypatch):
     monkeypatch.setattr(ollama_summarizer, "_post_json", lambda *a, **k: FakeResponse(lines))
     with pytest.raises(SummarizerUnavailable, match="more system memory"):
         _summarize()
+
+
+# --- 這一版摘要程式的指紋 ---
+
+
+def test_the_adapter_reports_a_fingerprint_that_follows_its_own_source_and_the_transport_it_uses(monkeypatch):
+    """攔的 bug：提示詞、取樣設定或回應解析改了，卻忘了升 PROMPT_VERSION，存檔裡舊程式產生的摘要被當成新程式的。
+    這裡只驗性質：指紋跟著原始碼走（本模組、送出請求與讀串流的 ollama_summarizer），不跟主機與模型走
+    （那些在存檔指紋的別的欄位），也不釘任何雜湊值。"""
+    from slidebox.usecases import code_fingerprint as cf
+
+    summarizer = mod.OllamaConversationSummarizer("http://gpu:11434", "qwen3.5:9b", 32768)
+    base = summarizer.fingerprint
+    assert re.fullmatch(r"[0-9a-f]{16}", base) and summarizer.fingerprint == base
+    assert mod.OllamaConversationSummarizer("http://other:11434", "other-model", 4096).fingerprint == base
+    assert set(mod.CODE_MODULES) == {"slidebox.infrastructure.ollama_conversation",
+                                     "slidebox.infrastructure.ollama_summarizer"}
+    real = cf.read_module_source
+    for module in mod.CODE_MODULES:
+        monkeypatch.setattr(cf, "read_module_source",
+                            lambda name, edited=module: real(name) + "\n# 改過\n" if name == edited else real(name))
+        assert summarizer.fingerprint != base, module
+
+
+def test_an_unreadable_source_still_gives_the_adapter_a_fingerprint_that_matches_nothing(monkeypatch):
+    from slidebox.usecases import code_fingerprint as cf
+
+    summarizer = mod.OllamaConversationSummarizer("http://gpu:11434", "m", 8192)
+    base = summarizer.fingerprint
+    monkeypatch.setattr(cf, "read_module_source", lambda name: None)
+    assert re.fullmatch(r"[0-9a-f]{16}", summarizer.fingerprint) and summarizer.fingerprint != base

@@ -416,3 +416,56 @@ def test_the_per_word_fallback_keeps_the_names_from_the_hint(monkeypatch):
     model = FakeModel([Seg(0.0, 2.0, "这个", [W(0.0, 1.0, "这"), W(1.0, 2.0, "个")])])
     _run(model, hint="臺中市議會 發言者：楊啓邦")
     assert len(seen) == 2 and all("楊啓邦" in terms for _, terms in seen)
+
+
+# --- 這一版辨識程式的指紋 ---
+
+
+def test_the_options_the_model_is_called_with_are_the_ones_the_fingerprint_covers():
+    """攔的 bug：辨識參數改了（或多了一個），存檔的字的指紋卻沒變——舊參數辨識出來的字被當成新參數的。
+    參數放在 WORD_OPTIONS 一個地方：呼叫模型用它，指紋也含它，兩邊不會各改各的。"""
+    model = FakeModel([Seg(0.0, 1.0, "你", [W(0.0, 1.0, "你")])])
+    _run(model, hint="提示")
+    sent = dict(model.calls[0][1])
+    assert sent.pop("initial_prompt") == "提示"
+    assert sent == mod.WORD_OPTIONS
+
+
+def test_the_fingerprint_is_short_stable_and_does_not_depend_on_the_model_name():
+    base = _make(FakeModel([])).fingerprint
+    assert len(base) == 16 and all(c in "0123456789abcdef" for c in base)
+    assert FasterWhisperTranscriber("another-model").fingerprint == base     # 模型名稱在存檔指紋的別的欄位
+
+
+def test_changing_or_adding_a_recognition_option_changes_the_fingerprint(monkeypatch):
+    base = _make(FakeModel([])).fingerprint
+    for name, value in mod.WORD_OPTIONS.items():
+        changed = dict(mod.WORD_OPTIONS, **{name: not value if isinstance(value, bool) else value + 1})
+        monkeypatch.setattr(mod, "WORD_OPTIONS", changed)
+        assert _make(FakeModel([])).fingerprint != base, name
+    monkeypatch.setattr(mod, "WORD_OPTIONS", dict(mod.WORD_OPTIONS, beam_size=1))
+    assert _make(FakeModel([])).fingerprint != base
+
+
+def test_editing_the_recognizer_or_the_script_fixer_changes_the_fingerprint(monkeypatch):
+    from slidebox.usecases import code_fingerprint as cf
+
+    base = _make(FakeModel([])).fingerprint
+    real = cf.read_module_source
+    for module in ("slidebox.infrastructure.whisper_transcriber", "slidebox.infrastructure.chinese_script"):
+        monkeypatch.setattr(cf, "read_module_source",
+                            lambda name, edited=module: real(name) + "\n# 改過\n" if name == edited else real(name))
+        assert _make(FakeModel([])).fingerprint != base, module
+
+
+def test_an_unreadable_source_still_gives_the_recognizer_a_fingerprint_that_matches_nothing(monkeypatch):
+    from slidebox.usecases import code_fingerprint as cf
+
+    base = _make(FakeModel([])).fingerprint
+
+    def gone(name):
+        raise OSError("source is gone")
+
+    monkeypatch.setattr(cf, "read_module_source", gone)
+    unreadable = _make(FakeModel([])).fingerprint
+    assert len(unreadable) == 16 and unreadable != base
