@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import math
 import re
+import unicodedata
 from dataclasses import dataclass
 from itertools import groupby
 from typing import NoReturn
@@ -43,6 +44,7 @@ BULLET_LENGTH = 300
 MAX_BULLET_POINTS = 4       # 一頁的條列只放前幾個重點（GPU 的 conversation.MAX_BULLETS）
 DETAIL_LENGTH = 8000
 DESCRIPTION_LENGTH = 120
+TITLE_LENGTH = 300          # 與 Slide.title 的 max_length 一樣（GPU 自己把標題限制在 60 字）
 URL_LENGTH = 500            # 與 Article.ivod_url 的 max_length 一樣
 MAX_SECONDS = 24 * 3600     # 一天；影片上限是 --max-minutes（預設 180 分鐘），遠遠不到
 MAX_COUNT = 100_000         # 發言段落編號、段落數、重點數
@@ -92,8 +94,23 @@ def _show(value: object) -> str:
         return "（過大的數字）"
 
 
+# clean_text 留著的、畫面上看不見的字：ZWJ 與 ZWNJ（表情符號的組合與波斯文需要它們），以及幾個空白一樣的填充字
+_INVISIBLE = frozenset("\u200c\u200d\u115f\u1160\u3164\uffa0")
+
+
+def _fold(text: str) -> str:
+    """只給「有沒有記號」的判斷用（不存、不顯示）：全形的［］（NFKC 換成半形），以及兩個方括號中間夾了零寬連接
+    字元或組合符號的寫法，畫面上都跟真的 [[ 一樣，折成真的再看。"""
+    return "".join(char for char in unicodedata.normalize("NFKC", text)
+                   if char not in _INVISIBLE and unicodedata.category(char) not in ("Mn", "Me"))
+
+
 def _has_brackets(text: str) -> bool:
-    return "[[" in text or "]]" in text
+    """有沒有說話者記號的 [[ 或 ]]，連長得像的也算。清理（clean_text）只拿掉 Cc／Cf／Cs，ZWJ 與 ZWNJ 還在，
+    所以「先清理再比對原字串」擋不住中間夾了零寬連接字元的 [[S1]]，也擋不住全形的［［S1］］；單個的全形方括號、
+    書名號、引號仍是一般文字。"""
+    folded = _fold(text)
+    return "[[" in folded or "]]" in folded
 
 
 def _squash(text: str) -> str:
@@ -317,6 +334,7 @@ class _Line:
 
 @dataclass(frozen=True)
 class SlideResult:
+    title: str          # 清理過的小標：存進資料庫的是這個，不是 GPU 給的原字串
     bullets: list[str]
     detail: str
     points: list[dict]
@@ -346,6 +364,8 @@ def check_speaker_result(article, payload: object) -> SpeakerResult:
          加起來不超過全部說話的秒數），而且程式自己從名單算出 GPU 該給的四種警告，GPU 沒給的補上、狀態改成 warn；
       4. 每一頁至少一個重點；每個重點的說話者是列出來的 participant，turn 是整數、start 是有限的非負數、
          text 1～120 字且不含 [[；同一個發言段落（turn）不能被標成兩個人；重點的時間落在這位說話者出現的時間裡；
+         每頁的小標是 1～300 字的文字（清理過才存），小標與所有文字都不含 [[ 或 ]]，長得像的（全形的［［、
+         夾了零寬連接字元的）也不行；
       5. 逐字稿每一行是「mm:ss [[Sn]]：」開頭、Sn 是列出來的說話者或 S0；重點引用的發言段落（turn）真的在逐字稿裡，
          而且那一行的說話者與時間就是重點寫的（其他聲音與 S0 的段落因此不可能被引用）；條列正好是前 4 個重點各
          一項「[[Sn]]：重點」，完整敘述正好是連續同一人的重點併成一段「[[Sn]]：甲；乙。」、段與段之間一個空格：
@@ -447,8 +467,13 @@ def _check_slide(raw: object, position: int, participants: set[str], turn_speake
     if not isinstance(raw, dict):
         _fail(f"{where} 要是物件，不是 {_show(raw)}")
     title = raw.get("title")
-    if isinstance(title, str) and _has_brackets(clean_text(title)):
-        _fail(f"{where}.title 含有 [[ 或 ]]：小標不會被換成名字，記號會原樣漏到網頁上")
+    if not isinstance(title, str):
+        _fail(f"{where}.title 要是文字，不是 {_show(title)}")
+    title = clean_text(title)
+    if not 1 <= len(title) <= TITLE_LENGTH:
+        _fail(f"{where}.title 清理後要 1～{TITLE_LENGTH} 個字，不是 {len(title)} 個")
+    if _has_brackets(title):
+        _fail(f"{where}.title 含有 [[ 或 ]]（或長得像的字元）：小標不會被換成名字，記號會原樣漏到網頁上")
     # 不是每個 GPU 版本都會給 timestamp 的類型，但有給就要是能存進資料庫的數字（NaN 會讓整篇存不進去）
     if raw.get("timestamp") is not None:
         _number(raw.get("timestamp"), f"{where}.timestamp")
@@ -463,7 +488,7 @@ def _check_slide(raw: object, position: int, participants: set[str], turn_speake
 
     bullets = _check_bullets(raw.get("bullets"), points, where)
     detail = _check_detail(raw.get("detail"), points, where)
-    return SlideResult(bullets, detail, points)
+    return SlideResult(title, bullets, detail, points)
 
 
 def _reconcile(diarization: dict, speakers: list[dict], requested: int | None) -> dict:

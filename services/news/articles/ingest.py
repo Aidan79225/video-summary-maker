@@ -784,7 +784,7 @@ def _save_slide(article: Article, raw: dict, folder: str, index: int,
     slide = Slide(
         article=article,
         index=index,
-        title=str(raw.get(SlideField.TITLE) or ""),
+        title=checked.title if checked is not None else str(raw.get(SlideField.TITLE) or ""),
         bullets=list(checked.bullets) if checked is not None else [str(b) for b in (raw.get(SlideField.BULLETS) or [])],
         detail=checked.detail if checked is not None else str(raw.get(SlideField.DETAIL) or ""),
         timestamp=float(raw.get(SlideField.TIMESTAMP) or 0.0),

@@ -98,6 +98,11 @@ BROKEN = {
     "重點裡有 [[": set_(["slides", 0, "points", 0, "text"], "[[S1]]說了什麼"),
     "重點的時間不是數字": set_(["slides", 0, "points", 0, "start"], float("nan")),
     "另一支影片的結果": set_(["video_id"], "zzzzzzzzzzz"),
+    "沒有 video_id": without("video_id"),
+    "沒有 source_url": without("source_url"),
+    "source_url 是另一支影片": set_(["source_url"], "https://youtu.be/zzzzzzzzzzz"),
+    "小標不是文字": set_(["slides", 0, "title"], ["[[S1]] 的主張"]),
+    "小標有全形的記號": set_(["slides", -1, "title"], "［［S1］］ 的主張"),
     "條列說是別人講的": set_(["slides", 0, "bullets", 0], "[[S2]]：詢問目前補助政策的成效"),
 }
 
@@ -172,6 +177,14 @@ class PublishedResultTests(IngestCase):
         self.assertEqual(slide.bullets[0], "[[S1]]：詢問目前補助政策的成效")
         self.assertEqual(slide.points[0]["text"], "詢問目前補助政策的成效")
         self.assertIn("[[S1]]", stored.transcript_text)
+
+    def test_the_slide_title_is_stored_cleaned(self):
+        payload = with_images(diarized_result("x0000000003"))
+        payload["slides"][0]["title"] = "  補助\x1b[2J\u202e   政策\n"
+        article = register(video_id="x0000000003")
+        save_result(article, payload)
+        self.assertEqual([s.title for s in Slide.objects.filter(article=article).order_by("index")],
+                         ["補助[2J 政策", "預算怎麼編"])
 
     def test_a_rejected_rerun_leaves_the_published_video_exactly_as_it_was(self):
         before, files = everything_stored(), files_on_disk()

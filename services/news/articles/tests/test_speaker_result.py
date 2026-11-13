@@ -564,6 +564,23 @@ class PointsTests(SimpleTestCase):
         rebuild(slide_of(payload))
         self.assertEqual(check_speaker_result(video(), payload).slides[0].points[0]["text"], "提到[附件]三")
 
+    def test_the_text_never_contains_a_lookalike_of_a_placeholder(self):
+        """攔的 bug：清理留著 ZWJ 與 ZWNJ，全形的［［也不算記號；那樣的字在網頁上看起來就是一個沒被換掉的說話者記號。"""
+        for lookalike in ("他說 ［［S2］］ 同意", "他說 [\u200d[S2]\u200d] 同意", "他說 [\u200c[S2]] 同意",
+                          "他說 [[\u200dS2]] 同意", "他說 ［\u200d［S2］］", "他說 [\u0301[S2]\u0301]",
+                          "他說 [\ufe0f[S2]] 同意", "他說 ］］ 同意"):
+            with self.subTest(lookalike=lookalike):
+                self.point("text", lookalike)
+
+    def test_ordinary_full_width_brackets_and_joined_emoji_are_not_mistaken_for_a_placeholder(self):
+        for fine in ("提到［附件］與【附表】還有《草案》", "他說「好」［註］", "家庭 👨\u200d👩\u200d👧 的照顧",
+                     "［1］［2］兩個附件", "第一［甲］\u200d［乙］條"):
+            with self.subTest(fine=fine):
+                payload = good()
+                slide_of(payload)["points"][0]["text"] = fine
+                rebuild(slide_of(payload))
+                self.assertEqual(check_speaker_result(video(), payload).slides[0].points[0]["text"], fine)
+
     def test_the_evidence_is_text_up_to_one_hundred_twenty_characters(self):
         for bad in ("x" * 121, None, 5, ["x"]):
             with self.subTest(bad=bad):
@@ -677,6 +694,45 @@ class TextTests(SimpleTestCase):
     def test_a_slide_title_cannot_carry_a_marker(self):
         self.fails(lambda p: slide_of(p).update(title="[[S1]] 的質詢"), "title")
         self.fails(lambda p: slide_of(p).update(title="後面 ]] 多一個"), "title")
+
+    def test_a_slide_title_is_non_empty_text_that_fits_the_column(self):
+        """攔的 bug：標題不是文字時被轉成字串存進去（["[[S1]] 的主張"] 變成 "['[[S1]] 的主張']"），而小標不會在讀取時
+        換成名字，記號就原樣漏到網頁上。"""
+        for bad in (None, 5, True, ["[[S1]] 的主張"], {"t": 1}, "", "   ", "\x1b\u202e", "\u200d", "字" * 301):
+            with self.subTest(bad=bad):
+                self.fails(lambda p, b=bad: slide_of(p).update(title=b), "title")
+        self.fails(lambda p: slide_of(p).pop("title"), "title")
+        payload = good()
+        slide_of(payload)["title"] = "字" * 300
+        self.assertEqual(len(check_speaker_result(video(), payload).slides[0].title), 300)
+
+    def test_a_slide_title_comes_back_cleaned(self):
+        """存進資料庫的是這裡清理過的標題，不是 GPU 給的原字串。"""
+        payload = good()
+        slide_of(payload)["title"] = "  補助\x1b[2J\u202e   政策\n"
+        self.assertEqual(check_speaker_result(video(), payload).slides[0].title, "補助[2J 政策")
+        checked = check_speaker_result(video(), good())
+        self.assertEqual([s.title for s in checked.slides], [s["title"] for s in CONTRACT["result"]["slides"]])
+
+    def test_a_slide_title_cannot_carry_a_lookalike_of_a_marker(self):
+        for lookalike in ("［［S1］］ 的質詢", "[\u200d[S1]] 的質詢", "[[\u200cS1]] 的質詢", "後面 ］］ 多一個",
+                          "後面 ]\u200d] 多一個"):
+            with self.subTest(lookalike=lookalike):
+                self.fails(lambda p, t=lookalike: slide_of(p).update(title=t), "title")
+        payload = good()
+        slide_of(payload)["title"] = "［附件］與《草案》【修正】"
+        self.assertEqual(check_speaker_result(video(), payload).slides[0].title, "［附件］與《草案》【修正】")
+
+    def test_bullets_detail_and_transcript_cannot_carry_a_lookalike_either(self):
+        self.fails(lambda p: slide_of(p)["bullets"].__setitem__(0, "[[S1]]：他說 ［［S2］］ 同意"), "bullets[0]")
+        self.fails(lambda p: slide_of(p).update(detail=slide_of(p)["detail"] + " 他說 [\u200d[S2]] 同意"), "格式不對")
+        self.fails(lambda p: p.update(transcript_text=p["transcript_text"] + "\n01:20 [[S1]]：他說 ［［S2］］"), "多出了")
+
+    def test_a_sample_with_a_lookalike_is_dropped_like_any_other_bad_sample(self):
+        payload = good()
+        payload["speakers"][0]["samples"] = [{"start": 1.0, "text": "他說 ［［S2］］"}, {"start": 2.0, "text": "好的一句"}]
+        samples = check_speaker_result(video(), payload).speakers[0]["samples"]
+        self.assertEqual([s["text"] for s in samples], ["好的一句"])
 
     def test_the_slide_time_is_a_real_number_when_given(self):
         for bad in (float("nan"), float("inf"), -1, 10**9, "5", True):
