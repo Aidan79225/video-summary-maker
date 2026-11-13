@@ -693,6 +693,49 @@ describe('正式站的路徑（假後端）', () => {
     assert.ok(!text(html).includes('只列在逐字稿裡'));
   });
 
+  const speakerA = {
+    id: 'S1',
+    label: '發言者 A',
+    name: '',
+    role: '',
+    display: '發言者 A',
+    kind: 'participant',
+    seconds: 1,
+    turns: 1,
+    basis: 'none',
+    flags: [],
+  };
+  const withPoints = (points: unknown[]) =>
+    videoDetail({
+      speakers: [speakerA],
+      diarization: { status: 'ok', warnings: [], requested_speakers: null, found_speakers: 1 },
+      slides: [{ index: 1, title: '第一段', bullets: [], detail: '', timestamp: 5, image_url: null, points }],
+    });
+
+  it('很長、沒有空白的一段文字（雜湊、網址）：重點的文字會折行，不把整頁撐寬', async () => {
+    stub.detail.set(
+      'longtoken',
+      withPoints([
+        { speaker: 'S1', display: '發言者 A', start: 5, text: 'W'.repeat(150) },
+        { speaker: 'S1', display: '發言者 A', start: 9, text: `https://example.com/${'a'.repeat(200)}` },
+      ]),
+    );
+    const { status, html } = await get(site, '/article/longtoken');
+    assert.equal(status, 200);
+    const lis = elements(html, 'li', 'data-point');
+    assert.equal(lis.length, 2);
+    for (const li of lis) {
+      const cls = /<span class="([^"]*\bmin-w-0\b[^"]*)"/.exec(li.inner)?.[1] ?? '';
+      assert.ok(/(^|\s)wrap-anywhere(\s|$)/.test(cls), `重點的文字要能在任何位置折行：${cls}`);
+    }
+    // 光有 class 不夠：建置出來的樣式表裡要真的有這一條規則
+    const sheetTag = [...html.matchAll(/<link\b[^>]*>/g)].map((m) => m[0]).find((t) => /\brel="stylesheet"/.test(t));
+    const sheet = /\bhref="([^"]+)"/.exec(sheetTag ?? '')?.[1];
+    assert.ok(sheet, '找不到樣式表');
+    const css = (await get(site, sheet)).html;
+    assert.ok(/\.wrap-anywhere\s*\{[^}]*overflow-wrap:\s*anywhere/.test(css), '樣式表裡沒有 wrap-anywhere');
+  });
+
   it('殘留的 [[Sn]]：每個會顯示的字串都清掉，換成（未知發言者）', async () => {
     stub.detail.set(
       'leaky',
