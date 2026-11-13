@@ -48,13 +48,13 @@ export type TranscriptLine = { time: string; speaker: string; body: string };
  * 只認兩位的話，一百分鐘以後的每一行都會掉出時間欄。
  *
  * 多人影片的一行是「mm:ss 顯示名：內文」。speakers 是這篇文章已知的顯示名（出場名單）：
- * 第一個全形冒號前面剛好是其中一個，才拆出說話者；不是（議會的「主席：…」、影片內文裡
+ * 行首剛好是其中一個加上全形冒號，才拆出說話者；不是（議會的「主席：…」、影片內文裡
  * 的冒號、名字對不上的）一律整行當內文、speaker 是空字串——寧可不標，也不亂拆。
  * 沒給（或給空陣列）就完全不拆，議會與單人影片的逐字稿跟改版前逐字相同。
  */
 export function parseTranscript(text: string, speakers: readonly string[] = []): TranscriptLine[] {
   if (!text) return [];
-  const known = new Set(speakers.filter(Boolean));
+  const known = [...new Set(speakers.filter(Boolean))];
   return text
     .split(/\r?\n/)
     .map((line) => line.trim())
@@ -63,13 +63,26 @@ export function parseTranscript(text: string, speakers: readonly string[] = []):
       const m = /^(\d{1,3}:\d{2}(?::\d{2})?)\s*(.*)$/.exec(line);
       const time = m ? m[1] : '';
       const rest = m ? m[2] : line;
-      if (known.size > 0) {
-        const colon = rest.indexOf('：');
-        const who = colon > 0 ? rest.slice(0, colon).trim() : '';
-        if (known.has(who)) return { time, speaker: who, body: rest.slice(colon + 1).trim() };
-      }
-      return { time, speaker: '', body: rest };
+      const who = known.length > 0 ? speakerOf(rest, known) : null;
+      return who ? { time, speaker: who.name, body: who.body } : { time, speaker: '', body: rest };
     });
+}
+
+/**
+ * 行首是不是「已知的顯示名＋全形冒號」。顯示名可以自己含全形冒號（所以不能只看第一個冒號前面），
+ * 也可能是另一個顯示名的開頭（「A」與「A：B」）：吻合的不只一個時分不出是誰在說——「A：B：你好」
+ * 可以是 A 說了「B：你好」，也可以是「A：B」說了「你好」——整行當內文，不猜。
+ */
+function speakerOf(rest: string, known: readonly string[]): { name: string; body: string } | null {
+  let hit: { name: string; body: string } | null = null;
+  for (const name of known) {
+    if (!rest.startsWith(name)) continue;
+    const tail = rest.slice(name.length).trimStart();
+    if (!tail.startsWith('：')) continue;
+    if (hit) return null;
+    hit = { name, body: tail.slice(1).trim() };
+  }
+  return hit;
 }
 
 export type TranscriptGroup = { speaker: string; lines: { time: string; body: string }[] };

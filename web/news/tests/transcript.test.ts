@@ -96,6 +96,35 @@ describe('parseTranscript：有說話者清單時', () => {
   it('清單裡的空字串不當成說話者（否則每一行開頭的「：」都被拆）', () => {
     assert.deepEqual(parseTranscript('00:05 ：怪行', ['', '範例甲']), [{ time: '00:05', speaker: '', body: '：怪行' }]);
   });
+
+  it('顯示名與冒號之間多一個空白也認得', () => {
+    assert.deepEqual(parseTranscript('00:01 範例甲 ：你好', known), [{ time: '00:01', speaker: '範例甲', body: '你好' }]);
+  });
+
+  it('冒號後面的空白不算內文', () => {
+    assert.deepEqual(parseTranscript('00:01 範例甲： 你好', known), [{ time: '00:01', speaker: '範例甲', body: '你好' }]);
+  });
+
+  it('顯示名本身含全形冒號：要整個名字吻合才算（只看第一個冒號會認不出來）', () => {
+    assert.deepEqual(parseTranscript('00:01 範例：甲：你好', ['範例：甲', '乙']), [
+      { time: '00:01', speaker: '範例：甲', body: '你好' },
+    ]);
+  });
+
+  it('兩個已知的顯示名都吻合行首（「A」與「A：B」）：分不出是誰，整行當內文，不猜；只吻合一個的照常拆', () => {
+    const names = ['A', 'A：B'];
+    assert.deepEqual(parseTranscript('00:01 A：B：你好\n00:02 A：嗨\n00:03 A：C：再見\n00:04 A：B：', names), [
+      { time: '00:01', speaker: '', body: 'A：B：你好' },
+      { time: '00:02', speaker: 'A', body: '嗨' },
+      { time: '00:03', speaker: 'A', body: 'C：再見' },
+      { time: '00:04', speaker: '', body: 'A：B：' },
+    ]);
+  });
+
+  it('清單的順序不影響結果（長的在前或在後都一樣）', () => {
+    const line = '00:01 A：B：你好';
+    assert.deepEqual(parseTranscript(line, ['A', 'A：B']), parseTranscript(line, ['A：B', 'A']));
+  });
 });
 
 describe('groupTranscript：相鄰且同一位說話者的行併成一塊', () => {
