@@ -59,6 +59,7 @@ from .chapters import (
 )
 from .conversation import DEFAULT_CHUNK_CHARS, allocate_slides, chunk_turns, format_window
 from .diarized_pipeline import (
+    adapter_fingerprint,
     assemble,
     attribution_counts,
     check_reliability,
@@ -67,6 +68,7 @@ from .diarized_pipeline import (
     source_note,
     summarize_windows,
     summary_line,
+    timeline_fingerprint,
     words_fingerprint,
 )
 from .naming import deck_folder_name
@@ -275,7 +277,8 @@ class BuildDeckUseCase:
         cb(0.0, "多人模式：說話者由聲音區分…")
         ck = self._checkpoints
         diarization_fp = diarization_fingerprint(self._diarizer.fingerprint, speaker_count)
-        words_fp = words_fingerprint(settings.whisper_model, speech_hint)
+        words_fp = words_fingerprint(settings.whisper_model, speech_hint,
+                                     adapter_fingerprint(self._word_transcriber))
         diarized, words = self._listen(
             url, settings, cb, check, cancelled, speech_hint, speaker_count, diarization_fp, words_fp,
             ck.load_diarization(settings.output_dir, url, diarization_fp) if ck else None,
@@ -295,7 +298,11 @@ class BuildDeckUseCase:
         allocations = allocate_slides(
             chunk_turns(turns, speakers, self._chunk_chars), settings.min_slides, settings.max_slides)
         plan = [(a.min_slides, a.max_slides, format_window(a.window, speakers)) for a in allocations]
-        conversation_fp = conversation_fingerprint(settings, self._chunk_chars, plan, self._quote_only)
+        # 摘要的指紋除了設定與餵給模型的窗，還有驗證規則與摘要器的程式版本、每段話的時間：
+        # 規則或提示詞改了卻忘了升版本，舊規則放行的摘要也不會被沿用
+        conversation_fp = conversation_fingerprint(
+            settings, self._chunk_chars, plan, self._quote_only,
+            adapter=adapter_fingerprint(self._conversation), timeline=timeline_fingerprint(turns))
         saved = ck.load_conversation(settings.output_dir, url, conversation_fp) if ck else None
         counts = None
         if saved is not None:

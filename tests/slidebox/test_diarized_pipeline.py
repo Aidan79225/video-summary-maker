@@ -5,12 +5,14 @@
 """
 from __future__ import annotations
 
+import ast
 import dataclasses
 
 import pytest
 
 from slidebox.domain.entities import DiarizationReport, Point, RawPoint, RawSlide, Settings, Turn
 from slidebox.domain.errors import AttributionUnreliable, SummarizerOutputInvalid, SummarizerUnavailable
+from slidebox.usecases import code_fingerprint as cf
 from slidebox.usecases import diarized_pipeline as dp
 from slidebox.usecases.conversation import Allocation, CheckedSlide, ValidationResult, Window, chunk_turns
 from slidebox.usecases.speakers import (
@@ -114,6 +116,143 @@ def test_the_conversation_fingerprint_follows_the_windows_and_the_chunk_size(mon
     assert dp.conversation_fingerprint(SETTINGS, 6000, [(1, 4, "[T0] S1：甲"), (1, 3, "[T1] S2：乙")]) != base
     monkeypatch.setattr(dp, "PROMPT_VERSION", dp.PROMPT_VERSION + 1)
     assert dp.conversation_fingerprint(SETTINGS, 6000, PLAN) != base
+
+
+# --- 存檔指紋：程式本身（驗證規則、辨識器與摘要器的版本、每段話的時間）---
+
+
+def _edited(monkeypatch, module: str) -> None:
+    """模擬 module 的原始碼被改過（其他模組照舊）。"""
+    real = cf.read_module_source
+    monkeypatch.setattr(cf, "read_module_source",
+                        lambda name: real(name) + "\n# 改過\nMIN_SHARED_GRAMS = 1\n" if name == module else real(name))
+
+
+def test_the_conversation_fingerprint_contains_the_hash_of_the_rule_sources():
+    """攔的 bug：改了驗證規則（門檻、判斷）卻忘了升 PROMPT_VERSION，舊規則放行的摘要被新規則沿用。
+    指紋裡要有規則原始碼的雜湊——這裡只驗「有這一項、而且它是現讀的」，不釘任何雜湊值。"""
+    base = dp.conversation_fingerprint(SETTINGS, 6000, PLAN)
+    assert base == dp.conversation_fingerprint(SETTINGS, 6000, PLAN, rules=dp.rules_fingerprint())
+    assert dp.conversation_fingerprint(SETTINGS, 6000, PLAN, rules="another version of the rules") != base
+    assert dp.rules_fingerprint() == cf.code_fingerprint(dp.RULE_MODULES) and len(dp.rules_fingerprint()) == 16
+
+
+@pytest.mark.parametrize("module", dp.RULE_MODULES)
+def test_editing_any_rule_module_changes_the_conversation_fingerprint(monkeypatch, module):
+    base = dp.conversation_fingerprint(SETTINGS, 6000, PLAN)
+
+    _edited(monkeypatch, module)
+
+    assert dp.conversation_fingerprint(SETTINGS, 6000, PLAN) != base
+
+
+def test_a_module_that_is_not_a_rule_module_does_not_change_the_fingerprint(monkeypatch):
+    base = dp.conversation_fingerprint(SETTINGS, 6000, PLAN)
+    _edited(monkeypatch, "slidebox.usecases.brief")
+    assert dp.conversation_fingerprint(SETTINGS, 6000, PLAN) == base
+
+
+def _usecase_imports(source: str) -> set[str]:
+    """這份原始碼在 slidebox.usecases 底下 import 的模組（相對或絕對寫法都算）。"""
+    package = "slidebox.usecases"
+    found: set[str] = set()
+    for node in ast.walk(ast.parse(source)):
+        if isinstance(node, ast.ImportFrom):
+            if node.level == 1 and node.module:                       # from .names import x
+                found.add(f"{package}.{node.module.split('.')[0]}")
+            elif node.level == 1:                                     # from . import names
+                found.update(f"{package}.{alias.name}" for alias in node.names)
+            elif node.level == 0 and node.module == package:          # from slidebox.usecases import names
+                found.update(f"{package}.{alias.name}" for alias in node.names)
+            elif node.level == 0 and node.module and node.module.startswith(f"{package}."):
+                found.add(node.module)
+        elif isinstance(node, ast.Import):
+            found.update(alias.name for alias in node.names if alias.name.startswith(f"{package}."))
+    return found
+
+
+def test_the_rule_modules_cover_everything_the_validators_import_inside_the_use_case_layer():
+    """攔的 bug：驗證規則多 import 了一個新模組（例如把某個檢查搬到新檔案），那個模組卻沒有算進指紋，
+    改它不會讓舊的摘要作廢。這一組必須涵蓋規則模組自己 import 的所有 usecases 模組。"""
+    covered = set(dp.RULE_MODULES)
+    for module in dp.RULE_MODULES:
+        source = cf.read_module_source(module)
+        assert source is not None, module
+        missing = _usecase_imports(source) - covered
+        assert not missing, f"{module} import 了 {sorted(missing)}，請加進 RULE_MODULES"
+    assert "slidebox.usecases.conversation" in covered       # 起點本身要在
+
+
+def test_the_drift_check_itself_sees_a_missing_module():
+    """檢查本身要有牙齒：少列一個模組，上面那個測試的算法就會抓到。"""
+    imported = _usecase_imports(cf.read_module_source("slidebox.usecases.conversation"))
+    assert {"slidebox.usecases.names", "slidebox.usecases.quotes", "slidebox.usecases.numerals",
+            "slidebox.usecases.speakers"} <= imported
+    without_names = set(dp.RULE_MODULES) - {"slidebox.usecases.names"}
+    assert imported - without_names == {"slidebox.usecases.names"}
+
+
+def test_unreadable_rule_sources_still_give_a_fingerprint_that_matches_no_stored_one(monkeypatch):
+    base = dp.conversation_fingerprint(SETTINGS, 6000, PLAN)
+
+    def broken(name):
+        raise OSError("source is gone")
+
+    monkeypatch.setattr(cf, "read_module_source", broken)
+
+    unreadable = dp.conversation_fingerprint(SETTINGS, 6000, PLAN)
+
+    assert len(unreadable) == 16 and unreadable != base
+    assert dp.conversation_fingerprint(SETTINGS, 6000, PLAN) == unreadable
+    assert unreadable != dp.conversation_fingerprint(SETTINGS, 6000, PLAN, rules="")
+
+
+def test_the_adapters_code_version_is_part_of_both_the_words_and_the_conversation_fingerprints():
+    assert dp.words_fingerprint("whisper-a", "少子化", "words-code-1") != dp.words_fingerprint(
+        "whisper-a", "少子化", "words-code-2")
+    base = dp.conversation_fingerprint(SETTINGS, 6000, PLAN, adapter="summarizer-code-1")
+    assert dp.conversation_fingerprint(SETTINGS, 6000, PLAN, adapter="summarizer-code-2") != base
+    assert dp.conversation_fingerprint(SETTINGS, 6000, PLAN, adapter="summarizer-code-1") == base
+
+
+def test_the_timeline_of_the_turns_is_part_of_the_conversation_fingerprint():
+    """攔的 bug：窗的文字沒有時間。辨識設定換了、文字剛好一樣，存下來的重點裡的時間就是舊的。"""
+    turns = [Turn(0, 5.0, 9.0, "S1", "甲"), Turn(1, 10.0, 14.0, "S2", "乙")]
+    shifted = [Turn(0, 5.5, 9.5, "S1", "甲"), Turn(1, 10.0, 14.0, "S2", "乙")]
+    relabeled = [Turn(0, 5.0, 9.0, "S2", "甲"), Turn(1, 10.0, 14.0, "S2", "乙")]
+    base = dp.timeline_fingerprint(turns)
+    assert dp.timeline_fingerprint(list(turns)) == base and len(base) == 16
+    assert dp.timeline_fingerprint(shifted) != base and dp.timeline_fingerprint(relabeled) != base
+    assert dp.conversation_fingerprint(SETTINGS, 6000, PLAN, timeline=base) != dp.conversation_fingerprint(
+        SETTINGS, 6000, PLAN, timeline=dp.timeline_fingerprint(shifted))
+
+
+class _Part:
+    def __init__(self, fingerprint):
+        self.fingerprint = fingerprint
+
+
+class _Silent:
+    pass
+
+
+class _Raises:
+    @property
+    def fingerprint(self):
+        raise RuntimeError("cannot tell")
+
+
+def test_a_part_that_reports_its_version_is_taken_at_its_word():
+    assert dp.adapter_fingerprint(_Part("abc123")) == "abc123"
+
+
+@pytest.mark.parametrize("part", [_Silent(), _Part(""), _Part(None), _Part(5), _Part(b"bytes"), _Raises()],
+                         ids=["missing", "empty", "none", "number", "bytes", "raises"])
+def test_a_part_that_cannot_tell_its_version_gets_a_marker_that_matches_nothing(part):
+    """攔的 bug：不知道是哪一版程式，卻用固定的值頂替，另一個也不知道的行程就會沿用它的存檔。"""
+    marker = dp.adapter_fingerprint(part)
+    assert marker.startswith("unreadable:") and marker == dp.adapter_fingerprint(part)
+    assert marker != dp.adapter_fingerprint(_Part("abc123"))
 
 
 # --- 來源註記 ---

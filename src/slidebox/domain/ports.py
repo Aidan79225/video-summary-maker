@@ -235,6 +235,12 @@ class WordTranscriber(Protocol):
     跟 SpeechTranscriber 是兩個介面——單人路徑的 transcribe() 與它的呼叫一個字都不動。
     """
 
+    @property
+    def fingerprint(self) -> str:
+        """「這一版辨識程式」的指紋（辨識參數、字的整理的原始碼）：存檔的字帶著它，
+        改了程式，舊的字就不會被拿來冒充。沒有或是空的，use case 就不沿用任何舊存檔。"""
+        ...
+
     def transcribe_words(
         self,
         audio_path: str,
@@ -273,8 +279,8 @@ class SpeechDiarizer(Protocol):
 
     @property
     def fingerprint(self) -> str:
-        """引擎＋版本＋模型的指紋（16 個十六進位字元）：存檔與結果都帶著它，
-        換了引擎或模型，舊的說話者區分結果就不會被拿來冒充。"""
+        """引擎＋版本＋模型＋實作程式的指紋（16 個十六進位字元）：存檔與結果都帶著它，
+        換了引擎、模型或實作（含另一個環境裡的工作行程腳本），舊的說話者區分結果就不會被拿來冒充。"""
         ...
 
     def available(self) -> tuple[bool, str]:
@@ -300,6 +306,12 @@ class SpeechDiarizer(Protocol):
 
 class ConversationSummarizer(Protocol):
     """把一段已標好說話者的對話寫成「重點」：模型只引用 turn 的編號，不決定誰說了什麼。"""
+
+    @property
+    def fingerprint(self) -> str:
+        """「這一版摘要程式」的指紋（提示詞、取樣設定、回應解析的原始碼）：存下來的摘要帶著它，
+        改了程式，舊的摘要就不會被拿來冒充。沒有或是空的，use case 就不沿用任何舊存檔。"""
+        ...
 
     def summarize_window(
         self,

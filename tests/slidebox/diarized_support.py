@@ -148,9 +148,11 @@ class FakeDiarizer:
 
 
 class FakeWordTranscriber:
-    """比照 WordTranscriber：回傳手寫對談的字（每個字都有時間）。"""
+    """比照 WordTranscriber：回傳手寫對談的字（每個字都有時間）。
+    fingerprint 是它「這一版程式」的指紋；測試改它，就是在模擬辨識程式改了。"""
 
     def __init__(self, words=None, language: str = "zh", error: Exception | None = None, on_transcribe=None):
+        self.fingerprint = "fake-words-code-1"
         self._words = tuple(FIXTURE.words if words is None else words)
         self._language = language
         self.error = error
@@ -175,9 +177,11 @@ class FakeWordTranscriber:
 
 class FakeConversation:
     """比照 ConversationSummarizer。replies 依序回答每一次呼叫：一個 tuple[RawSlide,...]、一個例外，
-    或一個 callable(call)；用完之後（或沒給）就用 default（預設是這個窗裡全部通過檢查的重點）。"""
+    或一個 callable(call)；用完之後（或沒給）就用 default（預設是這個窗裡全部通過檢查的重點）。
+    fingerprint 是它「這一版程式」的指紋；測試改它，就是在模擬提示詞或回應解析改了。"""
 
     def __init__(self, replies=(), default=good_reply, on_call=None):
+        self.fingerprint = "fake-conversation-code-1"
         self._replies = list(replies)
         self._default = default
         self._on_call = on_call
