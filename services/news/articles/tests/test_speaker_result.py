@@ -40,6 +40,27 @@ def slide_of(payload, index=0):
     return payload["slides"][index]
 
 
+def roster(participants, minors):
+    """participants 位 participant（發言者 A、B…）加 minors 位 minor（其他聲音 1、2…）的 speakers，編號 S1… 依序。
+
+    數字都小而一致（秒數、段數、首末時間），夾在契約範例的 diarization 數字裡不會互相矛盾。
+    """
+    speakers = []
+    for n in range(1, participants + minors + 1):
+        main = n <= participants
+        speakers.append({"id": f"S{n}", "label": f"發言者 {chr(64 + n)}" if main else f"其他聲音 {n - participants}",
+                         "kind": "participant" if main else "minor", "seconds": 20.0, "turns": 5,
+                         "first_seen": 5.0, "last_seen": 700.0, "samples": [], "flags": []})
+    return speakers
+
+
+def with_roster(payload, participants, minors):
+    """把結果的說話者清單換成 roster(participants, minors)，diarization 的人數跟著改（要互相對得上）。"""
+    payload["speakers"] = roster(participants, minors)
+    payload["diarization"].update(found_speakers=participants, minor_speakers=minors)
+    return payload
+
+
 class AcceptanceTests(SimpleTestCase):
     def test_the_contract_example_is_accepted_and_comes_back_clean(self):
         checked = check_speaker_result(video(), good())
@@ -274,12 +295,9 @@ class SpeakersTests(SimpleTestCase):
 
     def test_the_list_has_between_one_and_twelve_speakers(self):
         self.fails(lambda s: s.clear(), "1～12")
-        template = good()["speakers"][0]
-        many = [{**template, "id": f"S{n}", "label": f"發言者 {n}"} for n in range(1, 14)]
-        self.fails(lambda s: s.__init__(many), "1～12")
-        twelve = [{**template, "id": f"S{n}", "label": f"發言者 {n}"} for n in range(1, 13)]
-        payload = good()
-        payload["speakers"] = twelve
+        self.fails(lambda s: s.__init__(roster(8, 5)), "1～12")
+        # 上限剛好：8 位主要發言者（GPU 的上限）加 4 個其他聲音
+        payload = with_roster(good(), participants=8, minors=4)
         self.assertEqual(len(check_speaker_result(video(), payload).speakers), 12)
 
     def test_it_must_be_a_list_of_objects(self):
@@ -304,8 +322,8 @@ class SpeakersTests(SimpleTestCase):
 
     def test_at_least_one_speaker_is_a_participant(self):
         payload = good()
-        for speaker in payload["speakers"]:
-            speaker["kind"] = "minor"
+        for number, speaker in enumerate(payload["speakers"], start=1):
+            speaker.update(kind="minor", label=f"其他聲音 {number}")
         with self.assertRaises(JobFailed) as caught:
             check_speaker_result(video(), payload)
         self.assertIn("participant", str(caught.exception))
@@ -318,8 +336,36 @@ class SpeakersTests(SimpleTestCase):
 
     def test_the_label_is_cleaned_not_copied(self):
         payload = good()
-        payload["speakers"][0]["label"] = "發言者\x1b[0m\u202e A"
-        self.assertEqual(check_speaker_result(video(), payload).speakers[0]["label"], "發言者[0m A")
+        payload["speakers"][0]["label"] = "發言者\x1b\u202e  A"
+        self.assertEqual(check_speaker_result(video(), payload).speakers[0]["label"], "發言者 A")
+
+    def test_a_label_has_to_be_a_neutral_one_the_gpu_would_emit(self):
+        """攔的 bug：GPU 回的 label 是「黃國昌」或「主持人」，沒有人確認過，卻會成為網頁上顯示的名字
+        （操作者沒設名字時 display 退回 label）。名字與職稱只能由操作者用 label_video 設定。"""
+        for bad in ("黃國昌", "主持人", "來賓", "講者", "Alice", "發言者 1", "發言者 a", "發言者A", "發言者 ABCD",
+                    "發言者 黃國昌", "發言者 A（黃國昌）", "發言者 A，主持人", "其他聲音", "其他聲音 0", "其他聲音 01",
+                    "其他聲音 100", "其他聲音 A", "其他聲音 1號", "發言者 A 發言者 B"):
+            with self.subTest(bad=bad):
+                self.field("label", bad)
+        message = self.fails(lambda s: s[0].update(label="黃國昌"), "speakers[0].label")
+        self.assertIn("label_video", message)
+
+    def test_the_shape_of_the_label_has_to_match_the_kind(self):
+        """participant 不能叫「其他聲音 1」，minor 也不能叫「發言者 C」：一個冒充另一個的身分類別。"""
+        self.fails(lambda s: s[0].update(label="其他聲音 1"), "speakers[0].label")
+        self.fails(lambda s: s[2].update(label="發言者 C"), "speakers[2].label")
+
+    def test_every_neutral_label_the_gpu_emits_is_accepted(self):
+        """發言者 A…Z、AA…（GPU 依第一次出現的順序給字母）與其他聲音 1…，清單裡有幾位都收。"""
+        payload = with_roster(good(), participants=8, minors=4)
+        self.assertEqual([s["label"] for s in check_speaker_result(video(), payload).speakers],
+                         [f"發言者 {c}" for c in "ABCDEFGH"] + [f"其他聲音 {n}" for n in (1, 2, 3, 4)])
+        for label in ("發言者 Z", "發言者 AA", "發言者 ZZ", "發言者 AAA"):
+            cleaned = clean_speakers([{**CONTRACT["result"]["speakers"][0], "label": label}])
+            self.assertEqual(cleaned[0]["label"], label)
+        for label in ("其他聲音 9", "其他聲音 12", "其他聲音 99"):
+            cleaned = clean_speakers([{**CONTRACT["result"]["speakers"][2], "label": label}])
+            self.assertEqual(cleaned[0]["label"], label)
 
     def test_a_label_cannot_forge_a_placeholder_with_invisible_characters(self):
         """零寬字元夾在 [[ 之間：先檢查再清理的話檢查看不到，清理之後卻變成真的 [[S1]]。"""

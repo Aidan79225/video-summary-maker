@@ -52,6 +52,12 @@ STATUSES = ("ok", "warn")
 KNOWN_WARNINGS = ("count_mismatch", "high_unassigned", "many_minor", "single_found")
 
 _FLAG = re.compile(r"[a-z][a-z0-9_]{0,31}")
+# GPU 給的稱呼只有兩種形狀（speakers.summarize_speakers）：主要發言者依第一次出現的順序叫「發言者 A」「發言者 B」…
+# （A～Z，超過 26 位接 AA），其餘叫「其他聲音 1」「其他聲音 2」…。名字與職稱不從 GPU 來，只由操作者用 label_video 設定
+_PARTICIPANT_LABEL = re.compile(r"發言者 [A-Z]{1,3}")
+_MINOR_LABEL = re.compile(r"其他聲音 [1-9][0-9]?")
+_LABEL_SHAPES = {"participant": (_PARTICIPANT_LABEL, "發言者 A、發言者 B…"),
+                 "minor": (_MINOR_LABEL, "其他聲音 1、其他聲音 2…")}
 _FINGERPRINT = re.compile(r"[0-9a-f]{16}")
 # 逐字稿的每一行：「mm:ss [[Sn]]：內容」（分鐘可以超過 99）
 _TRANSCRIPT_LINE = re.compile(r"\d{1,4}:[0-5]\d \[\[(S\d+)\]\]：")
@@ -143,6 +149,10 @@ def clean_speakers(raw: object) -> list[dict]:
         if kind not in KINDS:
             _fail(f"{where}.kind 要是 participant 或 minor，不是 {_show(kind)}")
         label = _text(item.get("label"), f"{where}.label", max_length=LABEL_LENGTH)
+        shape, example = _LABEL_SHAPES[kind]
+        if not shape.fullmatch(label):
+            _fail(f"{where}.label {_show(label)} 不是程式給的中性稱呼（{kind} 只會是「{example}」這種）："
+                  "名字與職稱只能由操作者用 label_video 設定，GPU 的結果不能自己帶")
         if any(label == s["label"] for s in speakers):
             _fail(f"{where}.label「{label}」重複了：兩位說話者會顯示成同一個名字")
         speakers.append({
@@ -298,7 +308,9 @@ def check_speaker_result(article, payload: object) -> SpeakerResult:
       1. 結果自己說是多人模式（speaker_mode == "diarize"），不是舊版 GPU 的單人或逐句標記格式；
       2. 結果的 video_id（有給的話）是這支影片的；diarization 的狀態是 ok／warn、至少找到一位說話者，而且
          requested_speakers 跟我們送出去的一樣（自動＝None，指定人數＝那個數字）：接回了另一種設定的工作時會對不上；
-      3. speakers 是 1～12 位、編號不重複、種類是 participant／minor、至少一位 participant；
+      3. speakers 是 1～12 位、編號不重複、種類是 participant／minor、至少一位 participant；稱呼（label）只能是
+         程式給的中性形狀（participant＝「發言者 A」…、minor＝「其他聲音 1」…，形狀要跟種類一致）：人名、
+         「主持人」這類的字一律拒絕，名字只由操作者用 label_video 設定；
       4. 每一頁至少一個重點；每個重點的說話者是列出來的 participant，turn 是整數、start 是有限的非負數、
          text 1～120 字且不含 [[；同一個發言段落（turn）不能被標成兩個人；
       5. 逐字稿每一行是「mm:ss [[Sn]]：」開頭、Sn 是列出來的說話者或 S0；條列的第 i 項記號就是第 i 個重點的

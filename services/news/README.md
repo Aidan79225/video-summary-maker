@@ -177,7 +177,7 @@ uv run python manage.py remove_video yt-jNQXAC9IVRw --force     # 緊急下架�
 
 - 結果自己說 `speaker_mode` 是 `diarize`（舊版 GPU 的單人或逐句標記格式會說明「GPU 很可能還沒更新」）、`video_id` 是這支影片的；
 - `diarization.status` 是 `ok` 或 `warn`、至少找到一位，`requested_speakers` 跟我們送出的一樣（自動是 `null`）；
-- `speakers` 1～12 位、編號 `S1`… 不重複、`kind` 是 `participant` 或 `minor`、至少一位 `participant`；
+- `speakers` 1～12 位、編號 `S1`… 不重複、`kind` 是 `participant` 或 `minor`、至少一位 `participant`；`label` 只能是程式給的中性稱呼（participant 是「發言者 A」「發言者 B」…，minor 是「其他聲音 1」…，形狀要跟 `kind` 一致）：人名、「主持人」這類的字一律拒絕，網頁上顯示的名字只來自操作者的 `label_video`；
 - 每一頁至少一個重點；重點的說話者必須是列出來的 **participant**（只講了幾句的「其他聲音」與無法判斷的段落不能被引用），同一個發言段落不能被標成兩個人；
 - 逐字稿每一行是 `mm:ss [[Sn]]：內容`；每頁條列的第 i 項記號必須就是第 i 個重點的說話者，完整敘述裡的記號順序必須對得上重點；
 - 所有數字有限且在範圍內（NaN、無限大、布林、10^9 都拒絕）；所有文字先過 `clean_text` 再檢查（零寬字元夾出來的 `[[` 也擋得到），重點與條列的內容不能有 `[[` 或 `]]`；
