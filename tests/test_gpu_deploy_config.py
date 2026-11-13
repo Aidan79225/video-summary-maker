@@ -178,8 +178,11 @@ def test_env_example_lists_every_diarization_setting_with_a_value_the_code_accep
 # --- Dockerfile ---
 
 def test_dockerfile_installs_the_diarization_group():
-    """攔的 bug：映像沒裝 pyannote——/capabilities 永遠說「沒有安裝 pyannote.audio」。"""
-    assert re.search(r"^RUN uv sync .*--group diarization\b", _read("Dockerfile"), re.MULTILINE)
+    """攔的 bug：映像沒裝 pyannote——/capabilities 永遠說「沒有安裝 pyannote.audio」。
+    它裝在第二個環境（/opt/diarize-venv），不是主環境：為什麼、以及兩個環境各自該有什麼，
+    見 tests/test_gpu_environments.py。"""
+    assert re.search(r"^RUN UV_PROJECT_ENVIRONMENT=/opt/diarize-venv uv sync .*--only-group diarization\b",
+                     _read("Dockerfile"), re.MULTILINE)
 
 
 def test_dockerfile_lets_python_find_the_modules_run_with_dash_m():
