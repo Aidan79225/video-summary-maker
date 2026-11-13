@@ -9,7 +9,7 @@
     "preview": "node ./dist/server/entry.mjs",
     "start": "node ./dist/server/entry.mjs",
     "check": "astro check",
-    "test:unit": "node --test \"tests/speakers.test.ts\" \"tests/transcript.test.ts\"",
+    "test:unit": "node --test \"tests/speakers.test.ts\" \"tests/transcript.test.ts\" \"tests/contrast.test.ts\"",
     "test": "npm run build && node --test \"tests/*.test.ts\""
   },
   "dependencies": {

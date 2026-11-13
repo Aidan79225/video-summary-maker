@@ -244,6 +244,14 @@ describe('假資料模式（USE_FIXTURE=1）', () => {
       }
     });
 
+    it('「頻道」兩個字不能淡掉：不加透明度，字色跟頻道名稱一樣（淺色底 5.7:1，AA 要 4.5:1）', () => {
+      const label = elements(html, 'span', 'data-channel-label');
+      assert.equal(label.length, 1);
+      const cls = attrOf(label[0]?.open ?? '', 'class') ?? '';
+      assert.ok(!/(^|\s)opacity-/.test(cls), `標籤的 class 不能帶 opacity：${cls}`);
+      assert.ok(!/(^|\s)text-\S+\/\d/.test(cls), `標籤的字色不能帶透明度：${cls}`);
+    });
+
     it('每段的重點：每個重點有說話者晶片、文字、帶 &t= 的連結；不再畫平的條列', () => {
       const slides = fx(OK).slides;
       const sections = [...html.matchAll(/<section\s+id="s(\d+)"[\s\S]*?<\/section>/g)].map((m) => m[0]);
@@ -442,6 +450,9 @@ describe('假資料模式（USE_FIXTURE=1）', () => {
       const cards = [...html.matchAll(/<article\b[\s\S]*?<\/article>/g)].map((m) => m[0]);
       const by = (slug: string) => cards.find((c) => c.includes(`href="/article/${slug}"`)) ?? '';
       assert.ok(text(by(OK)).includes('2 位說話者'));
+      // 卡片頁尾繼承的 text-muted/80 在淺色底只有 3.3:1；新加的這一格自己帶全強度的 text-muted（4.8:1）
+      const span = elements(by(OK), 'span', 'data-participants')[0];
+      assert.ok(/(^|\s)text-muted(\s|$)/.test(attrOf(span?.open ?? '', 'class') ?? ''), '人數那一格要有自己的 text-muted');
       assert.ok(text(by(WARN)).includes('1 位說話者'));
       assert.ok(!text(by(OLD1)).includes('位說話者'));
       assert.ok(!text(by(OLD2)).includes('位說話者'));
