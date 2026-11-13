@@ -220,12 +220,18 @@ def test_a_long_gap_between_the_same_speaker_is_not_filled():
 
 
 def test_the_two_second_limit_for_filling_a_gap_is_inclusive():
-    turns = [SpeakerTurn(0.0, 0.5, "x"), SpeakerTurn(2.1, 2.7, "x")]
-    exactly_two = [Word(0.0, 0.2, "甲"), Word(1.0, 1.2, "中"), Word(2.2, 2.4, "乙")]      # 甲結束 0.2 → 乙開始 2.2
-    just_over = [Word(0.0, 0.2, "甲"), Word(1.0, 1.2, "中"), Word(2.3, 2.5, "乙")]        # 間隔 2.1 秒
+    # 空隙裡的字一個接一個（沒有停頓、沒有句號），才輪得到「兩秒」這個上限
+    def stretch(end):
+        width = (end - 0.2) / 10
+        gap = [Word(0.2 + k * width, 0.2 + (k + 1) * width, "中") for k in range(10)]
+        return [Word(0.0, 0.2, "甲"), *gap, Word(end, end + 0.2, "乙")]
 
-    assert [label for _, label in assign_speakers(exactly_two, turns)] == ["x", "x", "x"]
-    assert [label for _, label in assign_speakers(just_over, turns)] == ["x", "S0", "x"]
+    turns = [SpeakerTurn(0.0, 0.15, "x"), SpeakerTurn(2.25, 3.0, "x")]
+    exactly_two = stretch(2.2)      # 甲結束 0.2 → 乙開始 2.2
+    just_over = stretch(2.3)        # 間隔 2.1 秒
+
+    assert [label for _, label in assign_speakers(exactly_two, turns)] == ["x"] * 12
+    assert [label for _, label in assign_speakers(just_over, turns)] == ["x"] + ["S0"] * 10 + ["x"]
 
 
 def test_a_short_gap_between_the_same_speaker_is_filled():
@@ -233,6 +239,42 @@ def test_a_short_gap_between_the_same_speaker_is_filled():
     turns = [SpeakerTurn(0.0, 0.5, "x"), SpeakerTurn(0.9, 1.3, "x")]
 
     assert [label for _, label in assign_speakers(words, turns)] == ["x", "x", "x", "x"]
+
+
+def test_a_gap_with_a_sentence_end_inside_is_not_filled_even_between_the_same_speaker():
+    # A 說到「這個」，diarizer 在 2.0–2.4 秒沒有任何區段，B 在裡面插了一句「對。」，A 接著說。
+    # 空隙裡有句子結尾：換人可能就藏在那裡，兩側都是 A 也不推測（審查用模擬量過：空隙補人
+    # 是程式自己造成的錯誤歸屬裡幾乎唯一的來源）
+    words = [Word(0.0, 1.0, "我覺得", 0), Word(1.0, 2.0, "這個", 0), Word(2.0, 2.4, "對。", 1),
+             Word(2.4, 3.4, "問題", 2), Word(3.4, 4.4, "很大。", 2)]
+    turns = normalize_turns([SpeakerTurn(0.0, 2.0, "A"), SpeakerTurn(2.4, 5.0, "A")])
+
+    assert [label for _, label in assign_speakers(words, turns)] == ["S1", "S1", "S0", "S1", "S1"]
+
+
+def test_a_gap_after_a_pause_is_not_filled_even_between_the_same_speaker():
+    # 「甲」與「中」之間停了 0.6 秒：換人可能藏在停頓裡
+    words = [Word(0.0, 0.4, "甲"), Word(1.0, 1.2, "中"), Word(1.2, 1.6, "乙")]
+    turns = [SpeakerTurn(0.0, 0.5, "x"), SpeakerTurn(1.3, 1.7, "x")]
+
+    assert [label for _, label in assign_speakers(words, turns)] == ["x", "S0", "x"]
+
+
+def test_a_gap_before_a_pause_is_not_filled_even_between_the_same_speaker():
+    # 「中」與「乙」之間停了 0.6 秒
+    words = [Word(0.0, 0.2, "甲"), Word(0.2, 0.4, "中"), Word(1.0, 1.4, "乙")]
+    turns = [SpeakerTurn(0.0, 0.25, "x"), SpeakerTurn(0.95, 1.5, "x")]
+
+    assert [label for _, label in assign_speakers(words, turns)] == ["x", "S0", "x"]
+
+
+def test_a_gap_in_the_middle_of_a_sentence_is_still_filled_when_nothing_can_hide_there():
+    # 句子中間 diarizer 閃了一下沒蓋到「這個」：沒有句號、沒有停頓，仍然算同一位
+    words = [Word(0.0, 0.3, "我"), Word(0.3, 0.6, "覺得"), Word(0.6, 0.9, "這個"),
+             Word(0.9, 1.2, "問題"), Word(1.2, 1.5, "很大。")]
+    turns = [SpeakerTurn(0.0, 0.6, "x"), SpeakerTurn(0.85, 1.6, "x")]
+
+    assert [label for _, label in assign_speakers(words, turns)] == ["x"] * 5
 
 
 def test_nothing_is_inherited_across_two_different_speakers_or_from_the_edges():
@@ -332,6 +374,9 @@ def test_a_word_is_never_given_to_a_speaker_the_diarizer_does_not_support(seed):
         assert left is not None and right is not None
         assert covering(turns, out[left][0]) == {label} == covering(turns, out[right][0])
         assert out[right][0].start - out[left][0].end <= speakers.INHERIT_MAX_GAP_SECONDS + 1e-6
+        # 而且空隙裡（含兩端）沒有句子結尾或停頓：換人可能藏在那裡就不推測
+        in_order = [w for w, _ in out]
+        assert not any(speakers._is_natural_boundary(in_order, k) for k in range(left, right))
 
 
 @pytest.mark.parametrize("seed", range(60))

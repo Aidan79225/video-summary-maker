@@ -40,7 +40,7 @@ UNDECIDED = "S0"
 PAUSE_SECONDS = 0.3
 # diarizer 說的換人點若不在自然的邊界上，只看這個範圍內有沒有自然邊界
 SNAP_SECONDS = 1.5
-# 沒有任何區段蓋住的字，兩側同一人且中間沒有超過這麼久才算那個人
+# 沒有任何區段蓋住的字，兩側同一人、中間沒有超過這麼久、且空隙裡沒有自然的邊界才算那個人
 INHERIT_MAX_GAP_SECONDS = 2.0
 _EPS = 1e-6
 
@@ -123,8 +123,9 @@ def assign_speakers(
     """每個字一個說話者；說不準的是 S0。輸出與輸入一對一、同順序、文字不改。
 
     1. 以字的中點看哪些區段蓋住它：恰好一位 → 候選；兩位以上 → 交疊（S0）；沒有 → 空隙。
-    2. 空隙裡的字，只有「前後最近的有人字是同一位、且中間沒有超過 2 秒」才算那一位，
-       其餘是 S0（兩側不同人，或另一側是交疊／起點／終點，都不推測）。
+    2. 空隙裡的字，只有「前後最近的有人字是同一位、中間沒有超過 2 秒、且空隙裡（含兩端）
+       沒有句子結尾或 0.3 秒以上的停頓」才算那一位，其餘是 S0（兩側不同人、另一側是
+       交疊／起點／終點、或換人可能藏在空隙裡，都不推測）。
     3. 兩個相鄰的字候選不同＝換人。換人只允許發生在自然的邊界：前一個字是句子結尾，
        或兩字之間停頓 >= 0.3 秒。不在自然邊界上的換人，不把任何字挪給另一個人，
        而是把「diarizer 的換人點到最近的自然邊界（1.5 秒內）」之間的字標成 S0；
@@ -202,7 +203,11 @@ def _fill_gaps(words: Sequence[Word], labels: list[str]) -> list[str]:
             j += 1
         # 空隙是 [i, j)，左右鄰居是 i-1 與 j
         if i > 0 and j < n and _is_speaker(out[i - 1]) and out[i - 1] == out[j]:
-            if words[j].start - words[i - 1].end <= INHERIT_MAX_GAP_SECONDS + _EPS:
+            close_enough = words[j].start - words[i - 1].end <= INHERIT_MAX_GAP_SECONDS + _EPS
+            # 空隙裡（含兩端）若有句子結尾或停頓，換人就可能藏在那裡：別人的短句（對。好。）
+            # 常常正是 diarizer 漏掉的那一小段。這種空隙兩側同一人也不推測。
+            can_hide_a_change = any(_is_natural_boundary(words, k) for k in range(i - 1, j))
+            if close_enough and not can_hide_a_change:
                 for k in range(i, j):
                     out[k] = out[i - 1]
         i = j
