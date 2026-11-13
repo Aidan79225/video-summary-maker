@@ -10,7 +10,7 @@ from datetime import timedelta
 
 from django.utils import timezone
 
-from articles.gpu_client import NOT_UPDATED, GpuApiError
+from articles.gpu_client import NOT_UPDATED, GpuApiError, JobFailed
 from articles.models import Article, ArticleStatus
 from articles.tests import test_add_video as base
 from articles.tests.speaker_support import diarized_result
@@ -373,6 +373,145 @@ class ExistingVideoTests(base.CommandTestCase):
         out, _, gpu, _ = self.run_cmd(ZOO_URL, "--rerun", "--speakers", "1", gpu=base.Gpu(jobs={}))
         self.assertEqual(self.refresh().speaker_count, 1)
         self.assertEqual(len(gpu.submits), 1)
+
+    # --- 接回舊的工作：沒指定 --speakers 的預設指令不能悄悄接回單人的工作 ---
+
+    # 會接回 GPU 舊工作的四種資料列：處理中、失敗過、已登記還沒處理、已發佈（上次 --rerun 中斷）
+    RESUMING = ("processing", "failed", "pending", "ready")
+
+    def lingering(self, state, count):
+        """GPU 上還留著工作 J（模式 count）的資料列，回傳 (資料列, 要加的參數)。已發佈的要 --rerun 才會碰到它。"""
+        Article.objects.all().delete()
+        if state == "processing":
+            return self.processing(count=count), ()
+        if state == "failed":
+            return self.article(status=ArticleStatus.FAILED, error="x", gpu_job_id="J", speaker_count=count), ()
+        if state == "pending":
+            return self.article(status=ArticleStatus.PENDING, gpu_job_id="J", speaker_count=count), ()
+        return self.published_multi(gpu_job_id="J", speaker_count=count), ("--rerun",)
+
+    @staticmethod
+    def snapshot(article):
+        """資料列上跟處理有關的全部欄位：被擋下來的指令一個都不能動。"""
+        return (article.status, article.speaker_count, article.gpu_job_id, article.attempts, article.error,
+                article.updated_at, article.speakers, article.diarization, article.slides.count())
+
+    def test_a_lingering_single_speaker_job_is_not_resumed_by_the_default_command(self):
+        """攔的 bug：上次 --speakers 1 的工作還在 GPU 上，這次只打預設指令，卻悄悄接回去、發佈單人的「講者」寫法。
+        四種會接回舊工作的狀態都一樣：拒絕、說明兩個選項、資料庫與 GPU 都沒動。"""
+        for state in self.RESUMING:
+            with self.subTest(state=state):
+                _, extra = self.lingering(state, count=1)
+                snapshot = self.snapshot(self.refresh())
+                gpu = multi_gpu(jobs={"J": {"status": "running", "started_at": time.time() - 60}})
+                message, _, _, gpu, _ = self.fails(ZOO_URL, *extra, gpu=gpu)
+                self.assertIn("GPU 工作 J", message)
+                self.assertIn("只有一個人", message)
+                self.assertIn("--speakers 1", message)        # 選項一：接受單人的工作
+                self.assertIn("--rerun", message)             # 選項二：等它做完再用 --rerun 改成多人
+                self.assertEqual(self.snapshot(self.refresh()), snapshot)
+                self.assertEqual((gpu.submits, gpu.waits, gpu.capability_calls), ([], [], 0))
+
+    def test_a_lingering_single_speaker_job_is_resumed_when_the_operator_asks_for_single(self):
+        for state in self.RESUMING:
+            with self.subTest(state=state):
+                _, extra = self.lingering(state, count=1)
+                gpu = base.Gpu(jobs={"J": {"status": "running", "started_at": time.time() - 60}})
+                out, _, gpu, _ = self.run_cmd(ZOO_URL, *extra, "--speakers", "1", gpu=gpu)
+                self.assertEqual((gpu.submits, gpu.capability_calls), ([], 0))
+                article = self.refresh()
+                self.assertEqual((article.status, article.speaker_count, article.speakers),
+                                 (ArticleStatus.READY, 1, []))
+                self.assertIn("接回", out)
+                self.assertIn("只有一個人", out)
+
+    def test_a_lingering_multi_speaker_job_is_resumed_by_the_default_command_and_the_mode_is_printed(self):
+        """省略 --speakers＝自動區分：接回的工作也是多人（自動或固定人數）就沒有衝突；每個分支都印出它的模式。"""
+        for state in self.RESUMING:
+            for count, mode in ((None, "自動區分"), (3, "固定 3 位")):
+                with self.subTest(state=state, count=count):
+                    _, extra = self.lingering(state, count=count)
+                    gpu = multi_gpu(requested=count, jobs={"J": {"status": "done"}})
+                    out, _, gpu, _ = self.run_cmd(ZOO_URL, *extra, gpu=gpu)
+                    self.assertEqual((gpu.submits, gpu.capability_calls), ([], 0))
+                    self.assertEqual((self.refresh().status, self.refresh().speaker_count), (ArticleStatus.READY, count))
+                    self.assertIn("接回去", out)
+                    self.assertIn("工作 J", out)
+                    self.assertIn(mode, out)
+
+    def test_the_mode_of_a_resumed_job_comes_before_the_wait_not_after(self):
+        """操作者要在等上幾十分鐘之前就看得到：接回的是哪個模式的工作。"""
+        self.processing(count=None)
+        out, *_ = self.run_cmd(ZOO_URL, gpu=multi_gpu(jobs={"J": {"status": "done"}}))
+        self.assertLess(out.index("自動區分"), out.index("送去 GPU 主機摘要"))
+
+    def test_a_rerun_that_resumes_a_lingering_job_does_not_say_it_sends_a_new_one(self):
+        """攔的 bug：橫幅寫「重新送去 GPU 摘要」，實際上接回的是舊工作（而且舊工作可能是單人的）。"""
+        self.published_multi(gpu_job_id="J", speaker_count=None)
+        out, _, gpu, _ = self.run_cmd(ZOO_URL, "--rerun", gpu=multi_gpu(jobs={"J": {"status": "done"}}))
+        self.assertNotIn("重新送去", out)
+        self.assertIn("工作 J", out)
+        self.assertEqual(gpu.submits, [])
+
+    def test_a_rerun_with_nothing_to_resume_still_says_it_sends_a_new_one(self):
+        self.published_multi()
+        out, _, gpu, _ = self.run_cmd(ZOO_URL, "--rerun", gpu=multi_gpu())
+        self.assertIn("重新送去 GPU 摘要", out)
+        self.assertEqual(len(gpu.submits), 1)
+
+    def test_a_job_the_gpu_forgot_is_not_a_conflict_even_when_it_was_single(self):
+        """沒有工作可以接回去，就沒有「悄悄接回單人的」這回事：照預設重新送多人的。"""
+        for state in self.RESUMING:
+            with self.subTest(state=state):
+                _, extra = self.lingering(state, count=1)
+                out, _, gpu, _ = self.run_cmd(ZOO_URL, *extra, gpu=multi_gpu(jobs={}))
+                self.assertEqual([(s["speaker_mode"], s["speaker_count"]) for s in gpu.submits], [("diarize", None)])
+                self.assertIsNone(self.refresh().speaker_count)
+
+    def test_a_dry_run_asks_the_gpu_nothing_and_so_refuses_nothing(self):
+        self.processing(count=1)
+        out, _, gpu, _ = self.run_cmd(ZOO_URL, "--dry-run")
+        self.assertEqual((gpu.looked_up, gpu.submits, gpu.capability_calls), ([], [], 0))
+
+    # --- 重做失敗時，資料列上的模式要跟還掛在網站上的內容對得上 ---
+
+    def test_a_rerun_that_never_got_a_job_puts_the_published_mode_back(self):
+        """攔的 bug：--rerun --speakers 1 在送出時就失敗，資料列已經被標成單人，網站上卻還是三位說話者的版本。"""
+        before = self.published_multi()
+        _, _, err, _, _ = self.fails(ZOO_URL, "--rerun", "--speakers", "1",
+                                     gpu=base.Gpu(error=GpuApiError("連線被拒")))
+        after = self.refresh()
+        self.assertEqual((after.status, after.speaker_count, after.gpu_job_id, after.speakers),
+                         (ArticleStatus.READY, None, "", before.speakers))
+        self.assertIn("還原", err)
+
+    def test_a_rerun_whose_job_failed_puts_the_published_mode_back_too(self):
+        """工作自己失敗了（JobFailed）：工作 id 被清掉，沒有任何工作還用新的模式在跑。"""
+        before = self.published_multi()
+        with self.assertLogs("articles.ingest", level="WARNING"):
+            self.fails(ZOO_URL, "--rerun", "--speakers", "1", gpu=base.Gpu(error=JobFailed("boom")))
+        after = self.refresh()
+        self.assertEqual((after.speaker_count, after.gpu_job_id, after.speakers), (None, "", before.speakers))
+
+    def test_a_rerun_that_left_a_job_on_the_gpu_keeps_the_mode_that_job_was_sent_with(self):
+        """等太久、連線斷了：GPU 上的工作是用新的模式送出的，下次接回去要靠資料列記得它——而且預設指令會被擋下來。"""
+
+        class TimesOut(base.Gpu):
+            def wait(self, job_id, timeout, poll_seconds=3.0, on_progress=None):
+                self.waits.append((job_id, timeout))
+                raise GpuApiError("等太久")
+
+        self.published_multi()
+        with self.assertLogs("articles.ingest", level="WARNING"):
+            gpu = TimesOut()
+            self.fails(ZOO_URL, "--rerun", "--speakers", "1", gpu=gpu)
+        after = self.refresh()
+        self.assertEqual((after.speaker_count, after.gpu_job_id), (1, "job-1"))
+        # 下一次什麼都不加：GPU 上那個單人的工作不能被悄悄接回去
+        message, *_ = self.fails(ZOO_URL, "--rerun", gpu=base.Gpu(jobs={"job-1": {"status": "running",
+                                                                                   "started_at": time.time()}}))
+        self.assertIn("--speakers 1", message)
+        self.assertEqual(self.refresh().speakers, after.speakers)
 
     # --- 失敗過的 ---
 

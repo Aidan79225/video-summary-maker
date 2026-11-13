@@ -18,7 +18,8 @@
 把全部的話安給同一位「講者」。GPU 主機還沒更新、或不支援區分時，在登記之前就停下來。
 
 影片不進每晚排程，只由這個指令處理。已經存在的影片會說清楚結果：已發佈、失敗（重設次數重跑）、
-GPU 上還有做完或在跑的工作（接回去）、別人正在處理（說還要幾分鐘）。等待時間用
+GPU 上還有做完或在跑的工作（接回去，並印出那個工作是什麼模式送出的；上次用 --speakers 1 送出的單人工作
+不會被沒加 --speakers 的預設指令悄悄接回去，要接就明確加 --speakers 1）、別人正在處理（說還要幾分鐘）。等待時間用
 GPU_JOB_TIMEOUT_SECONDS，不開放更長的 --timeout：夜間批次用同一個數字判斷「卡住」，這個指令等得比它久，
 夜間會把還在跑的工作取消掉。長影片要在 api 與 scheduler 兩個容器都調大那個環境變數。
 
@@ -242,15 +243,25 @@ class Command(BaseCommand):
         """要接回舊工作或送新工作之前，定下這支影片這次的說話者模式。
 
         接回 GPU 上還在跑（或已跑完）的工作時，模式是那個工作送出時決定的，不能悄悄換掉：明確給了不同的
-        --speakers 就拒絕（省略不算要求換）。要送新工作時以這次的指令為準（省略＝自動區分），而且多人模式要
-        先確認 GPU 做得到。這裡任何一步擋下來，資料庫都還沒動過。
+        --speakers 就拒絕。省略 --speakers 的意思是預設的自動區分，所以接回的如果是單人的工作（上次用
+        --speakers 1 送出、還沒收）也要拒絕：否則「什麼都不加」會發佈出把全部的話安給同一位「講者」的文章，
+        正是這個功能保證絕不發生的事；要接回單人的工作，得明確加 --speakers 1。要送新工作時以這次的指令為準
+        （省略＝自動區分），而且多人模式要先確認 GPU 做得到。這裡任何一步擋下來，資料庫都還沒動過。
         """
         wanted = self._speaker_count(options)
         if resuming:
+            job = article.gpu_job_id
+            sent = _mode_text(article.speaker_count)
             if options["speakers"] is not None and wanted != article.speaker_count:
                 raise CommandError(
-                    f"GPU 工作 {article.gpu_job_id} 是以「{_mode_text(article.speaker_count)}」送出的，"
+                    f"GPU 工作 {job} 是以「{sent}」送出的，"
                     f"不能用 --speakers {wanted} 接回去；等它完成之後再用 --rerun 改模式。")
+            if options["speakers"] is None and article.speaker_count == 1:
+                raise CommandError(
+                    f"GPU 工作 {job} 是以「{sent}」送出的（上一次加了 --speakers 1，還沒收），"
+                    "這次沒有指定 --speakers，預設是自動區分說話的人：照預設接回去，等於把全部的話安給同一位「講者」。\n"
+                    "  - 確定整支影片只有一個人、要收下那個單人的工作：加上 --speakers 1。\n"
+                    "  - 要用多人區分：等那個工作做完（再執行一次同樣的指令看結果），然後用 --rerun 重做。")
             return
         if wanted != 1:
             self._require_diarization(client)
@@ -354,8 +365,10 @@ class Command(BaseCommand):
             self.stderr.write("  ! 這支影片已經登記過了：標題、講者、日期不會改（要改請到 admin 的文章頁）")
         slides = self._slides(article.duration_seconds, options)
         dry = options["dry_run"]
-        # GPU 上留著的工作還能不能接回去：還沒問過是 None（只有帶著工作 id 的才需要問）
-        alive: bool | None = None
+        # GPU 上留著的工作還能不能接回去：asked＝已經問過；status＝工作的狀態（接得回去），
+        # None＝接不回去（沒有記著工作、GPU 已經不認得、失敗了或被取消）
+        status: str | None = None
+        asked = False
 
         if article.status == ArticleStatus.READY:
             if not options["rerun"]:
@@ -364,17 +377,28 @@ class Command(BaseCommand):
                     self.stderr.write(f"  ! 這支影片目前是「{_mode_text(article.speaker_count)}」；"
                                       "--speakers 要加 --rerun 重做才會生效")
                 return
-            self.stdout.write(f"已發佈在 {path}；--rerun：重新送去 GPU 摘要，過程中影片留在網站上。")
-            self._warn_single(options, article.title, article.speaker)
+            resend = f"已發佈在 {path}；--rerun：重新送去 GPU 摘要，過程中影片留在網站上。"
             if dry:
+                self.stdout.write(resend)
+                self._warn_single(options, article.title, article.speaker)
                 self._dry_mode(article, options)
                 self._dry_footer()
                 return
-            alive = self._job_alive(article, client)
-            self._settle_speakers(article, options, client, resuming=alive)
+            # 上次 --rerun 中斷的話，GPU 上可能還留著工作：先問，橫幅才不會說「重新送出」卻接回舊的
+            status = self._job_status(article, client)
+            self.stdout.write(resend if status is None else
+                              f"已發佈在 {path}；--rerun：GPU 上還留著上次的工作，接回去而不重新送出，過程中影片留在網站上。")
+            self._warn_single(options, article.title, article.speaker)
+            published_mode = article.speaker_count
+            self._settle_speakers(article, options, client, resuming=status is not None)
+            self._say_resume(article, status)
             self._announce_rerun(article)
             self._touch(article)
-            self._run(article, client, timeout, slides, demote=False, claim=False)
+            try:
+                self._run(article, client, timeout, slides, demote=False, claim=False)
+            except CommandError:
+                self._restore_mode(article, published_mode)
+                raise
             return
 
         if article.status == ArticleStatus.PROCESSING:
@@ -383,10 +407,11 @@ class Command(BaseCommand):
                 if dry:
                     self._dry_footer("（--dry-run 不問 GPU，所以不知道那個工作能不能接回去）")
                     return
-                alive = self._resumable(article, client)
-                if alive:
+                status, asked = self._job_status(article, client), True
+                if status is not None:
                     self._warn_single(options, article.title, article.speaker)
                     self._settle_speakers(article, options, client, resuming=True)
+                    self._say_resume(article, status)
                     self._touch(article)
                     self._run(article, client, timeout, slides, demote=True, claim=False)
                     return
@@ -414,15 +439,31 @@ class Command(BaseCommand):
             self._dry_mode(article, options)
             self._dry_footer()
             return
-        if alive is None:
-            alive = self._job_alive(article, client)
+        if not asked:
+            status = self._job_status(article, client)
         # 說話者模式在動資料庫之前定下來（多人模式 GPU 做不到、或接回的工作模式不同，都在這裡停）
-        self._settle_speakers(article, options, client, resuming=alive)
+        self._settle_speakers(article, options, client, resuming=status is not None)
+        self._say_resume(article, status)
         # 人為重跑不是自動重試：MAX_ATTEMPTS 擋的是夜間排程的無限重試。gpu_job_id 留著，
         # 還沒死的 GPU 工作就接回去（管理頁的「重新排隊」會把它清掉，幾十分鐘的成品就丟了）
         Article.objects.filter(pk=article.pk).update(status=ArticleStatus.PENDING, error="", attempts=0)
         article.refresh_from_db()
         self._run(article, client, timeout, slides)
+
+    def _restore_mode(self, article: Article, published_mode: int | None) -> None:
+        """已發佈的影片重做失敗、而且 GPU 上沒有留下新的工作：說話者模式還原成目前發佈的那一版的。
+
+        _settle_speakers 在送出之前就把新的模式寫進資料列；送出就失敗（或工作自己失敗、工作 id 被清掉）的話，
+        資料列上的模式會跟還掛在網站上的內容對不上（記著單人，網站上卻是三位說話者的版本），之後每一句
+        「目前是…」「之前是…」都說錯。GPU 上留著工作的（等太久、連線斷了）不還原：那個工作就是用新的模式
+        送出的，下次接回去、以及結果的核對，都要靠資料列記得它。
+        """
+        row = Article.objects.filter(pk=article.pk).values("status", "gpu_job_id", "speaker_count").first()
+        if (row is not None and row["status"] == ArticleStatus.READY and not row["gpu_job_id"]
+                and row["speaker_count"] != published_mode):
+            Article.objects.filter(pk=article.pk).update(speaker_count=published_mode)
+            self.stderr.write("  ! 這次沒有在 GPU 上留下新的工作，說話者模式還原成目前發佈的："
+                              f"{_mode_text(published_mode)}")
 
     def _dry_mode(self, article: Article, options) -> None:
         """--dry-run：這次的說話者模式與重跑會丟掉的設定（不問 GPU，所以不知道它能不能區分）。"""
@@ -452,26 +493,26 @@ class Command(BaseCommand):
         """
         Article.objects.filter(pk=article.pk).update(updated_at=timezone.now())
 
-    def _job_alive(self, article: Article, client) -> bool:
-        """文章記著的 GPU 工作還能接回去嗎？沒有記著工作就不必問。（不印東西。）"""
+    @staticmethod
+    def _job_status(article: Article, client) -> str | None:
+        """文章記著的 GPU 工作做完了或還在跑嗎？可以接回去就回傳它的狀態，不行（沒記著工作、GPU 不認得、
+        失敗了或被取消）就是 None。不必等到「卡住」的時間才接回去。不印東西：要不要接回去、說什麼，
+        由呼叫端在確認模式沒有衝突之後才說。"""
         if not article.gpu_job_id:
-            return False
+            return None
         try:
             job = client.job(article.gpu_job_id)
         except GpuApiError as e:
             raise CommandError(f"問不到 GPU 主機上那個工作的狀態：{e}\nGPU 主機開著、摘要 API 在跑的時候再執行一次。") from e
-        return job is not None and job.get(JobField.STATUS) in RESUMABLE_STATUSES
+        status = job.get(JobField.STATUS) if job is not None else None
+        return str(status) if status in RESUMABLE_STATUSES else None
 
-    def _resumable(self, article: Article, client) -> bool:
-        """GPU 上那個工作做完了或還在跑嗎？不必等到「卡住」的時間才接回去。"""
-        try:
-            job = client.job(article.gpu_job_id)
-        except GpuApiError as e:
-            raise CommandError(f"問不到 GPU 主機上那個工作的狀態：{e}\nGPU 主機開著、摘要 API 在跑的時候再執行一次。") from e
-        if job is None or job.get(JobField.STATUS) not in RESUMABLE_STATUSES:
-            return False
-        self.stdout.write(f"GPU 上的工作是「{job.get(JobField.STATUS)}」，接回去等結果。")
-        return True
+    def _say_resume(self, article: Article, status: str | None) -> None:
+        """接回舊工作時，在等上幾十分鐘之前先說：哪一個工作、什麼狀態、是什麼模式送出的（沒有要接回的就不印）。"""
+        if status is None:
+            return
+        self.stdout.write(f"GPU 上的工作 {article.gpu_job_id} 是「{status}」，模式：{_mode_text(article.speaker_count)}；"
+                          "接回去等結果，不重新送出。")
 
     def _dry_footer(self, extra: str = "") -> None:
         self.stdout.write((extra + "\n" if extra else "") + "（--dry-run：沒有寫入資料庫，也沒有呼叫 GPU）")
