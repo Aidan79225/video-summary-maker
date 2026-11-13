@@ -72,6 +72,15 @@ def test_no_turns_is_an_empty_result():
     assert normalize_turns([]) == ()
 
 
+def test_turns_with_exactly_the_same_times_are_numbered_the_same_whatever_the_input_order():
+    # 起訖時間完全一樣的兩段（不同標籤）：S1／S2 的編號不能跟輸入順序有關
+    a = SpeakerTurn(0.0, 2.0, "SPEAKER_01")
+    b = SpeakerTurn(0.0, 2.0, "SPEAKER_00")
+    later = SpeakerTurn(3.0, 4.0, "SPEAKER_01")
+
+    assert normalize_turns([a, b, later]) == normalize_turns([b, a, later])
+
+
 # --- assign_speakers：手寫的三人對談 ---
 
 
@@ -639,6 +648,27 @@ def test_a_speaker_with_less_than_the_scaled_threshold_or_fewer_than_three_turns
 
     assert kinds == {"S1": "participant", "S2": "participant", "S3": "minor", "S4": "minor",
                      "S5": "participant"}
+
+
+def test_a_speaker_with_two_long_turns_is_a_participant_when_they_hold_a_large_share_of_the_talk():
+    # 訪談：來賓只回答了兩次，但每次都講了很久（180 秒裡佔 80 秒）。不能因為只有兩段，
+    # 就整個人變成「其他聲音」、所有重點都被丟掉（審查用模擬對談量過：這是靜默的內容流失）
+    turns = [make_turn(i, "S1", i * 40, 20) for i in range(5)]                 # 主持人 100 秒、5 段
+    turns += [make_turn(5, "S2", 20, 40), make_turn(6, "S2", 100, 40)]          # 來賓 80 秒、2 段
+
+    kinds = {s.id: s.kind for s in summarize_speakers(turns)}
+
+    assert kinds == {"S1": "participant", "S2": "participant"}
+
+
+def test_fewer_than_three_turns_only_excuses_a_share_of_a_quarter_or_more():
+    def kind_of_second_speaker(seconds_each):
+        turns = [make_turn(i, "S1", i * 100, 30) for i in range(5)]               # 150 秒、5 段
+        turns += [make_turn(5, "S2", 20, seconds_each), make_turn(6, "S2", 120, seconds_each)]
+        return {s.id: s.kind for s in summarize_speakers(turns)}["S2"]
+
+    assert kind_of_second_speaker(25) == "participant"      # 50 / 200 秒 = 25%
+    assert kind_of_second_speaker(24) == "minor"            # 48 / 198 秒 < 25%
 
 
 def test_the_threshold_scales_down_for_short_media():

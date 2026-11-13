@@ -58,6 +58,9 @@ FILLER_CHARS = frozenset("嗯啊哦喔")
 MINOR_SECONDS = 60.0
 MINOR_SHARE = 0.1
 MINOR_TURNS = 3
+# 不到 MINOR_TURNS 段的人通常是一次性的插話或雜訊，除非他佔了全部說話時間的這麼多
+# （來賓只回答了兩次、每次都講很久，不能因為段數少就整個人被當成其他聲音、所有重點被丟掉）
+MINOR_FEW_TURNS_SHARE = 0.25
 SAMPLE_COUNT = 3
 SAMPLE_CHARS = 80
 MAX_PARTICIPANTS = 8
@@ -100,7 +103,8 @@ def _usable_turns(turns: Sequence[SpeakerTurn]) -> list[SpeakerTurn]:
         start = max(0.0, turn.start)
         if turn.end > start:
             usable.append(SpeakerTurn(start, turn.end, turn.speaker))
-    usable.sort(key=lambda t: (t.start, t.end))
+    # 起訖時間完全一樣的區段用標籤排序，S1／S2 的編號才不會跟輸入順序有關
+    usable.sort(key=lambda t: (t.start, t.end, t.speaker))
     return usable
 
 
@@ -462,8 +466,8 @@ def summarize_speakers(turns: Sequence[Turn]) -> tuple[SpeakerInfo, ...]:
 
     主要發言者（participant）標「發言者 A, B, C…」（依第一次出現），其餘標
     「其他聲音 1, 2…」（minor，不能被引用）。minor 的條件：說話秒數少於
-    min(60, 全部說話秒數的 10%)，或不到 3 段。說得最多的人一定是 participant——
-    19 秒的單人影片也要有一位發言者。樣本是最長的三段，依時間排列。
+    min(60, 全部說話秒數的 10%)，或不到 3 段且說話秒數不到全部的 25%。說得最多的人一定是
+    participant——19 秒的單人影片也要有一位發言者。樣本是最長的三段，依時間排列。
     """
     grouped: dict[str, list[Turn]] = {}
     for turn in turns:
@@ -472,12 +476,17 @@ def summarize_speakers(turns: Sequence[Turn]) -> tuple[SpeakerInfo, ...]:
     if not grouped:
         return ()
     seconds = {sid: sum(t.end - t.start for t in ts) for sid, ts in grouped.items()}
-    threshold = min(MINOR_SECONDS, MINOR_SHARE * sum(seconds.values()))
+    total = sum(seconds.values())
+    threshold = min(MINOR_SECONDS, MINOR_SHARE * total)
     first_seen = {sid: min(t.start for t in ts) for sid, ts in grouped.items()}
     top = max(grouped, key=lambda sid: (seconds[sid], -first_seen[sid]))
 
     def is_minor(sid: str) -> bool:
-        return sid != top and (seconds[sid] < threshold or len(grouped[sid]) < MINOR_TURNS)
+        if sid == top:
+            return False
+        if seconds[sid] < threshold:
+            return True
+        return len(grouped[sid]) < MINOR_TURNS and seconds[sid] < MINOR_FEW_TURNS_SHARE * total
 
     order = sorted(grouped, key=lambda sid: (first_seen[sid], sid))
     labels: dict[str, str] = {}
