@@ -189,6 +189,61 @@ def test_a_turn_that_states_the_same_number_literally_is_always_fine():
     assert number_problem("共2,400人", "一共 2400 人") is None
 
 
+@pytest.mark.parametrize("text, support", [
+    # 實際出現過：模型把「三十分鐘」寫成「三分鐘」。「三」只是「三十」的一部分，不是照抄。
+    ("預警系統平均可提前三分鐘", "平均提前三十分鐘，但是這三十分鐘是全市平均，低窪區實際只有十二分鐘"),
+    ("提前3分鐘", "平均提前30分鐘"),
+    ("有12座抽水站", "有112座抽水站"),
+    ("需要五人", "需要五十人"),
+    ("三百人參加", "三百五十人參加"),
+    ("三千元", "三千五百元"),
+    ("下陷28公分", "每年下陷2.8公分"),               # 小數點被吃掉：28 不是 2.8
+    ("下陷2.8公分", "每年下陷28公分"),
+    ("下陷8公分", "每年下陷2.8公分"),                 # 8 只是 2.8 的尾巴
+    ("共24人", "一共 2,400 人"),                       # 24 只是 2,400 的開頭
+])
+def test_a_number_that_is_only_a_piece_of_a_longer_number_in_the_turn_is_rejected(text, support):
+    assert number_problem(text, support) is not None
+
+
+@pytest.mark.parametrize("text, support", [
+    ("他們願意投2000萬", "他們願意投2000 萬 估值1.2億"),     # 語音辨識把數字和單位拆開
+    ("估值1.2億", "他們願意投 2000萬，估值1.2 億"),
+    ("共2,400人", "一共 2,400 人"),
+    ("借了三、四本", "借了三、四本"),                         # 頓號隔開的是兩個數字，各自照抄
+    ("下陷2.8公分", "平均每年下陷2.8公分，比海平面上升快"),
+    ("三百五十人", "有三百五十人，其中三十人是學生"),
+    ("提前三十分鐘", "平均提前三十分鐘，但是這三十分鐘是全市平均"),
+])
+def test_a_whole_number_copied_from_the_turn_is_fine_even_when_speech_recognition_spaced_it(text, support):
+    assert number_problem(text, support) is None
+
+
+@pytest.mark.parametrize("text, support", [
+    # 實際出現過：模型在阿拉伯數字和中文單位之間加空白（62 萬、7 個月、2000 萬、1.2 億），逐字稿沒有。
+    ("每月燒掉 62 萬，現金流僅剩 7 個月", "burn rate目前一個月62萬 runway只剩7個月"),
+    ("願意投資 2000 萬，公司估值為 1.2 億", "他們願意投2000萬 估值1.2億"),
+    ("願意投資2000萬，估值1.2億", "他們願意投 2000 萬 估值 1.2 億"),
+    ("成長百分之 十二", "成長了12%"),
+])
+def test_a_space_between_a_digit_and_its_chinese_unit_does_not_change_the_number(text, support):
+    assert number_problem(text, support) is None
+
+
+@pytest.mark.parametrize("text, support", [
+    ("每月燒掉 6 萬", "burn rate目前一個月62萬"),
+    ("現金流僅剩 7 個月", "runway只剩70個月"),
+    ("估值 1.2 億", "估值12億"),
+])
+def test_a_spaced_number_is_still_checked_against_the_turn(text, support):
+    assert number_problem(text, support) is not None
+
+
+def test_a_digit_and_its_unit_with_a_space_between_are_read_as_one_number():
+    assert [m.value for m in mentions("每月 62 萬，7 個月")] == [620000, 7]
+    assert [(m.value, m.unit) for m in mentions("共 120 人")] == [(120, "人")]
+
+
 def test_a_rounded_figure_is_a_known_and_deliberate_false_positive():
     """「約三成」對上「31.5%」會被丟掉：寧可丟掉，不猜差不多算不算同一個數字。"""
     assert number_problem("約三成", "占了31.5%") is not None

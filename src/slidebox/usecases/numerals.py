@@ -24,8 +24,6 @@ import unicodedata
 from dataclasses import dataclass
 from fractions import Fraction
 
-from .speakers import squash
-
 _DIGITS = {"零": 0, "〇": 0, "一": 1, "二": 2, "兩": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9}
 _SMALL_UNITS = {"十": 10, "百": 100, "千": 1000}
 _BIG_UNITS = {"萬": 10 ** 4, "億": 10 ** 8}
@@ -129,8 +127,14 @@ def value_of(expression: str) -> Fraction | None:
     return value
 
 
+# 阿拉伯數字和後面的中文字之間的空白（「62 萬」「7 個月」「1.2 億」）：模型和語音辨識都常這樣寫，
+# 讀數字時當作沒有。
+_SPACE_BETWEEN_DIGIT_AND_CJK = re.compile(r"(?<=\d)\s+(?=[一-鿿])")
+
+
 def _prepare(text: str) -> str:
-    return unicodedata.normalize("NFKC", text).replace("百分之", _PERCENT_MARK)
+    flat = _SPACE_BETWEEN_DIGIT_AND_CJK.sub("", unicodedata.normalize("NFKC", text))
+    return re.sub(r"百分之\s*", _PERCENT_MARK, flat)
 
 
 def _single_digit(char: str) -> int | None:
@@ -188,16 +192,50 @@ def _needs_support(raw: str, following: str) -> bool:
     return bool(following) and following[0] in _UNIT_CHARS_AFTER
 
 
+def _is_number_char(char: str) -> bool:
+    return bool(char) and (char.isdigit() or char in _NUMERAL_CHARS)
+
+
+def _compact(text: str) -> str:
+    """NFKC、去掉空白，其他都留著（小數點與千分位逗號要留：2.8 不是 28）。"""
+    return "".join(unicodedata.normalize("NFKC", text).split())
+
+
+def _copied_whole(raw: str, support_text: str) -> bool:
+    """raw 一字不差地出現在 support_text 裡，而且那一處就是一個完整的數字。
+
+    只是更長的數字的一部分不算照抄：三 在 三十分鐘 裡、3 在 30 裡、8 在 2.8 裡、24 在 2,400 裡，
+    都是不同的數字（模型把「三十分鐘」寫成「三分鐘」就是這樣漏掉的）。空白是例外：語音辨識常把
+    「2000 萬」拆開，照抄的人寫成「2000萬」不該被丟掉，所以比對前先去掉空白。
+    """
+    needle, haystack = _compact(raw), _compact(support_text)
+    if not needle:
+        return False
+    start = haystack.find(needle)
+    while start != -1:
+        end = start + len(needle)
+        before = haystack[start - 1] if start else ""
+        after = haystack[end] if end < len(haystack) else ""
+        continues_before = _is_number_char(before) or (
+            before in ".," and start >= 2 and haystack[start - 2].isdigit() and needle[0].isdigit())
+        continues_after = _is_number_char(after) or (
+            after in ".," and end + 1 < len(haystack) and haystack[end + 1].isdigit() and needle[-1].isdigit())
+        if not continues_before and not continues_after:
+            return True
+        start = haystack.find(needle, start + 1)
+    return False
+
+
 def number_problem(text: str, support_text: str) -> str | None:
     """重點 text 裡的數字有沒有哪一個在 support_text（被引用的那段話）裡找不到「同值同種類」的對應。
 
     - 百分比：數值（百分數）要和那段話裡某個百分比相同；或和那段話裡「沒有實體單位的一般數字」相同
       （語音辨識常把「百分之」漏掉）。
-    - 一般數字：字面照抄（忽略空白標點）就算有；否則數值要和那段話裡某個一般數字或百分數相同——
-      但如果它後面緊接實體單位（分鐘、元、人…），而那段話裡這個數值只以百分比出現，就是單位被改了。
+    - 一般數字：整個數字一字不差地照抄（忽略空白；只是更長的數字的一部分不算）就算有；否則數值要和那段話裡
+      某個一般數字或百分數相同——但如果它後面緊接實體單位（分鐘、元、人…），而那段話裡這個數值只以百分比
+      出現，就是單位被改了。
     有問題回傳原因（繁體中文），沒有回傳 None。
     """
-    literal = squash(support_text)
     support = _mentions(_prepare(support_text))
     support_percent = {m.value for m in support if m.kind == PERCENT}
     support_plain = {m.value for m in support if m.kind == PLAIN}
@@ -214,7 +252,7 @@ def number_problem(text: str, support_text: str) -> str | None:
         if mention.unit and mention.value in support_percent and mention.value not in support_plain:
             return (f"數字「{mention.raw}{mention.unit}」在被引用的那段話裡是百分比，不是{mention.unit}"
                     f"（數字與單位請照抄）")
-        if squash(mention.raw) in literal:
+        if _copied_whole(mention.raw, support_text):
             continue
         if mention.value in support_plain or mention.value in support_percent:
             continue
