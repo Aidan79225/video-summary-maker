@@ -67,13 +67,22 @@ class Ticks:
         return self.now
 
 
+class MeasuredDiarizer(FakeDiarizer):
+    """比照 PyannoteSpeakerDiarizer：說話者區分在另一個行程跑，用了哪個裝置、工作行程與顯示卡的記憶體峰值
+    都是區分器自己回報的（本行程裡沒有 torch 可以量）。"""
+
+    def __init__(self, device="", worker_peak=None, gpu_peak=None, **options):
+        super().__init__(**options)
+        self.device, self.worker_peak_bytes, self.gpu_peak_bytes = device, worker_peak, gpu_peak
+
+
 def check_run(args, tmp_path, audio=None, diarizer=None, words=None, cuts=None, peak=3_500_000_000,
-              gpu_peak=None, **parts_options):
+              **parts_options):
     """跑一次檢查，回傳 (結束碼, 標準輸出, 標準錯誤, 零件)。tmp_path 當暫存資料夾的位置，結束後應該是空的。"""
     parts = check.Parts(
         audio=audio or Audio(), diarizer=diarizer or FakeDiarizer(), words=words or FakeWordTranscriber(),
         whisper_model="whisper-a", cut_audio=cuts or Cuts(), clock=Ticks(),
-        peak_memory=lambda: peak, gpu_peak_memory=lambda: gpu_peak, **parts_options)
+        peak_memory=lambda: peak, **parts_options)
     out, err = io.StringIO(), io.StringIO()
     code = check.main(args, parts=parts, out=out, err=err, base_dir=str(tmp_path))
     return code, out.getvalue(), err.getvalue(), parts
@@ -176,19 +185,50 @@ def test_a_whole_video_check_prints_who_said_what_and_how_to_listen_for_it(tmp_p
     assert nothing_left(tmp_path)
 
 
-def test_the_check_reports_time_per_stage_and_the_memory_peak(tmp_path):
-    _, out, _, _ = check_run([URL], tmp_path, peak=3_500_000_000, gpu_peak=2 ** 30)
+def test_the_check_reports_time_per_stage_and_the_memory_peaks_of_both_processes(tmp_path):
+    diarizer = MeasuredDiarizer(device="cuda", worker_peak=6 * 2 ** 30, gpu_peak=2 ** 30)
+
+    _, out, _, _ = check_run([URL], tmp_path, diarizer=diarizer, peak=3_500_000_000)
 
     # 時鐘每被問一次走一秒：每個階段前後各一次，加上階段裡回報進度的那一次
     assert "下載 2.0 秒；說話者區分 2.0 秒；語音辨識 2.0 秒；對齊 1.0 秒；合計 10.0 秒" in out
-    assert "本行程記憶體峰值：3.3 GiB（含載入的模型）" in out
+    # 語音辨識在本行程、說話者區分在工作行程：兩個數字分開報，不能再當成同一個
+    assert "本行程（語音辨識）記憶體峰值：3.3 GiB（含載入的模型）" in out
+    assert "說話者區分的工作行程記憶體峰值：6.0 GiB（含載入的模型）" in out
     assert "PyTorch 顯示卡記憶體峰值：1.0 GiB" in out and "nvidia-smi" in out
+    # 顯示卡的數字屬於工作行程那一行（同一行），不是本行程的
+    worker_line = next(line for line in out.splitlines() if "工作行程記憶體峰值" in line)
+    assert "PyTorch 顯示卡記憶體峰值：1.0 GiB" in worker_line
 
 
 def test_a_platform_that_cannot_measure_memory_says_so_instead_of_printing_zero(tmp_path):
-    _, out, _, _ = check_run([URL], tmp_path, peak=None, gpu_peak=None)
-    assert "本行程記憶體峰值：這個平台量不到" in out
+    _, out, _, _ = check_run([URL], tmp_path, diarizer=MeasuredDiarizer(device="cpu"), peak=None)
+    assert "本行程（語音辨識）記憶體峰值：這個平台量不到" in out
+    assert "說話者區分的工作行程記憶體峰值：這個平台量不到" in out
     assert "PyTorch 顯示卡" not in out
+
+
+def test_a_peak_the_diarizer_measured_is_not_credited_to_this_process(tmp_path):
+    """攔的 bug：本行程（語音辨識）量不到的時候，退而求其次拿工作行程的數字填進去——
+    兩個行程各自的數字，量不到就說量不到，不能互相頂替。"""
+    diarizer = MeasuredDiarizer(device="cuda", worker_peak=6 * 2 ** 30)
+
+    _, out, _, _ = check_run([URL], tmp_path, diarizer=diarizer, peak=None)
+
+    assert "本行程（語音辨識）記憶體峰值：這個平台量不到" in out
+    assert "說話者區分的工作行程記憶體峰值：6.0 GiB" in out
+
+
+def test_a_diarizer_that_reports_no_peaks_is_not_credited_with_any(tmp_path):
+    """FakeDiarizer 沒有這些屬性（別的實作也可以沒有）：量不到，不是 0，也不會當掉。"""
+    _, out, _, _ = check_run([URL], tmp_path)
+    assert "說話者區分的工作行程記憶體峰值：這個平台量不到" in out and "PyTorch 顯示卡" not in out
+
+
+def test_the_gpu_peak_of_a_run_on_the_cpu_is_not_reported(tmp_path):
+    """工作行程在 CPU 上跑的時候不量顯示卡（區分器回 None）：報告不會印出一個沒意義的 PyTorch 顯示卡數字。"""
+    _, out, _, _ = check_run([URL], tmp_path, diarizer=MeasuredDiarizer(device="cpu", worker_peak=2 ** 30))
+    assert "說話者區分的工作行程記憶體峰值：1.0 GiB" in out and "PyTorch 顯示卡" not in out
 
 
 def test_the_audio_goes_through_the_audio_gateway_only_and_the_requested_count_reaches_the_diarizer(tmp_path):
@@ -405,6 +445,53 @@ def test_the_device_the_diarizer_ended_up_on_is_part_of_the_header(tmp_path):
     assert "說話者區分：fake-engine 1.0（fake/model）" in plain
 
 
+def test_a_run_on_the_cpu_says_what_exit_code_0_does_and_does_not_prove(tmp_path):
+    """攔的 bug：沒有顯示卡的主機（或沒設 GPU）跑 --sample，結束碼 0、說話者找到 4 個，看起來一切正常——
+    被當成「GPU 沒問題」。其實連顯示卡都沒碰到。報告要自己說清楚。"""
+    code, out, _, _ = check_run([URL], tmp_path, diarizer=MeasuredDiarizer(device="cpu"))
+
+    assert code == check.EXIT_OK                                      # 流程是通的：結束碼不變，只是話要說清楚
+    assert "說話者區分：fake-engine 1.0（fake/model，cpu）" in out
+    notice = next(line for line in out.splitlines() if "用 CPU 跑的" in line)
+    assert "不表示顯示卡能用" in notice
+    assert "token 有效" in notice and "模型載得起來" in notice          # 結束碼 0 實際證明的東西
+    assert "流程跑得通" in notice and "耗時也不是顯示卡的耗時" in notice   # 流程通了，但耗時不能拿來估顯示卡
+    assert "SLIDEBOX_DIARIZATION_DEVICE=cuda" in notice               # 怎麼驗證顯示卡
+    assert "直接失敗" in notice and "不會悄悄退回 CPU" in notice         # 指定 cuda 的話，沒顯示卡不會騙人
+    # 提醒緊接在說明裝置的那一行後面（讀報告的人看標題就會看到）
+    lines = out.splitlines()
+    assert lines[lines.index("說話者區分：fake-engine 1.0（fake/model，cpu）") + 1] == notice
+
+
+@pytest.mark.parametrize("device", ["cuda", ""])
+def test_no_cpu_warning_when_the_gpu_was_used_or_the_device_is_unknown(tmp_path, device):
+    _, out, _, _ = check_run([URL], tmp_path, diarizer=MeasuredDiarizer(device=device))
+    assert "用 CPU 跑的" not in out and "不表示顯示卡能用" not in out
+
+
+def test_the_cpu_warning_does_not_hide_a_sample_that_found_the_wrong_number_of_voices(tmp_path):
+    """對照：CPU 的提醒不改變 --sample 對「找到幾個聲音」的判斷與結束碼。"""
+    code, out, _, _ = check_run(["--sample"], tmp_path, diarizer=MeasuredDiarizer(device="cpu"))
+    assert code == check.EXIT_NOT_RELIABLE                            # 預設的假結果是 3 個聲音，不是樣本預期的 4 個
+    assert "與預期不符" in out and "用 CPU 跑的" in out
+
+
+def test_the_device_name_is_cleaned_like_every_other_outside_text(tmp_path):
+    _, out, err, _ = check_run([URL], tmp_path, diarizer=MeasuredDiarizer(device="cuda" + ESCAPES))
+    assert_inert(out + err)
+    assert "（fake/model，cuda" in out
+
+
+@pytest.mark.parametrize("decorated", ["\x1b[1mcpu\x1b[0m", "cpu\n", "  cpu\t", "cpu\x1b]0;title\x07"])
+def test_a_decorated_cpu_is_still_recognised_as_the_cpu(tmp_path, decorated):
+    """裝置名稱先清過才拿來比對：別的區分器實作（鴨子型別）回報的名稱即使帶著控制序列或空白，
+    CPU 的提醒也不會因此消失。"""
+    _, out, err, _ = check_run([URL], tmp_path, diarizer=MeasuredDiarizer(device=decorated))
+    assert_inert(out + err)
+    assert "說話者區分：fake-engine 1.0（fake/model，cpu）" in out
+    assert "不表示顯示卡能用" in out
+
+
 def test_the_overlap_the_diarizer_measured_reaches_the_quality_section(tmp_path):
     overlapped = DiarizerOutput(FIXTURE.turns, overlap_seconds=7.0)
     _, plain, _, _ = check_run([URL], tmp_path)
@@ -600,46 +687,16 @@ def test_peak_memory_is_a_positive_number_or_unknown():
     assert peak is None or peak > 0
 
 
-def test_the_gpu_peak_is_only_asked_of_torch_when_something_already_loaded_it(monkeypatch):
-    class Cuda:
-        calls = 0
-
-        @staticmethod
-        def is_available():
-            return True
-
-        @classmethod
-        def max_memory_allocated(cls):
-            cls.calls += 1
-            return 123456
-
-    monkeypatch.delitem(sys.modules, "torch", raising=False)
-    assert check.gpu_peak_memory_bytes() is None                      # 沒人載入過 torch：不去 import 它
-    assert "torch" not in sys.modules
-
-    monkeypatch.setitem(sys.modules, "torch", type("Torch", (), {"cuda": Cuda}))
-    assert check.gpu_peak_memory_bytes() == 123456
-
-
-def test_a_torch_without_a_gpu_or_a_broken_one_reports_nothing(monkeypatch):
-    class NoGpu:
-        @staticmethod
-        def is_available():
-            return False
-
-        @staticmethod
-        def max_memory_allocated():
-            return 999                                   # 沒有顯示卡時就算問得到數字，也不能報
-
-    class Broken:
-        @staticmethod
-        def is_available():
-            raise RuntimeError("driver")
-
-    monkeypatch.setitem(sys.modules, "torch", type("Torch", (), {"cuda": NoGpu}))
-    assert check.gpu_peak_memory_bytes() is None
-    monkeypatch.setitem(sys.modules, "torch", type("Torch", (), {"cuda": Broken}))
-    assert check.gpu_peak_memory_bytes() is None
+def test_this_process_never_loads_torch_or_pyannote_not_even_to_measure_them():
+    """主環境不能出現 torch：它要的 CUDA 13 的 cuDNN 和語音辨識的 CUDA 12 版本檔名相同，載進同一個行程會互相踩到。
+    說話者區分與它的顯示卡量測都在工作行程裡（pyannote_worker）；這裡只讀區分器回報的數字，不去問 torch。"""
+    program = ("import sys, slidebox_api.diarize_check as check; check.default_parts(); check.peak_memory_bytes(); "
+               "print(sorted(m for m in sys.modules if m.split('.')[0] in ('torch', 'torchaudio', 'pyannote')))")
+    env = dict(os.environ, PYTHONPATH=os.path.join(REPO, "src"))
+    result = subprocess.run([sys.executable, "-c", program], cwd=REPO, env=env, capture_output=True, text=True,
+                            encoding="utf-8", timeout=120)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "[]"
 
 
 # --- 真的零件的組裝與進入點 ---
@@ -656,6 +713,9 @@ def test_the_default_parts_are_the_services_own_adapters_and_load_nothing():
     assert isinstance(parts.diarizer, PyannoteSpeakerDiarizer)
     assert isinstance(parts.words, FasterWhisperTranscriber)
     assert parts.whisper_model
+    # 還沒跑過：沒有裝置、沒有任何量測（報告印的是區分器自己回報的數字）
+    assert parts.diarizer.device == "" and parts.diarizer.worker_peak_bytes is None
+    assert parts.diarizer.gpu_peak_bytes is None
 
 
 def _module(*args):

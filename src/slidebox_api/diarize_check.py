@@ -10,7 +10,12 @@
 文章裡會出現的標籤。
 
 --sample 用一段公開的四人中文對話（k2-fsa/sherpa-onnx 的範例音檔）當冒煙測試：
-確認 token、模型、驅動都正常，並量出耗時與記憶體；預期說話者區分器找到 4 個聲音。
+確認 token 有效、模型載得起來、整條流程跑得通，並量出耗時與記憶體；預期說話者區分器找到 4 個聲音。
+結束碼 0 **不代表顯示卡能用**：用哪個裝置跑的，報告的「說話者區分」那一行會寫（cuda 或 cpu）；
+cpu 的時候（沒有顯示卡、驅動對不上而退回 CPU，或根本沒設 GPU）只證明流程，要驗證顯示卡就在 GPU 主機上
+設 SLIDEBOX_DIARIZATION_DEVICE=cuda 再跑一次：指定 cuda 時沒有可用的顯示卡會直接失敗，不會悄悄退回 CPU。
+說話者區分（pyannote.audio、PyTorch）在另一個行程、另一個 Python 環境裡跑（見 infrastructure/pyannote_worker.py），
+所以它的記憶體峰值由區分器回報，不是本行程的。
 --start / --end 只檢查影片的一段（秒，或 分:秒、時:分:秒），省得為了調校等整支影片。
 
 音訊只透過既有的 yt-dlp 音訊 gateway 下載，放在暫存資料夾，結束（包括失敗與 Ctrl-C）就刪掉。
@@ -84,6 +89,11 @@ _WARNING_TEXT = {
     WARN_MANY_MINOR: "有四個以上只出現一下的聲音",
     WARN_SINGLE_FOUND: "自動判斷只找到 1 位主要發言者（可能把不同的人併成一個）",
 }
+
+# 用 CPU 跑的時候，報告要自己說清楚這次證明了什麼、沒證明什麼（結束碼 0 很容易被讀成「GPU 沒問題」）
+_CPU_NOTICE = ("  注意：這次說話者區分是用 CPU 跑的。結束碼 0 只表示 token 有效、模型載得起來、流程跑得通，"
+               "不表示顯示卡能用，耗時也不是顯示卡的耗時；要驗證顯示卡，設 SLIDEBOX_DIARIZATION_DEVICE=cuda 再跑一次"
+               "（指定 cuda 時沒有可用的顯示卡會直接失敗，不會悄悄退回 CPU）。")
 
 
 # --- 外面來的文字：標題、網址、逐字稿、別人的錯誤訊息，印到終端機之前一律先清過 ---
@@ -220,27 +230,17 @@ def parse_args(argv: Sequence[str] | None = None) -> Options:
 
 
 def peak_memory_bytes() -> int | None:
-    """本行程到目前為止的記憶體峰值（含載入的模型）；這個平台量不到就是 None。"""
+    """本行程（語音辨識在這裡）到目前為止的記憶體峰值，含載入的模型；這個平台量不到就是 None。
+
+    說話者區分在另一個行程裡跑，它的記憶體峰值（含 PyTorch 在顯示卡上的）由區分器回報
+    （worker_peak_bytes、gpu_peak_bytes），本行程這裡根本沒有 torch 可以問。
+    """
     try:
         import resource
     except ImportError:                                  # Windows 沒有 resource
         return None
     peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
     return int(peak if sys.platform == "darwin" else peak * 1024)
-
-
-def gpu_peak_memory_bytes() -> int | None:
-    """PyTorch 在顯示卡上的記憶體峰值（只算 PyTorch 的部分，Whisper 的用量要看 nvidia-smi）；量不到就是 None。
-
-    不主動 import torch：說話者區分器載入過它才會在 sys.modules 裡，沒載入就沒東西可量。
-    """
-    torch = sys.modules.get("torch")
-    try:
-        if torch is not None and torch.cuda.is_available():
-            return int(torch.cuda.max_memory_allocated())
-    except Exception:  # noqa: BLE001 量不到就不報，不要讓檢查工具因此失敗
-        pass
-    return None
 
 
 def ffmpeg_cut(src: str, dest: str, start: float, length: float | None, runner=subprocess.run,
@@ -266,7 +266,6 @@ class Parts:
     cut_audio: Callable[[str, str, float, float | None], None] = ffmpeg_cut
     clock: Callable[[], float] = time.monotonic
     peak_memory: Callable[[], int | None] = peak_memory_bytes
-    gpu_peak_memory: Callable[[], int | None] = gpu_peak_memory_bytes
 
 
 def default_parts() -> Parts:
@@ -456,9 +455,11 @@ def _describe(options: Options, parts: Parts, heard: Heard, timings: dict[str, f
         lines.append(f"範圍：{clock(heard.offset)}–{clock(heard.offset + heard.length)}（{heard.length:.0f} 秒）")
     else:
         lines.append("範圍：整支" + (f"（{heard.length:.0f} 秒）" if heard.length else ""))
-    device = getattr(parts.diarizer, "device", "")
+    device = plain(getattr(parts.diarizer, "device", ""))
     lines.append(f"說話者區分：{parts.diarizer.engine} {parts.diarizer.version}（{parts.diarizer.model}"
                  + (f"，{device}" if device else "") + "）")
+    if device == "cpu":
+        lines.append(_CPU_NOTICE)
     lines.append(f"語音辨識：{plain(parts.whisper_model) or '預設模型'}（語言 {plain(heard.language)}）")
     lines.append(f"指定人數：{options.speakers if options.speakers else '自動判斷'}")
     voice_lines, voices = _voice_lines(heard.diarized, where)
@@ -496,9 +497,12 @@ def _describe(options: Options, parts: Parts, heard: Heard, timings: dict[str, f
             code = EXIT_NOT_RELIABLE
 
     steps = "；".join(f"{name} {seconds:.1f} 秒" for name, seconds in timings.items())
-    peak, gpu = parts.peak_memory(), parts.gpu_peak_memory()
+    # 說話者區分在另一個行程跑（pyannote_worker）：它的峰值是區分器回報的，本行程裡沒有 torch 可以量
+    peak = parts.peak_memory()
+    worker, gpu = (getattr(parts.diarizer, "worker_peak_bytes", None), getattr(parts.diarizer, "gpu_peak_bytes", None))
     lines += ["", "--- 耗時與記憶體 ---", f"  {steps}；合計 {total_seconds:.1f} 秒",
-              f"  本行程記憶體峰值：{_gib(peak) if peak else '這個平台量不到'}（含載入的模型）"
+              f"  本行程（語音辨識）記憶體峰值：{_gib(peak) if peak else '這個平台量不到'}（含載入的模型）",
+              f"  說話者區分的工作行程記憶體峰值：{_gib(worker) if worker else '這個平台量不到'}（含載入的模型）"
               + (f"；PyTorch 顯示卡記憶體峰值：{_gib(gpu)}（不含 Whisper，請另外看 nvidia-smi）" if gpu else "")]
     return "\n".join(lines), code
 
