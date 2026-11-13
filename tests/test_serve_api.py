@@ -147,3 +147,35 @@ def test_the_token_never_appears_in_anything_the_service_says_about_itself(clean
     client = TestClient(serve_api.build())
     for path in ("/capabilities", "/health", "/jobs"):
         assert FAKE_TOKEN not in client.get(path).text, path
+
+
+# --- 存起來的失敗與進度文字：遮掉機密與路徑 ---
+
+
+def test_the_failure_reporter_knows_the_token_the_api_key_and_the_output_folder(tmp_path, clean_env):
+    """攔的 bug：JobWorker 預設的 FailureReporter 什麼都沒設定，只擋 hf_ 樣式；這裡沒接上，
+    設定的 API key、不是 hf_ 開頭的 token 與輸出資料夾的路徑就原樣進了 job.error。"""
+    clean_env.setenv("HUGGINGFACE_TOKEN", "plain-hf-token-0001")
+    clean_env.setenv("SLIDEBOX_API_KEY", "plain-api-key-0002")
+    reporter = serve_api.build_failures(_settings(tmp_path))
+    text = reporter.scrub(f"plain-hf-token-0001 plain-api-key-0002 {tmp_path}/x/slides.html")
+    assert "plain-hf-token-0001" not in text and "plain-api-key-0002" not in text
+    assert str(tmp_path) not in text and "slides.html" in text
+
+
+def test_the_service_hands_that_reporter_to_its_worker(clean_env, monkeypatch):
+    seen = {}
+
+    class RecordingWorker:
+        def __init__(self, store, execute, **options):
+            seen.update(options)
+
+        def start(self):
+            pass
+
+        def stop(self):
+            pass
+
+    monkeypatch.setattr(serve_api, "JobWorker", RecordingWorker)
+    serve_api.build()
+    assert isinstance(seen.get("failures"), serve_api.FailureReporter)

@@ -20,6 +20,10 @@
     SLIDEBOX_DIARIZER             設成 off 可關掉多人模式（預設 pyannote）
     SLIDEBOX_DIARIZATION_DEVICE   說話者區分的裝置：auto（預設）／cpu／cuda；
                                   驅動與映像的 CUDA 版本不合時用 cpu
+    SLIDEBOX_DIARIZATION_TIMEOUT_SECONDS
+                                  說話者區分單次工作的時間上限（秒），預設 21600（6 小時）；0 是不設上限
+    SLIDEBOX_DIARIZATION_PYTHON   說話者區分用的 Python（pyannote、PyTorch 裝在那個環境）；
+                                  Docker 映像已經設好，沒設就用目前這個環境
     SLIDEBOX_CHUNK_CHARS          多人對談切窗的字數預算（1000–20000，預設 6000）
     SLIDEBOX_QUOTE_ONLY           設成 1／true／yes 開啟「只顯示原話」的安全模式：多人模式留下的
                                   每個重點都是逐字稿裡核對過的原話，不用模型改寫的字（預設關）
@@ -39,6 +43,7 @@ from slidebox.infrastructure.ollama_summarizer import (
     OllamaFollowUpJudge,
     OllamaTopicClassifier,
 )
+from slidebox.infrastructure.pyannote_diarizer import TOKEN_ENV
 from slidebox.usecases.conversation import (
     CHUNK_CHARS_ENV,
     QUOTE_ONLY_ENV,
@@ -46,6 +51,7 @@ from slidebox.usecases.conversation import (
     parse_quote_only,
 )
 from slidebox_api.app import create_app
+from slidebox_api.failures import FailureReporter
 from slidebox_api.jobs import JobKind, JobStore
 from slidebox_api.runner import (
     ByKindExecutor,
@@ -123,6 +129,13 @@ def build_executor(settings: Settings) -> ByKindExecutor:
     )
 
 
+def build_failures(settings: Settings) -> FailureReporter:
+    """存進 job.error 與進度狀態的文字要先遮掉的東西：Hugging Face token、API key、輸出資料夾的路徑。"""
+    return FailureReporter(
+        secrets=(os.environ.get(TOKEN_ENV, ""), os.environ.get("SLIDEBOX_API_KEY", "")),
+        paths=(settings.output_dir,))
+
+
 def build() -> FastAPI:
     warn_if_exposed_without_key()
     settings = build_settings()
@@ -130,7 +143,7 @@ def build() -> FastAPI:
     executor = build_executor(settings)
     return create_app(
         store=store,
-        worker=JobWorker(store, executor),
+        worker=JobWorker(store, executor, failures=build_failures(settings)),
         api_key=os.environ.get("SLIDEBOX_API_KEY", ""),
         model=settings.model,
         ollama_host=settings.ollama_host,

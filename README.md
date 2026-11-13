@@ -415,14 +415,14 @@ curl http://localhost:8800/health   # ollama_reachable 要是 true
 1. 到 Hugging Face 建 token：Settings → Access Tokens → Create new token，類型選 **Read**（唯讀）就夠
 2. 用同一個帳號到 <https://huggingface.co/pyannote/speaker-diarization-community-1>，按下接受使用條款。沒接受的話，載入模型時會被拒絕；若仍被拒絕、錯誤訊息點名了別的模型頁，到那一頁也接受
 3. 把 token 填進 `.env.gpu` 的 `HUGGINGFACE_TOKEN=`。`.env.gpu` 已在 `.gitignore`，token 只放這裡——不要寫進 `compose.gpu.yaml`、不要提交、不要貼進 issue 或聊天。本程式自己的錯誤訊息與進度不會帶出 token
-4. 重新建置並啟動（映像要加裝 PyTorch 與 pyannote，見下面的〈資源與時間〉），再看能力檢查：
+4. 重新建置並啟動（映像要另外多裝一個放 PyTorch 與 pyannote 的 Python 環境，見下面的〈映像裡的兩個 Python 環境〉與〈資源與時間〉），再看能力檢查：
 
    ```powershell
    docker compose -f compose.gpu.yaml --env-file .env.gpu up -d --build
    curl http://localhost:8800/capabilities    # speaker_diarization 要是 true
    ```
 
-   **這只是便宜的檢查**（有 token、有裝套件、沒被關掉），不會載入模型也不會連 Hugging Face，所以 `true` 不代表條款已經接受、模型載得起來。真的載入模型是在下面的 `diarize_check --sample`，請先跑它再收任何影片
+   **這只是便宜的檢查**（有 token、第二個 Python 環境裡裝了 pyannote.audio、沒被關掉；只問套件裝了沒），不會載入模型也不會連 Hugging Face，所以 `true` 不代表條款已經接受、模型載得起來。真的載入模型是在下面的 `diarize_check --sample`，請先跑它再收任何影片
 
 #### 設定值
 
@@ -433,19 +433,51 @@ curl http://localhost:8800/health   # ollama_reachable 要是 true
 | `HUGGINGFACE_TOKEN` | 空 | 沒設就沒有多人模式：`/capabilities` 回 `false` 和原因 |
 | `SLIDEBOX_DIARIZER` | `pyannote` | 設成 `off` 關掉多人模式，`/capabilities` 回 `false`；其他值會被當成設定錯誤回報 |
 | `SLIDEBOX_DIARIZATION_DEVICE` | `auto` | 說話者區分跑在哪裡。`auto`：有 CUDA 就用顯示卡，載不起來退回 CPU（進度裡會說）；`cuda`：強制，失敗就工作失敗；`cpu`：完全不碰 CUDA（較慢）——驅動和映像的 CUDA 版本對不上、或顯示卡記憶體不夠時的逃生口 |
+| `SLIDEBOX_DIARIZATION_TIMEOUT_SECONDS` | 空（`21600`，6 小時） | 說話者區分單次工作的時間上限（秒）。超過就把工作行程殺掉、工作失敗並說明原因——這是防止行程卡死、一直佔著顯示卡的保險，不是 Pi 等單支影片的逾時。`0` 是不設上限；寫成負數或不是數字會被當成設定錯誤回報（`/capabilities` 回 `false`） |
+| `SLIDEBOX_DIARIZATION_PYTHON` | 映像已設為 `/opt/diarize-venv/bin/python` | 啟動說話者區分工作行程用的 Python（PyTorch 與 pyannote 裝在那個環境，見下面的〈映像裡的兩個 Python 環境〉）。**Docker 映像已經設好，不要放進 `.env.gpu` 或 `compose.gpu.yaml`**：設成空字串也會蓋掉映像裡的設定，說話者區分就找不到 pyannote。不用 Docker 時不設，就用目前這個環境 |
 | `SLIDEBOX_CHUNK_CHARS` | `6000` | 多人對談切成一窗一窗送給模型，每窗最多幾個字（1000～20000）。留空、不是整數或超出範圍就用預設值，通常不用動 |
 | `SLIDEBOX_QUOTE_ONLY` | 空（關） | 設成 `1`、`true` 或 `yes`（不分大小寫）開啟安全模式：多人模式留下的每個重點都顯示核對過的原話，不看模型寫的文字（見〈每個重點怎麼核對〉）。留空或其他值都是關；切換後會重做摘要這一步 |
 | `SLIDEBOX_WHISPER_DEVICE` | `auto` | 語音辨識的裝置；多人模式、單人模式的語音備援和議會片段都用它 |
 
 `compose.gpu.yaml` 另外把 `PYANNOTE_METRICS_ENABLED=0` 和 `HF_HUB_DISABLE_TELEMETRY=1` 傳進容器：不把使用統計送回 pyannote 或 Hugging Face。
 
+#### 映像裡的兩個 Python 環境
+
+PyTorch 與 pyannote **不在** API 的主環境裡，而是在第二個 Python 環境，由一個獨立的工作行程（`src/slidebox/infrastructure/pyannote_worker.py`）用它來跑說話者區分：
+
+| 環境 | 裡面有什麼 | 誰用 |
+|---|---|---|
+| `/app/.venv`（主環境） | API、議會與單人工作、語音辨識（faster-whisper／ctranslate2，要 CUDA 12＋cuDNN 9）。和沒有多人模式時完全一樣：沒有 torch、沒有 pyannote；`LD_LIBRARY_PATH` 指向它的 CUDA 12 函式庫 | `serve_api.py`、`diarize_check`、議會與單人工作 |
+| `/opt/diarize-venv` | 只有 diarization 群組：pyannote.audio、PyTorch（鎖檔裡的版本要 CUDA 13＋cuDNN 9）；沒有 API 的套件，也沒有 CUDA 12 | 說話者區分的工作行程；`SLIDEBOX_DIARIZATION_PYTHON` 指到它的 Python |
+
+為什麼分開：語音辨識要 CUDA 12 的 cuDNN 9，PyTorch 要 CUDA 13 的 cuDNN 9。兩邊的 cuDNN 套件看起來都把 `libcudnn*.so.9` 放進 `site-packages/nvidia/cudnn/lib`，檔名一樣、內容不同，放在同一個環境會互相蓋掉；而映像的 `LD_LIBRARY_PATH` 又把那個資料夾指給 ctranslate2——最壞的情況是連既有的議會與單人工作的語音辨識都壞掉。所以主環境維持原樣，說話者區分在另一個行程裡跑，那個行程用第二個環境的 Python 啟動，而且**不繼承 `LD_LIBRARY_PATH`**（PyTorch 帶著自己的一套 CUDA 13 函式庫）。這個分析是依套件的檔案配置推論的，沒有在真的映像裡重現過；分開環境就不必賭它是不是真的會發生。
+
+- 建置映像時會跑 `docker/check_environments.py`，檢查兩個環境真的沒混在一起：主環境沒有 torch、沒有 CUDA 13 的套件；第二個環境沒有 CUDA 12 的套件、也沒有主環境的套件；`LD_LIBRARY_PATH` 只指向主環境，而且那裡找得到 cuDNN 9 與 cuBLAS 12。混在一起就讓建置失敗，不會做出一個悄悄壞掉的映像
+- 工作行程只拿到音訊檔、模型名稱與裝置；token 只經由環境變數傳給它（不出現在命令列、不出現在錯誤訊息），結果寫成一個 JSON 檔。工作被取消或超過時間上限（`SLIDEBOX_DIARIZATION_TIMEOUT_SECONDS`）就把它整個殺掉，不會留下還佔著顯示卡的行程
+
+**這個映像在開發時沒有真的建置過，也沒有在真的 GPU 上跑過**（開發的機器沒有 Docker、沒有 GPU）：兩個環境的內容是照 `uv.lock` 與 Dockerfile 的文字檢查的，`uv sync` 的旗標（`UV_PROJECT_ENVIRONMENT`、`--only-group`）只對照過文件。第一次 `up -d --build` 就是第一次真的建置，請依序確認（確認過後可以把這一段拿掉）：
+
+1. 建置成功：建置時的環境檢查沒過，建置就會失敗，訊息會列出是哪個環境混進了什麼
+2. 再跑一次同樣的檢查（結束碼 `0`、印出「兩個 Python 環境分得很乾淨」才算數）：
+
+   ```powershell
+   docker compose -f compose.gpu.yaml --env-file .env.gpu exec api python /opt/check_environments.py /app/.venv/bin/python /opt/diarize-venv/bin/python
+   ```
+3. 兩個環境各有自己的 cuDNN：列出來的路徑要分屬 `/app/.venv` 與 `/opt/diarize-venv`，而且主環境的那份是 `LD_LIBRARY_PATH` 指的那個資料夾：
+
+   ```powershell
+   docker compose -f compose.gpu.yaml --env-file .env.gpu exec api find /app/.venv /opt/diarize-venv -name 'libcudnn.so*'
+   ```
+4. 語音辨識沒被影響：從 Pi 送一個會跑語音辨識的工作（例如沒有逐字稿的臺中市議會片段），確認它用顯示卡跑完（工作進行中 `nvidia-smi` 看得到使用量，進度裡沒有退回 CPU 的說明）
+5. 說話者區分：照下面〈先聽過，再相信〉跑 `diarize_check --sample`，再用強制 `cuda` 的那一行確認顯示卡真的用得上
+
 #### 資源與時間（先看過再決定要不要開）
 
-- **映像會大很多，第一次建置要很久**：多人模式讓映像多裝 PyTorch、pyannote.audio 和它們的 CUDA 函式庫，大小以 GB 計（沒有實測，依你的網路與磁碟而定）。Docker Desktop 的磁碟要留足空間
+- **映像會大很多，第一次建置要很久**：多人模式讓映像多裝一整個 Python 環境（上面的第二個環境）：PyTorch、pyannote.audio 和它們的 CUDA 13 函式庫，和主環境原有的 CUDA 12 函式庫並存（兩份 cuDNN、兩份 cuBLAS），大小以 GB 計（沒有實測，依你的網路與磁碟而定）。Docker Desktop 的磁碟要留足空間
 - **第一次跑多人工作要下載模型**，存在 `whisper-cache` volume，之後不會再下載。`docker compose down -v` 會把這個 volume 連同已經下載的 Whisper 模型一起刪掉
 - **比字幕模式慢很多**：字幕模式只抓文字；多人模式要下載整支影片的音訊，再跑完整支的聲音區分與語音辨識，時間隨影片長度增加。沒有實測數字——先用 `diarize_check` 在你的機器上量（它會印每個階段的耗時），再決定要收多長的影片
-- **顯示卡記憶體**：Ollama、faster-whisper 和 pyannote 共用同一張卡，用量沒有實測（`diarize_check` 會印顯示卡記憶體峰值）。不夠就把 `SLIDEBOX_DIARIZATION_DEVICE` 設成 `cpu`
-- **Pi 那邊要調大 `GPU_JOB_TIMEOUT_SECONDS`**：這是 Pi 等單一支影片的上限（`services/news` 預設 1800 秒，Pi 的 `compose.yaml` 預設 2700 秒），GPU 這一端沒有硬性逾時。長的對談影片很容易超過，超過 Pi 就不等了。要在 Pi 的 `api` 與 `scheduler` 兩個容器都調大
+- **顯示卡記憶體**：Ollama、faster-whisper 和 pyannote 共用同一張卡，用量沒有實測（`diarize_check` 會印說話者區分工作行程的記憶體峰值和 PyTorch 的顯示卡記憶體峰值；Whisper 與 Ollama 的用量要另外看 `nvidia-smi`）。不夠就把 `SLIDEBOX_DIARIZATION_DEVICE` 設成 `cpu`
+- **Pi 那邊要調大 `GPU_JOB_TIMEOUT_SECONDS`**：這是 Pi 等單一支影片的上限（`services/news` 預設 1800 秒，Pi 的 `compose.yaml` 預設 2700 秒），GPU 這一端沒有整支影片的逾時，只有說話者區分的工作行程有一個防卡死的上限（`SLIDEBOX_DIARIZATION_TIMEOUT_SECONDS`，預設 21600 秒，也就是 6 小時，是還沒實測過的保守值）。長的對談影片很容易超過，超過 Pi 就不等了。要在 Pi 的 `api` 與 `scheduler` 兩個容器都調大
 - 被取消或逾時的工作，已經完成的階段（說話者區分、語音辨識、各窗摘要）會存在 `summary-output` volume 的 `.slidebox_cache/` 底下，**再送同一支影片會從那裡接著做**，成功後清掉。逾時若發生在說話者區分或語音辨識的「途中」，那一階段要整個重做，所以要調大逾時，不能只靠重試
 
 #### 先聽過，再相信（`diarize_check`）
@@ -460,7 +492,7 @@ docker compose -f compose.gpu.yaml --env-file .env.gpu exec api python -m slideb
 docker compose -f compose.gpu.yaml --env-file .env.gpu exec api python -m slidebox_api.diarize_check 'https://www.youtube.com/watch?v=VIDEO_ID' --start 0 --end 600 --speakers 2
 ```
 
-不用 Docker 的話：`$env:PYTHONPATH = "src"; uv run --group api --group diarization python -m slidebox_api.diarize_check --sample`。
+不用 Docker 的話：`$env:PYTHONPATH = "src"; uv run --group api --group diarization python -m slidebox_api.diarize_check --sample`。**在 Windows 主機上，這條路只能驗證 CPU**：鎖檔裡 Windows 的 PyTorch 是只有 CPU 的版本（CUDA 的函式庫只列在 Linux 的相依套件裡），所以不管有沒有顯示卡，說話者區分都在 CPU 上跑。它驗證得了 token、條款有沒有接受、模型載不載得起來和整條流程，驗證不了顯示卡和 GPU 的耗時、記憶體——那些只能用上面容器裡的指令。（這個指令把 PyTorch 與 pyannote 裝在目前的環境裡，沒有設 `SLIDEBOX_DIARIZATION_PYTHON`，工作行程就用同一個環境；分成兩個環境是 Docker 映像的作法。）
 
 它會印出：
 
@@ -468,18 +500,28 @@ docker compose -f compose.gpu.yaml --env-file .env.gpu exec api python -m slideb
 - 每個標籤各占多少秒、幾段
 - 說話者清單：每個標籤最長的三段話，附 `&t=` 連結，點開來聽是不是同一個人
 - 平均分布的 10 個抽查位置、品質與警告（正式工作會拒絕的結果也會明說）
-- 每個階段的耗時、這個行程的記憶體峰值、PyTorch 的顯示卡記憶體峰值
+- 說話者區分用了哪個裝置：`說話者區分：…（模型，cuda）` 那一行括號裡寫的是 `cuda` 還是 `cpu`；是 `cpu` 的話，報告會緊接著多印一行「注意」
+- 每個階段的耗時、本行程（語音辨識）與說話者區分工作行程各自的記憶體峰值、PyTorch 的顯示卡記憶體峰值（在 CPU 上跑時沒有這一項）
 
 `--start`／`--end` 只切出那一段來檢查，印出的時間仍是整支影片的時間。音訊放在暫存資料夾，結束（包括失敗與 Ctrl-C）就刪掉。結束碼：`0` 正常；`1` 跑完了，但正式工作會拒絕這個結果（或樣本與預期不符）；`2` 參數不對；`3` 跑不起來（說話者區分不能用、下載或語音辨識失敗）；`130` 被中斷。樣本是第三方 GitHub release 上的檔案，它失效或抓不下來時，改用自己認得出聲音的短片段。
 
-建議的順序：先 `--sample` 確認 token、模型、驅動都正常；再挑一支你認得出每個人聲音的影片，用 `--start`／`--end` 取一段 5～10 分鐘，點開 `&t=` 連結聽過、抽查位置核對過；確認沒問題才開始收真的影片。
+**結束碼 `0` 的意思是「流程跑通、結果可以用」，不是「顯示卡沒問題」**：`SLIDEBOX_DIARIZATION_DEVICE` 預設是 `auto`，沒有顯示卡、或驅動對不上時會退回 CPU，照樣跑完、照樣結束碼 `0`。所以 `--sample` 的 `0` 證明的是：token 有效、條款已接受、模型載得起來、音訊到對齊整條流程是通的、找到的聲音數和樣本一致；用了哪個裝置要看報告裡 `說話者區分：…` 那一行（`cuda` 或 `cpu`）。要**驗證顯示卡**，在 GPU 主機上強制 `cuda` 再跑一次：
+
+```powershell
+docker compose -f compose.gpu.yaml --env-file .env.gpu exec -e SLIDEBOX_DIARIZATION_DEVICE=cuda api python -m slidebox_api.diarize_check --sample
+```
+
+指定 `cuda` 時沒有可用的顯示卡就直接失敗（結束碼 `3`），不會悄悄退回 CPU；成功的話報告裡會是 `cuda`，並印出 PyTorch 的顯示卡記憶體峰值。這是要先做的事：用 CPU 區分一支一小時的影片慢很多，工作會一路拖到 Pi 的 `GPU_JOB_TIMEOUT_SECONDS`，到那時才發現是裝置的問題。
+
+建議的順序：先 `--sample`，確認 token、條款、模型都正常；再用上面強制 `cuda` 的那一行確認顯示卡真的用得上；再挑一支你認得出每個人聲音的影片，用 `--start`／`--end` 取一段 5～10 分鐘，點開 `&t=` 連結聽過、抽查位置核對過；確認沒問題才開始收真的影片。
 
 #### 疑難排解
 
-- `/capabilities` 回 `false`：看 `reason`——沒設 token、沒裝 `pyannote.audio`（映像要用 `--group diarization` 建置）、被 `SLIDEBOX_DIARIZER=off` 關掉，或設定值寫錯
+- `/capabilities` 回 `false`：看 `reason`——沒設 token、第二個 Python 環境沒裝 `pyannote.audio`，或 `SLIDEBOX_DIARIZATION_PYTHON` 指的 Python 不存在、起不來（Docker 映像會在 `/opt/diarize-venv` 裝好並設定，這種情況多半是映像沒重新建置，或 `.env.gpu`／`compose.gpu.yaml` 把這個變數蓋掉了）、被 `SLIDEBOX_DIARIZER=off` 關掉，或設定值寫錯
 - 工作失敗、訊息說模型被拒絕或要先接受條款：回到〈一次性的設定〉第 2、3 步，確認 token 屬於接受了條款的那個帳號，而且有讀取權限
-- 顯示卡相關的錯誤，或 `auto` 一直退回 CPU：鎖檔（`uv.lock`）裡的 PyTorch 是 CUDA 13 的版本，驅動要夠新。`docker run --rm --gpus all ubuntu nvidia-smi` 右上角的 `CUDA Version` 要是 13.x；比它舊就先設 `SLIDEBOX_DIARIZATION_DEVICE=cpu`（完全不碰 CUDA，只是慢）
-- 想確認 PyTorch 看不看得到顯示卡：`docker compose -f compose.gpu.yaml --env-file .env.gpu exec api python -c "import torch; print(torch.version.cuda, torch.cuda.is_available())"`
+- 顯示卡相關的錯誤，或 `auto` 一直退回 CPU：鎖檔（`uv.lock`）裡的 PyTorch 是 CUDA 13 的版本，驅動要夠新。`docker run --rm --gpus all ubuntu nvidia-smi` 標頭裡的 CUDA 版本要是 13.x（標籤叫 `CUDA Version`，較新的驅動印成 `CUDA UMD Version`）；比它舊就先設 `SLIDEBOX_DIARIZATION_DEVICE=cpu`（完全不碰 CUDA，只是慢）
+- 想確認 PyTorch 看不看得到顯示卡：要用第二個環境的 Python，而且要像工作行程一樣不帶 `LD_LIBRARY_PATH`（主環境沒有 torch；帶著它，CUDA 13 的 PyTorch 會撿到主環境 CUDA 12 的函式庫）：`docker compose -f compose.gpu.yaml --env-file .env.gpu exec api env -u LD_LIBRARY_PATH /opt/diarize-venv/bin/python -c "import torch; print(torch.version.cuda, torch.cuda.is_available())"`，預期印出 `13.x True`
+- 工作失敗、訊息是「說話者區分的工作行程異常結束」（會寫是被哪個訊號終止；`SIGKILL` 常見的原因是主機記憶體不足，被系統終止）：先看 Docker Desktop／WSL2 分到的記憶體夠不夠；是驅動或 CUDA 的問題的話，設 `SLIDEBOX_DIARIZATION_DEVICE=cpu`。訊息是「超過 N 秒仍未完成，已中止」：那是 `SLIDEBOX_DIARIZATION_TIMEOUT_SECONDS` 的上限，在 CPU 上跑長影片會比較久，調大它
 
 ## 2. 後端（Pi）
 

@@ -67,13 +67,22 @@ class Ticks:
         return self.now
 
 
+class MeasuredDiarizer(FakeDiarizer):
+    """比照 PyannoteSpeakerDiarizer：說話者區分在另一個行程跑，用了哪個裝置、工作行程與顯示卡的記憶體峰值
+    都是區分器自己回報的（本行程裡沒有 torch 可以量）。"""
+
+    def __init__(self, device="", worker_peak=None, gpu_peak=None, **options):
+        super().__init__(**options)
+        self.device, self.worker_peak_bytes, self.gpu_peak_bytes = device, worker_peak, gpu_peak
+
+
 def check_run(args, tmp_path, audio=None, diarizer=None, words=None, cuts=None, peak=3_500_000_000,
-              gpu_peak=None, **parts_options):
+              **parts_options):
     """跑一次檢查，回傳 (結束碼, 標準輸出, 標準錯誤, 零件)。tmp_path 當暫存資料夾的位置，結束後應該是空的。"""
     parts = check.Parts(
         audio=audio or Audio(), diarizer=diarizer or FakeDiarizer(), words=words or FakeWordTranscriber(),
         whisper_model="whisper-a", cut_audio=cuts or Cuts(), clock=Ticks(),
-        peak_memory=lambda: peak, gpu_peak_memory=lambda: gpu_peak, **parts_options)
+        peak_memory=lambda: peak, **parts_options)
     out, err = io.StringIO(), io.StringIO()
     code = check.main(args, parts=parts, out=out, err=err, base_dir=str(tmp_path))
     return code, out.getvalue(), err.getvalue(), parts
@@ -176,19 +185,50 @@ def test_a_whole_video_check_prints_who_said_what_and_how_to_listen_for_it(tmp_p
     assert nothing_left(tmp_path)
 
 
-def test_the_check_reports_time_per_stage_and_the_memory_peak(tmp_path):
-    _, out, _, _ = check_run([URL], tmp_path, peak=3_500_000_000, gpu_peak=2 ** 30)
+def test_the_check_reports_time_per_stage_and_the_memory_peaks_of_both_processes(tmp_path):
+    diarizer = MeasuredDiarizer(device="cuda", worker_peak=6 * 2 ** 30, gpu_peak=2 ** 30)
+
+    _, out, _, _ = check_run([URL], tmp_path, diarizer=diarizer, peak=3_500_000_000)
 
     # 時鐘每被問一次走一秒：每個階段前後各一次，加上階段裡回報進度的那一次
     assert "下載 2.0 秒；說話者區分 2.0 秒；語音辨識 2.0 秒；對齊 1.0 秒；合計 10.0 秒" in out
-    assert "本行程記憶體峰值：3.3 GiB（含載入的模型）" in out
+    # 語音辨識在本行程、說話者區分在工作行程：兩個數字分開報，不能再當成同一個
+    assert "本行程（語音辨識）記憶體峰值：3.3 GiB（含載入的模型）" in out
+    assert "說話者區分的工作行程記憶體峰值：6.0 GiB（含載入的模型）" in out
     assert "PyTorch 顯示卡記憶體峰值：1.0 GiB" in out and "nvidia-smi" in out
+    # 顯示卡的數字屬於工作行程那一行（同一行），不是本行程的
+    worker_line = next(line for line in out.splitlines() if "工作行程記憶體峰值" in line)
+    assert "PyTorch 顯示卡記憶體峰值：1.0 GiB" in worker_line
 
 
 def test_a_platform_that_cannot_measure_memory_says_so_instead_of_printing_zero(tmp_path):
-    _, out, _, _ = check_run([URL], tmp_path, peak=None, gpu_peak=None)
-    assert "本行程記憶體峰值：這個平台量不到" in out
+    _, out, _, _ = check_run([URL], tmp_path, diarizer=MeasuredDiarizer(device="cpu"), peak=None)
+    assert "本行程（語音辨識）記憶體峰值：這個平台量不到" in out
+    assert "說話者區分的工作行程記憶體峰值：這個平台量不到" in out
     assert "PyTorch 顯示卡" not in out
+
+
+def test_a_peak_the_diarizer_measured_is_not_credited_to_this_process(tmp_path):
+    """攔的 bug：本行程（語音辨識）量不到的時候，退而求其次拿工作行程的數字填進去——
+    兩個行程各自的數字，量不到就說量不到，不能互相頂替。"""
+    diarizer = MeasuredDiarizer(device="cuda", worker_peak=6 * 2 ** 30)
+
+    _, out, _, _ = check_run([URL], tmp_path, diarizer=diarizer, peak=None)
+
+    assert "本行程（語音辨識）記憶體峰值：這個平台量不到" in out
+    assert "說話者區分的工作行程記憶體峰值：6.0 GiB" in out
+
+
+def test_a_diarizer_that_reports_no_peaks_is_not_credited_with_any(tmp_path):
+    """FakeDiarizer 沒有這些屬性（別的實作也可以沒有）：量不到，不是 0，也不會當掉。"""
+    _, out, _, _ = check_run([URL], tmp_path)
+    assert "說話者區分的工作行程記憶體峰值：這個平台量不到" in out and "PyTorch 顯示卡" not in out
+
+
+def test_the_gpu_peak_of_a_run_on_the_cpu_is_not_reported(tmp_path):
+    """工作行程在 CPU 上跑的時候不量顯示卡（區分器回 None）：報告不會印出一個沒意義的 PyTorch 顯示卡數字。"""
+    _, out, _, _ = check_run([URL], tmp_path, diarizer=MeasuredDiarizer(device="cpu", worker_peak=2 ** 30))
+    assert "說話者區分的工作行程記憶體峰值：1.0 GiB" in out and "PyTorch 顯示卡" not in out
 
 
 def test_the_audio_goes_through_the_audio_gateway_only_and_the_requested_count_reaches_the_diarizer(tmp_path):
@@ -405,6 +445,53 @@ def test_the_device_the_diarizer_ended_up_on_is_part_of_the_header(tmp_path):
     assert "說話者區分：fake-engine 1.0（fake/model）" in plain
 
 
+def test_a_run_on_the_cpu_says_what_exit_code_0_does_and_does_not_prove(tmp_path):
+    """攔的 bug：沒有顯示卡的主機（或沒設 GPU）跑 --sample，結束碼 0、說話者找到 4 個，看起來一切正常——
+    被當成「GPU 沒問題」。其實連顯示卡都沒碰到。報告要自己說清楚。"""
+    code, out, _, _ = check_run([URL], tmp_path, diarizer=MeasuredDiarizer(device="cpu"))
+
+    assert code == check.EXIT_OK                                      # 流程是通的：結束碼不變，只是話要說清楚
+    assert "說話者區分：fake-engine 1.0（fake/model，cpu）" in out
+    notice = next(line for line in out.splitlines() if "用 CPU 跑的" in line)
+    assert "不表示顯示卡能用" in notice
+    assert "token 有效" in notice and "模型載得起來" in notice          # 結束碼 0 實際證明的東西
+    assert "流程跑得通" in notice and "耗時也不是顯示卡的耗時" in notice   # 流程通了，但耗時不能拿來估顯示卡
+    assert "SLIDEBOX_DIARIZATION_DEVICE=cuda" in notice               # 怎麼驗證顯示卡
+    assert "直接失敗" in notice and "不會悄悄退回 CPU" in notice         # 指定 cuda 的話，沒顯示卡不會騙人
+    # 提醒緊接在說明裝置的那一行後面（讀報告的人看標題就會看到）
+    lines = out.splitlines()
+    assert lines[lines.index("說話者區分：fake-engine 1.0（fake/model，cpu）") + 1] == notice
+
+
+@pytest.mark.parametrize("device", ["cuda", ""])
+def test_no_cpu_warning_when_the_gpu_was_used_or_the_device_is_unknown(tmp_path, device):
+    _, out, _, _ = check_run([URL], tmp_path, diarizer=MeasuredDiarizer(device=device))
+    assert "用 CPU 跑的" not in out and "不表示顯示卡能用" not in out
+
+
+def test_the_cpu_warning_does_not_hide_a_sample_that_found_the_wrong_number_of_voices(tmp_path):
+    """對照：CPU 的提醒不改變 --sample 對「找到幾個聲音」的判斷與結束碼。"""
+    code, out, _, _ = check_run(["--sample"], tmp_path, diarizer=MeasuredDiarizer(device="cpu"))
+    assert code == check.EXIT_NOT_RELIABLE                            # 預設的假結果是 3 個聲音，不是樣本預期的 4 個
+    assert "與預期不符" in out and "用 CPU 跑的" in out
+
+
+def test_the_device_name_is_cleaned_like_every_other_outside_text(tmp_path):
+    _, out, err, _ = check_run([URL], tmp_path, diarizer=MeasuredDiarizer(device="cuda" + ESCAPES))
+    assert_inert(out + err)
+    assert "（fake/model，cuda" in out
+
+
+@pytest.mark.parametrize("decorated", ["\x1b[1mcpu\x1b[0m", "cpu\n", "  cpu\t", "cpu\x1b]0;title\x07"])
+def test_a_decorated_cpu_is_still_recognised_as_the_cpu(tmp_path, decorated):
+    """裝置名稱先清過才拿來比對：別的區分器實作（鴨子型別）回報的名稱即使帶著控制序列或空白，
+    CPU 的提醒也不會因此消失。"""
+    _, out, err, _ = check_run([URL], tmp_path, diarizer=MeasuredDiarizer(device=decorated))
+    assert_inert(out + err)
+    assert "說話者區分：fake-engine 1.0（fake/model，cpu）" in out
+    assert "不表示顯示卡能用" in out
+
+
 def test_the_overlap_the_diarizer_measured_reaches_the_quality_section(tmp_path):
     overlapped = DiarizerOutput(FIXTURE.turns, overlap_seconds=7.0)
     _, plain, _, _ = check_run([URL], tmp_path)
@@ -600,46 +687,16 @@ def test_peak_memory_is_a_positive_number_or_unknown():
     assert peak is None or peak > 0
 
 
-def test_the_gpu_peak_is_only_asked_of_torch_when_something_already_loaded_it(monkeypatch):
-    class Cuda:
-        calls = 0
-
-        @staticmethod
-        def is_available():
-            return True
-
-        @classmethod
-        def max_memory_allocated(cls):
-            cls.calls += 1
-            return 123456
-
-    monkeypatch.delitem(sys.modules, "torch", raising=False)
-    assert check.gpu_peak_memory_bytes() is None                      # 沒人載入過 torch：不去 import 它
-    assert "torch" not in sys.modules
-
-    monkeypatch.setitem(sys.modules, "torch", type("Torch", (), {"cuda": Cuda}))
-    assert check.gpu_peak_memory_bytes() == 123456
-
-
-def test_a_torch_without_a_gpu_or_a_broken_one_reports_nothing(monkeypatch):
-    class NoGpu:
-        @staticmethod
-        def is_available():
-            return False
-
-        @staticmethod
-        def max_memory_allocated():
-            return 999                                   # 沒有顯示卡時就算問得到數字，也不能報
-
-    class Broken:
-        @staticmethod
-        def is_available():
-            raise RuntimeError("driver")
-
-    monkeypatch.setitem(sys.modules, "torch", type("Torch", (), {"cuda": NoGpu}))
-    assert check.gpu_peak_memory_bytes() is None
-    monkeypatch.setitem(sys.modules, "torch", type("Torch", (), {"cuda": Broken}))
-    assert check.gpu_peak_memory_bytes() is None
+def test_this_process_never_loads_torch_or_pyannote_not_even_to_measure_them():
+    """主環境不能出現 torch：它要的 CUDA 13 的 cuDNN 和語音辨識的 CUDA 12 版本檔名相同，載進同一個行程會互相踩到。
+    說話者區分與它的顯示卡量測都在工作行程裡（pyannote_worker）；這裡只讀區分器回報的數字，不去問 torch。"""
+    program = ("import sys, slidebox_api.diarize_check as check; check.default_parts(); check.peak_memory_bytes(); "
+               "print(sorted(m for m in sys.modules if m.split('.')[0] in ('torch', 'torchaudio', 'pyannote')))")
+    env = dict(os.environ, PYTHONPATH=os.path.join(REPO, "src"))
+    result = subprocess.run([sys.executable, "-c", program], cwd=REPO, env=env, capture_output=True, text=True,
+                            encoding="utf-8", timeout=120)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "[]"
 
 
 # --- 真的零件的組裝與進入點 ---
@@ -656,6 +713,9 @@ def test_the_default_parts_are_the_services_own_adapters_and_load_nothing():
     assert isinstance(parts.diarizer, PyannoteSpeakerDiarizer)
     assert isinstance(parts.words, FasterWhisperTranscriber)
     assert parts.whisper_model
+    # 還沒跑過：沒有裝置、沒有任何量測（報告印的是區分器自己回報的數字）
+    assert parts.diarizer.device == "" and parts.diarizer.worker_peak_bytes is None
+    assert parts.diarizer.gpu_peak_bytes is None
 
 
 def _module(*args):
@@ -676,3 +736,164 @@ def test_run_as_a_module_with_bad_arguments_exits_with_2_and_tells_why():
     result = _module()
     assert result.returncode == 2
     assert "--sample" in result.stderr
+
+
+# --- 外面來的文字（標題、網址、逐字稿、錯誤訊息）不能對終端機下指令 ---
+
+ESCAPES = "\x1b[2K\x1b[1A  ALL OK: 0 problems\x1b]0;pwned\x07"
+# 報告裡一個控制字元都不該有；換行是報告自己的版面
+FORBIDDEN = [chr(c) for c in (*range(0, 10), *range(11, 32), 127, *range(0x80, 0xA0))]
+
+
+def assert_inert(text: str) -> None:
+    found = [repr(c) for c in FORBIDDEN if c in text]
+    assert not found, f"報告裡還有控制字元 {found}"
+    assert "\N{RIGHT-TO-LEFT OVERRIDE}" not in text and "pwned" not in text
+
+
+def test_a_title_with_terminal_escape_sequences_cannot_rewrite_the_report(tmp_path):
+    """攔的 bug：影片標題由上傳者決定，原樣印出去。裡面的 ESC／OSC 序列可以清掉前面已經印出的
+    報告行、改終端機的標題——而這個工具的用途正是「先聽過再相信」，不能讓它的輸出被別人改寫。"""
+    clip = replace(CLIP, title="Interview" + ESCAPES)
+
+    code, out, err, _ = check_run([URL], tmp_path, audio=Audio(clip=clip))
+
+    assert code == check.EXIT_OK
+    assert_inert(out + err)
+    assert "影片：Interview" in out and "（abcdefghijk）" in out        # 看得出是哪支影片
+    assert "[2K" not in out and "[1A" not in out                      # 序列整段拿掉，不是只拿掉 ESC 字元
+
+
+def test_a_title_cannot_forge_extra_report_lines_with_line_breaks(tmp_path):
+    clip = replace(CLIP, title="真的標題\n\n  狀態：FORGED\r\n=== 說話者區分檢查 ===")
+    _, out, _, _ = check_run([URL], tmp_path, audio=Audio(clip=clip))
+    lines = out.splitlines()
+    title_line = next(line for line in lines if line.startswith("影片："))
+    assert "真的標題" in title_line and "（abcdefghijk）" in title_line     # 整個標題在同一行
+    assert lines.count("=== 說話者區分檢查 ===") == 1                       # 偽造的標頭只會是標題行裡的一段字
+    assert not [line for line in lines if line.startswith("  狀態：FORGED")]
+
+
+def test_bidirectional_overrides_in_a_title_are_removed(tmp_path):
+    clip = replace(CLIP, title="abc\N{RIGHT-TO-LEFT OVERRIDE}def\N{LEFT-TO-RIGHT ISOLATE}ghi\N{POP DIRECTIONAL ISOLATE}")
+    _, out, _, _ = check_run([URL], tmp_path, audio=Audio(clip=clip))
+    assert "abcdefghi" in out and "\N{RIGHT-TO-LEFT OVERRIDE}" not in out and "\N{LEFT-TO-RIGHT ISOLATE}" not in out
+
+
+def test_an_ordinary_title_is_printed_untouched(tmp_path):
+    """對照：中文、全形標點、emoji（含零寬連接符組成的）都照原樣。"""
+    title = "少子化對談｜第 1 集 — 「托育」😀 👨\N{ZERO WIDTH JOINER}👩\N{ZERO WIDTH JOINER}👧"
+    _, out, _, _ = check_run([URL], tmp_path, audio=Audio(clip=replace(CLIP, title=title)))
+    assert f"影片：{title}（abcdefghijk）" in out
+
+
+def test_c1_control_characters_are_removed_too(tmp_path):
+    """8 位元的 CSI（U+009B）與 OSC（U+009D）有些終端機也認得。"""
+    clip = replace(CLIP, title="a\x9b31mb\x9d0;pwned\x9cc")
+    _, out, _, _ = check_run([URL], tmp_path, audio=Audio(clip=clip))
+    assert_inert(out)
+    assert "影片：abc（" in out
+
+
+def test_a_malformed_or_unfinished_sequence_is_removed_as_well(tmp_path):
+    clip = replace(CLIP, title="x\x1b[31;1" + "\x1b" + "我y\x1b]0;never-terminated")
+    _, out, _, _ = check_run([URL], tmp_path, audio=Audio(clip=clip))
+    assert_inert(out)
+    assert "影片：x我y（" in out
+
+
+def test_transcribed_text_with_control_characters_is_cleaned_before_it_is_printed(tmp_path):
+    words = list(FIXTURE.words)
+    words[0] = replace(words[0], text="\x1b[31m" + words[0].text + "\x07")
+    _, out, _, _ = check_run([URL], tmp_path, words=FakeWordTranscriber(words=words))
+    assert_inert(out)
+    assert "今天我們來談少子化" in out
+
+
+def test_the_address_typed_on_the_command_line_is_cleaned_too(tmp_path):
+    dirty = URL + "&x=\x1b]0;pwned\x07"
+    _, out, _, _ = check_run([dirty], tmp_path)
+    assert_inert(out)
+    assert "來源：" + URL in out
+
+
+def test_error_text_from_a_download_or_a_model_is_cleaned_before_it_reaches_the_terminal(tmp_path):
+    """yt-dlp 的錯誤常常整段貼著頁面上的文字（標題、上傳者的說明）。"""
+    audio = Audio(error=NoSubtitlesAvailable("影片無法使用：\x1b]0;pwned\x07Video unavailable\x1b[2J"))
+    code, out, err, _ = check_run([URL], tmp_path, audio=audio)
+    assert code == check.EXIT_FAILED
+    assert_inert(out + err)
+    assert "Video unavailable" in err
+
+    code, out, err, _ = check_run([URL], tmp_path, diarizer=FakeDiarizer(error=DiarizationUnavailable("壞了\x1b[2J")))
+    assert code == check.EXIT_FAILED and "壞了" in err
+    assert_inert(out + err)
+
+
+def test_progress_lines_are_cleaned_too(tmp_path):
+    class Chatty(FakeDiarizer):
+        def diarize(self, audio_path, duration, speaker_count, progress, is_cancelled):
+            progress(0.1, "區分說話者…\x1b[2J（比對聲紋）\x07")
+            return super().diarize(audio_path, duration, speaker_count, progress, is_cancelled)
+
+    _, out, err, _ = check_run([URL], tmp_path, diarizer=Chatty())
+    assert_inert(out + err)
+    assert "區分說話者…" in err
+
+
+@pytest.mark.parametrize("raw,expected", [
+    ("plain text", "plain text"),
+    ("a\x1b[31mred\x1b[0mb", "aredb"),                          # CSI（顏色）
+    ("a\x1b[2Kb\x1b[1Ac", "abc"),                               # CSI（清行、游標上移）
+    ("a\x1b]0;title\x07b", "ab"),                               # OSC，BEL 結尾
+    ("a\x1b]0;title\x1b\x5cb", "ab"),                             # OSC，ST（ESC \）結尾
+    ("a\x1bPsome dcs payload\x1b\x5cb", "ab"),                    # DCS
+    ("a\x1bcb", "ab"),                                          # ESC c（重設終端機）
+    ("a\x1b(Bb", "ab"),                                         # ESC ( B（選字元集）
+    ("a\x9b2Jb", "ab"),                                         # 8 位元 CSI
+    ("a\x9d0;x\x9cb", "ab"),                                    # 8 位元 OSC
+    ("a\x00b\x07c\x08d\x7fe", "abcde"),                         # NUL、BEL、退格、DEL：不留空白
+    ("a\tb\nc\r\nd", "a b c d"),                                # Tab 與換行當成空白、壓成一個
+    ("a\N{LINE SEPARATOR}b\N{PARAGRAPH SEPARATOR}c", "a b c"),
+    ("a\N{RIGHT-TO-LEFT OVERRIDE}b\N{ARABIC LETTER MARK}c", "abc"),
+    ("  many    spaces  ", "many spaces"),
+    ("少子化對談｜「托育」😀", "少子化對談｜「托育」😀"),
+])
+def test_plain_text_for_the_terminal(raw, expected):
+    assert check.plain(raw) == expected
+
+
+def test_plain_leaves_non_text_input_printable():
+    assert check.plain(ValueError("壞了\x1b[2J")) == "壞了"
+    assert check.plain(None) == "None"
+
+
+def test_the_whole_report_is_swept_one_last_time_even_for_fields_nobody_thought_of(tmp_path):
+    """第二層：欄位各自清過，但報告印出前還有最後一道。這裡的引擎名稱沒有人特別處理，
+    只靠最後一道擋；拿掉它，這個測試就會失敗。"""
+    class Odd(FakeDiarizer):
+        engine = "fake\x1b[2Jengine\x07"
+
+    _, out, err, _ = check_run([URL], tmp_path, diarizer=Odd())
+    assert_inert(out + err)
+    assert "fakeengine 1.0" in out
+    lines = out.splitlines()
+    assert lines[0] == "=== 說話者區分檢查 ===" and len(lines) > 10          # 換行是報告自己的版面，要留著
+
+
+def test_an_unfinished_sequence_in_one_field_cannot_swallow_the_rest_of_the_report(tmp_path):
+    """攔的 bug：整份報告一次清，沒有結尾的 OSC 序列一路吃到下一個 BEL——後面的報告全部消失，
+    而這個工具的輸出正是要拿來核對的。最後一道要一行一行清。"""
+    class Odd(FakeDiarizer):
+        engine = "fake\x1b]0;never-terminated"
+
+    _, out, _, _ = check_run([URL], tmp_path, diarizer=Odd())
+    assert_inert(out)
+    assert "語音辨識：whisper-a（語言 zh）" in out and "--- 品質 ---" in out and "--- 耗時與記憶體 ---" in out
+
+
+def test_the_length_limit_counts_what_the_reader_sees_not_the_control_sequences():
+    """攔的 bug：先截短再清，標題或逐字稿裡的顏色碼佔掉字數，看得到的字變少。"""
+    shown = check._short("\x1b[31m" * 10 + "字" * 70, limit=60)
+    assert shown == "字" * 60 + "…"
+    assert check._short("\x1b[31m字\x1b[0m") == "字"
