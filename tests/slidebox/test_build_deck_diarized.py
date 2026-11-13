@@ -293,6 +293,21 @@ def test_each_finished_stage_is_saved_right_away():
     assert stored(parts) == ["diarization", "words"] and parts.checkpoints.cleared == []
 
 
+def test_the_summary_is_saved_only_when_every_window_is_done_so_a_rerun_asks_every_window_again():
+    """README 說的：摘要不是一個窗一個窗存的。第二個窗連不上模型時，第一個窗問完的結果不留下，
+    重送從第一個窗重問；說話者區分與語音辨識照樣沿用，也不再下載音訊。"""
+    parts = make(TWO_WINDOWS, conversation=FakeConversation([good_reply, SummarizerUnavailable("連不上 Ollama")]))
+    with pytest.raises(SummarizerUnavailable):
+        run(parts)
+    assert stored(parts) == ["diarization", "words"] and len(parts.conversation.calls) == 2
+
+    assert run(parts).deck.slides
+    first_turns = [call.first_turn for call in parts.conversation.calls]
+    assert len(first_turns) == 4 and first_turns[2:] == first_turns[:2] and first_turns[0] != first_turns[1]
+    assert len(parts.diarizer.calls) == 1 and len(parts.words.calls) == 1
+    assert parts.audio.events.count("download") == 1
+
+
 def test_a_rerun_after_a_recognition_failure_does_not_diarize_again():
     parts = make(words=FakeWordTranscriber(error=SpeechRecognitionFailed("辨識失敗")))
     with pytest.raises(SpeechRecognitionFailed):

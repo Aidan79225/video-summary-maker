@@ -22,6 +22,7 @@ from slidebox.infrastructure.pyannote_diarizer import (
     TOKEN_ENV,
     PyannoteSpeakerDiarizer,
 )
+from slidebox.usecases import conversation, speakers
 from slidebox.usecases.conversation import (
     ANCHOR_CONFLICT,
     ANCHOR_RADIUS,
@@ -338,6 +339,16 @@ def test_the_readme_names_only_error_codes_that_exist():
     section = _multi_speaker_section()
     for code in (BAD_QUOTE, ANCHOR_CONFLICT, NUMBER_MISMATCH):
         assert f"`{code}`" in section
+
+
+def test_the_readme_says_what_is_saved_and_when_the_way_the_code_does():
+    """攔的 bug：說明寫「各窗摘要」也會存、重送從那裡接著做，程式其實要所有的窗都問完、整份的可靠度檢查也過了
+    才存一次摘要（test_build_deck_diarized 釘住這個行為）。操作者因此低估逾時要調多大、以為重試會接著做完。
+    另外說明提到的兩個手動版本號要真的存在，存檔指紋含程式原始碼雜湊這件事才不會講成空話。"""
+    section = _multi_speaker_section()
+    assert "各窗摘要" not in section and "不是一個窗一個窗存的" in section
+    for name, module in (("PROMPT_VERSION", conversation), ("ALIGN_VERSION", speakers)):
+        assert f"`{name}`" in section and hasattr(module, name), name
 
 
 # --- 說話者區分的工作行程（兩個 Python 環境）的設定說明 ---
