@@ -19,10 +19,23 @@ from slidebox.infrastructure.pyannote_diarizer import (
     TOKEN_ENV,
     PyannoteSpeakerDiarizer,
 )
-from slidebox.usecases.conversation import CHUNK_CHARS_ENV, DEFAULT_CHUNK_CHARS, parse_chunk_chars
+from slidebox.usecases.conversation import (
+    ANCHOR_CONFLICT,
+    ANCHOR_RADIUS,
+    BAD_QUOTE,
+    CHUNK_CHARS_ENV,
+    DEFAULT_CHUNK_CHARS,
+    MAX_BULLETS,
+    NUMBER_MISMATCH,
+    QUOTE_ONLY_ENV,
+    parse_chunk_chars,
+    parse_quote_only,
+)
+from slidebox.usecases.diarized_pipeline import MAX_DROPPED_RATIO, AttributionCounts, summary_line
+from slidebox.usecases.quotes import MAX_RESCUED_QUOTE_CHARS, MIN_QUOTE_CHARS, QUOTE_MIN_LONGEST
 
 ROOT = Path(__file__).resolve().parents[1]
-DIARIZATION_SETTINGS = (TOKEN_ENV, MODE_ENV, DEVICE_ENV, CHUNK_CHARS_ENV)
+DIARIZATION_SETTINGS = (TOKEN_ENV, MODE_ENV, DEVICE_ENV, CHUNK_CHARS_ENV, QUOTE_ONLY_ENV)
 HF_CACHE = "/root/.cache/huggingface"
 TOKEN_SHAPE = re.compile(r"hf_[A-Za-z0-9]{8,}")
 
@@ -220,3 +233,40 @@ def test_the_documented_chunk_size_default_is_the_codes_default():
 @pytest.mark.parametrize("name", DIARIZATION_SETTINGS)
 def test_serve_api_docstring_lists_each_diarization_setting(name):
     assert name in (serve_api.__doc__ or "")
+
+
+# --- 安全模式（SLIDEBOX_QUOTE_ONLY）與歸屬核對的說明 ---
+
+def test_the_safe_mode_is_off_by_default_in_every_file_and_the_documented_values_are_the_codes():
+    """攔的 bug：預設被寫成開（沒設任何東西，每個重點就悄悄變成原話）；或說明裡的「1、true、yes」
+    和程式認的不一樣。"""
+    compose_default = _default_of(_api_environment()[QUOTE_ONLY_ENV])
+    assert compose_default == "" and parse_quote_only(compose_default) is False
+    example = _env_example()[QUOTE_ONLY_ENV]
+    assert example == "" and parse_quote_only(example) is False
+    section = _multi_speaker_section()
+    for value in ("1", "true", "yes"):
+        assert parse_quote_only(value) is True and f"`{value}`" in section
+
+
+def test_the_readme_log_line_is_the_one_the_code_writes():
+    """攔的 bug：記錄裡那一行的格式改了，說明裡的範例還是舊的。"""
+    counts = AttributionCounts(proposed=37, kept=31, rescued=4, contradicted=4, unverifiable=2, slide_rule=0,
+                               anchor_conflicts=1)
+    assert summary_line(counts) in _multi_speaker_section()
+
+
+def test_the_readme_numbers_about_checking_points_are_the_codes_numbers():
+    """攔的 bug：門檻改了，說明還寫著舊的數字。"""
+    section = _multi_speaker_section()
+    for needle in (f"合計至少 {MIN_QUOTE_CHARS} 個字", f"最長的片段至少 {QUOTE_MIN_LONGEST} 個字",
+                   f"{MIN_QUOTE_CHARS}～{MAX_RESCUED_QUOTE_CHARS} 個字", f"前後 {ANCHOR_RADIUS} 輪",
+                   f"每頁最多顯示 {MAX_BULLETS} 個重點"):
+        assert needle in section, needle
+    assert MAX_DROPPED_RATIO == 0.25 and "四分之一" in section
+
+
+def test_the_readme_names_only_error_codes_that_exist():
+    section = _multi_speaker_section()
+    for code in (BAD_QUOTE, ANCHOR_CONFLICT, NUMBER_MISMATCH):
+        assert f"`{code}`" in section
