@@ -266,8 +266,9 @@ class FlakyRenderer(FakeRenderer):
         super().render(deck, dest_path)
 
 
-def make(chunk_chars: int = 6000, **overrides):
-    """組一個多人模式的 use case 和它所有的假零件。overrides 可以換掉任何一個零件。"""
+def make(chunk_chars: int = 6000, quote_only: bool = False, **overrides):
+    """組一個多人模式的 use case 和它所有的假零件。overrides 可以換掉任何一個零件；
+    quote_only 是安全模式（每個重點都顯示核對過的原話）。"""
     parts = SimpleNamespace(
         audio=FakeAudioGateway(clip=CLIP),
         diarizer=FakeDiarizer(),
@@ -290,7 +291,7 @@ def make(chunk_chars: int = 6000, **overrides):
         parts.subtitles, parts.summarizer, parts.sections, parts.frames, parts.renderer,
         audio=parts.audio, transcriber=None, diarizer=parts.diarizer, brief_writer=parts.brief_writer,
         rewriter=parts.rewriter, checkpoints=parts.checkpoints, word_transcriber=parts.words,
-        conversation=parts.conversation, chunk_chars=chunk_chars)
+        conversation=parts.conversation, chunk_chars=chunk_chars, quote_only=quote_only)
     return parts
 
 

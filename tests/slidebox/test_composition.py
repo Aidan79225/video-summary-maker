@@ -166,16 +166,17 @@ def test_the_pipeline_has_the_multi_speaker_parts_wired_in():
     assert isinstance(usecase._diarizer, PyannoteSpeakerDiarizer)
     assert isinstance(usecase._conversation, CurrentSettingsConversationSummarizer)
     assert usecase._chunk_chars == DEFAULT_CHUNK_CHARS
+    assert usecase._quote_only is False                 # 安全模式預設是關的：不設定就和一般模式一樣
     # 單人與多人共用同一個 Whisper：模型約 40 秒才載入完，載兩份是浪費顯示卡記憶體
     assert usecase._word_transcriber is usecase._transcriber
 
 
-def test_the_chunk_size_and_the_diarizer_can_be_injected():
+def test_the_chunk_size_the_diarizer_and_the_safe_mode_can_be_injected():
     from slidebox.composition import build_usecase
 
     sentinel = object()
-    usecase = build_usecase(Settings(output_dir="OUT"), diarizer=sentinel, chunk_chars=3000)
-    assert usecase._diarizer is sentinel and usecase._chunk_chars == 3000
+    usecase = build_usecase(Settings(output_dir="OUT"), diarizer=sentinel, chunk_chars=3000, quote_only=True)
+    assert usecase._diarizer is sentinel and usecase._chunk_chars == 3000 and usecase._quote_only is True
 
 
 def test_building_the_pipeline_does_not_import_the_heavy_diarization_libraries():

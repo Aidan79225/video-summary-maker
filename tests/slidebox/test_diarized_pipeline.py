@@ -413,3 +413,155 @@ def test_the_pages_carry_the_placeholders_not_names():
 def test_no_windows_no_pages():
     assert dp.assemble([]) == ()
     assert dp.assemble([outcome(0, 9, 3, 0)]) == ()
+
+
+# --- 歸屬的計數與記錄：顯示原話的點、丟掉的三類 ---
+
+
+def counted(first: int, last: int, proposed: int, kept: int, *, index: int = 0, **counters) -> dp.WindowOutcome:
+    """outcome 再加上顯示原話的點數與丟掉的分類（rescued、contradicted、unverifiable、slide_rule、anchor_conflicts）。"""
+    return dataclasses.replace(outcome(first, last, proposed, kept, index=index), **counters)
+
+
+def test_the_dropped_points_are_described_by_class_and_anchor_conflicts_are_added_only_when_there_are_some():
+    assert dp.describe_drops(4, 2, 0, 1) == "有問題 4、查不出來 2、同頁規則 0；內容出自別輪 1"
+    assert dp.describe_drops(1, 0, 3) == "有問題 1、查不出來 0、同頁規則 3"
+    assert dp.describe_drops(0, 0, 1, 0) == "有問題 0、查不出來 0、同頁規則 1"
+
+
+def test_a_result_without_any_class_has_nothing_to_describe():
+    """手工組的結果沒有分類：不要印一行全是 0 的分類。「內容出自別輪」是「有問題」的一部分，不會單獨出現。"""
+    assert dp.describe_drops(0, 0, 0) == ""
+    assert dp.describe_drops(0, 0, 0, 2) == ""
+
+
+def test_the_summary_line_says_proposed_kept_quoted_and_dropped_by_class():
+    counts = dp.AttributionCounts(proposed=37, kept=31, rescued=4, contradicted=4, unverifiable=2, slide_rule=0,
+                                  anchor_conflicts=1)
+    assert dp.summary_line(counts) == ("對談重點：模型提出 37 個，留下 31 個（其中 4 個直接引用原話）；"
+                                       "丟掉 6 個（有問題 4、查不出來 2、同頁規則 0；內容出自別輪 1）")
+
+
+@pytest.mark.parametrize("counts, expected", [
+    (dp.AttributionCounts(8, 8, 0, 0, 0, 0, 0), "對談重點：模型提出 8 個，留下 8 個"),
+    (dp.AttributionCounts(8, 8, 3, 0, 0, 0, 0), "對談重點：模型提出 8 個，留下 8 個（其中 3 個直接引用原話）"),
+    (dp.AttributionCounts(8, 6, 0, 0, 0, 0, 0), "對談重點：模型提出 8 個，留下 6 個；丟掉 2 個"),
+    (dp.AttributionCounts(8, 6, 0, 0, 0, 2, 0),
+     "對談重點：模型提出 8 個，留下 6 個；丟掉 2 個（有問題 0、查不出來 0、同頁規則 2）"),
+], ids=["nothing dropped", "all quoted", "dropped without classes", "dropped by the slide rule"])
+def test_the_summary_line_leaves_out_what_does_not_apply(counts, expected):
+    assert dp.summary_line(counts) == expected
+
+
+def test_the_counts_of_a_job_add_up_the_windows_and_skip_nothing():
+    outcomes = [counted(0, 9, 5, 4, rescued=1, contradicted=1, anchor_conflicts=1),
+                counted(10, 18, 3, 1, index=1, unverifiable=1, slide_rule=1),
+                outcome(19, 25, 0, 0, skipped=True, index=2)]
+    assert dp.attribution_counts(outcomes) == dp.AttributionCounts(8, 5, 1, 1, 1, 1, 1)
+    assert dp.attribution_counts([]) == dp.AttributionCounts(0, 0, 0, 0, 0, 0, 0)
+
+
+def test_the_message_for_a_window_without_pages_carries_the_classes_of_what_was_dropped():
+    outcomes = [outcome(0, 9, 4, 4), counted(10, 18, 5, 0, index=1, contradicted=3, unverifiable=2, anchor_conflicts=1)]
+    with pytest.raises(AttributionUnreliable) as raised:
+        dp.check_reliability(outcomes)
+    assert str(raised.value) == (
+        "第 2/2 段對談（T10–T18）沒有任何一頁通過程式檢查（模型提出 5 個重點、留下 0 個）；"
+        "丟掉的原因：有問題 3、查不出來 2、同頁規則 0；內容出自別輪 1；寧可不發佈，也不寫錯是誰說的")
+
+
+def test_the_message_for_too_many_dropped_points_carries_the_classes_of_what_was_dropped():
+    with pytest.raises(AttributionUnreliable) as raised:
+        dp.check_reliability([counted(0, 9, 8, 4, contradicted=2, unverifiable=1, slide_rule=1)])
+    assert str(raised.value) == (
+        "模型提出的 8 個重點裡，有 4 個沒有通過程式檢查（50%，上限 25%）；"
+        "丟掉的原因：有問題 2、查不出來 1、同頁規則 1；說話者的歸屬不可靠，不發佈")
+
+
+def test_a_message_without_classes_does_not_print_an_empty_list_of_reasons():
+    with pytest.raises(AttributionUnreliable) as raised:
+        dp.check_reliability([outcome(0, 9, 100, 74)])
+    with pytest.raises(AttributionUnreliable) as no_page:
+        dp.check_reliability([outcome(0, 9, 2, 0)])
+    assert "丟掉的原因" not in str(raised.value) and "丟掉的原因" not in str(no_page.value)
+
+
+def test_the_rescued_points_of_a_cut_page_leave_the_rescued_count_too():
+    """攔的 bug：多寫的頁被砍掉了，那幾頁裡顯示原話的點還算在「其中幾個直接引用原話」裡，數字比留下的點還大。"""
+    slides = (CheckedSlide("一", (point(0), point(1)), rescued=1),
+              CheckedSlide("二", (point(2), point(3), point(4))),
+              CheckedSlide("三", (point(5), point(6)), rescued=2))
+    fitted, cut = dp.fit_to_range(ValidationResult(slides, proposed=9, kept=7, problems=(), rescued=3), max_slides=2)
+    assert cut == 1 and (fitted.proposed, fitted.kept, fitted.rescued) == (7, 5, 1)
+
+
+def test_the_conversation_fingerprint_follows_the_safe_mode_switch():
+    """攔的 bug：開了安全模式（每個重點都是原話）卻沿用開之前存下的改寫，或反過來。"""
+    base = dp.conversation_fingerprint(SETTINGS, 6000, PLAN)
+    assert dp.conversation_fingerprint(SETTINGS, 6000, PLAN, False) == base            # 預設就是關
+    assert dp.conversation_fingerprint(SETTINGS, 6000, PLAN, True) != base
+
+
+NOT_IN_THE_TRANSCRIPT = "這是一句逐字稿裡根本沒有的話啊啊啊"
+UNRELATED_WORDING = "完全不同的主題在這裡亂寫一通"
+
+
+def whole(turn: int, text: str) -> RawPoint:
+    """文字寫對的點：quote 是那一輪的整段話。"""
+    return RawPoint(turn, text, quote=QUOTES[turn])
+
+
+def invented(turn: int = 2) -> RawPoint:
+    """quote 在逐字稿裡根本找不到：一定被丟掉，歸在「查不出來」。"""
+    return RawPoint(turn, "詢問明年預算的編列方式", quote=NOT_IN_THE_TRANSCRIPT)
+
+
+def test_the_outcome_counts_what_was_quoted_and_what_was_dropped_by_class():
+    turns, speakers, allocations = _setup(*LINES)
+    reply = (RawSlide("預算", (
+        whole(0, GOOD[0][1]), whole(1, GOOD[1][1]),
+        whole(3, UNRELATED_WORDING),                    # 用字對不上那一輪，但原文本身可以直接顯示
+        invented())),)
+    (only,), _ = run_windows(FakeConversation([reply]), turns, speakers, allocations)
+
+    assert (only.proposed, only.kept, only.rescued) == (4, 3, 1)
+    assert (only.contradicted, only.unverifiable, only.slide_rule, only.anchor_conflicts) == (0, 1, 0, 0)
+    assert only.dropped_by_code == (("bad_quote", 1),)
+    assert [p.text for p in only.slides[0].points] == [GOOD[0][1], GOOD[1][1], f"「{LINES[3][1]}」"]
+    assert [p.speaker for p in only.slides[0].points] == ["S1", "S2", "S2"]
+
+
+def test_the_counters_of_the_attempt_that_was_used_replace_those_of_the_attempt_that_was_not():
+    turns, speakers, allocations = _setup(*LINES)
+    first = (RawSlide("預算", (whole(1, GOOD[1][1]), invented(), invented(), invented())),)    # 一頁只剩 1 點：整頁不用
+    conversation = FakeConversation([first, reply_citing(*GOOD)])
+    (only,), _ = run_windows(conversation, turns, speakers, allocations)
+
+    assert len(conversation.calls) == 2
+    assert (only.proposed, only.kept, only.rescued) == (2, 2, 0)
+    assert (only.contradicted, only.unverifiable, only.slide_rule, only.dropped_by_code) == (0, 0, 0, ())
+
+
+def test_when_neither_attempt_passes_the_counters_are_those_of_the_one_with_more_kept_points():
+    turns, speakers, allocations = _setup(*LINES)
+    first = (RawSlide("預算", (whole(0, GOOD[0][1]), whole(1, GOOD[1][1]), invented(), invented(), invented())),)
+    second = (RawSlide("預算", (whole(1, GOOD[1][1]), invented(), invented(), invented(), invented())),)
+    (only,), _ = run_windows(FakeConversation([first, second]), turns, speakers, allocations)
+
+    assert (only.proposed, only.kept) == (5, 2)                       # 第一次留 2 個，第二次一頁都沒留下
+    assert (only.unverifiable, only.slide_rule, only.dropped_by_code) == (3, 0, (("bad_quote", 3),))
+
+
+@pytest.mark.parametrize("quote_only", [False, True])
+def test_the_safe_mode_switch_reaches_the_checks(quote_only):
+    turns, speakers, allocations = _setup(*LINES)
+    (only,) = dp.summarize_windows(
+        FakeConversation([reply_citing(*GOOD)]), allocations, turns, speakers, lambda frac, status: None,
+        lambda: None, lambda: False, quote_only=quote_only)
+
+    shown = [p.text for p in only.slides[0].points]
+    if quote_only:
+        assert shown == [f"「{LINES[0][1]}」", f"「{LINES[1][1]}」"] and only.rescued == 2
+    else:
+        assert shown == [GOOD[0][1], GOOD[1][1]] and only.rescued == 0
+    assert (only.proposed, only.kept) == (2, 2)

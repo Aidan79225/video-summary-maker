@@ -324,6 +324,57 @@ def test_a_resumed_job_reports_the_same_counts_as_a_fresh_one():
     assert (resumed.rescued_points, resumed.contradicted_points) == (None, None)      # 沒有重新檢查，不亂填
 
 
+def mixed_reply(call):
+    """10 個重點：7 個通過、1 個用字對不上改顯示原話、1 個 quote 是編出來的、1 個 quote 在甲、內容卻是乙說的。"""
+    good = good_points()
+    conflict = RawPoint(at("不是，是要"), "名額不夠，家長排了兩年也沒有消息", quote="不是，是要把名額加倍")
+    invented = RawPoint(at("謝謝邱委員"), "詢問預算的編列方式", quote="這是一句逐字稿裡根本沒有的話啊啊啊")
+    quoted = RawPoint(at("預算大約"), "完全不同的主題在這裡亂寫一通", quote="至少要把公共托育的名額加倍")
+    return (RawSlide("補助", (*good[0:3], conflict)), RawSlide("托育", (*good[3:6], invented)),
+            RawSlide("預算", (good[6], quoted)))
+
+
+def test_the_report_and_the_progress_log_say_what_was_quoted_and_what_was_dropped():
+    """攔的 bug：顯示原話的點與三類丟掉的點只在內部算，沒有進報告、也沒有記進進度紀錄——
+    事後看不出這份摘要的歸屬有多可靠。"""
+    seen = []
+    deck = run(make(conversation=FakeConversation([mixed_reply])), progress=lambda frac, status: seen.append(status)).deck
+    report = deck.diarization
+
+    assert (report.proposed_points, report.kept_points) == (10, 8)
+    assert (report.rescued_points, report.contradicted_points,
+            report.unverifiable_points, report.anchor_conflicts) == (1, 1, 1, 1)
+    assert ("對談重點：模型提出 10 個，留下 8 個（其中 1 個直接引用原話）；"
+            "丟掉 2 個（有問題 1、查不出來 1、同頁規則 0；內容出自別輪 1）") in seen
+    assert [p.text for s in deck.slides for p in s.points].count("「至少要把公共托育的名額加倍」") == 1
+
+
+def test_the_log_line_is_written_even_when_nothing_was_dropped():
+    seen = []
+    run(make(), progress=lambda frac, status: seen.append(status))
+    assert "對談重點：模型提出 7 個，留下 7 個" in seen
+
+
+def test_the_safe_mode_publishes_every_point_as_a_verified_quote():
+    """安全模式：成品裡的每個重點都是逐字稿裡那一輪的原話，說話者是那一輪的人，報告裡也說得出來。"""
+    deck = run(make(quote_only=True)).deck
+    by_index = {t.index: t for t in TURNS}
+    points = [p for slide in deck.slides for p in slide.points]
+
+    assert len(points) == 7
+    for p in points:
+        assert p.text.startswith("「") and p.text.endswith("」")
+        assert p.text[1:-1] in " ".join(by_index[p.turn].text.split())
+        assert p.speaker == by_index[p.turn].speaker
+    assert (deck.diarization.rescued_points, deck.diarization.kept_points) == (7, 7)
+
+
+def test_the_safe_mode_and_the_normal_mode_keep_the_same_speakers_and_turns():
+    normal = [(p.speaker, p.turn) for s in run(make()).deck.slides for p in s.points]
+    quoted = [(p.speaker, p.turn) for s in run(make(quote_only=True)).deck.slides for p in s.points]
+    assert normal == quoted
+
+
 CHANGES = [
     # 名稱, 換掉什麼, (說話者區分重做, 語音辨識重做, 摘要重做)
     ("diarizer version", lambda p: setattr(p.diarizer, "version", "2.0"), (True, False, False)),
@@ -338,6 +389,7 @@ CHANGES = [
     ("context size", lambda p: ("cfg", settings(num_ctx=16384)), (False, False, True)),
     ("detailed flag", lambda p: ("cfg", settings(detailed=True)), (False, False, False)),
     ("prompt version", lambda p: setattr(diarized_pipeline, "PROMPT_VERSION", 99), (False, False, True)),
+    ("safe mode", lambda p: setattr(p.usecase, "_quote_only", True), (False, False, True)),
     ("align version", lambda p: setattr(diarized_pipeline, "ALIGN_VERSION", 99), (False, True, False)),
 ]
 

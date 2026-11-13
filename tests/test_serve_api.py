@@ -70,7 +70,7 @@ FAKE_TOKEN = "hf_FAKEtokenForTestsOnly0123456789"
 def clean_env(monkeypatch, tmp_path):
     """服務在組裝時讀環境變數：先清掉開發機上可能有的設定，測試才不看機器。"""
     for name in ("HUGGINGFACE_TOKEN", "SLIDEBOX_DIARIZER", "SLIDEBOX_DIARIZATION_DEVICE",
-                 "SLIDEBOX_CHUNK_CHARS", "SLIDEBOX_API_KEY"):
+                 "SLIDEBOX_CHUNK_CHARS", "SLIDEBOX_QUOTE_ONLY", "SLIDEBOX_API_KEY"):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("SLIDEBOX_API_OUTPUT_DIR", str(tmp_path))
     return monkeypatch
@@ -95,6 +95,22 @@ def test_a_chunk_size_that_makes_no_sense_means_the_default(tmp_path, clean_env,
 
     clean_env.setenv("SLIDEBOX_CHUNK_CHARS", raw)
     assert _deck_usecase(serve_api.build_executor(_settings(tmp_path)))._chunk_chars == DEFAULT_CHUNK_CHARS
+
+
+def test_the_safe_mode_is_off_unless_the_environment_turns_it_on(tmp_path, clean_env):
+    assert _deck_usecase(serve_api.build_executor(_settings(tmp_path)))._quote_only is False
+    clean_env.setenv("SLIDEBOX_QUOTE_ONLY", "1")
+    assert _deck_usecase(serve_api.build_executor(_settings(tmp_path)))._quote_only is True
+
+
+@pytest.mark.parametrize("raw, expected", [
+    ("1", True), ("true", True), ("TRUE", True), ("Yes", True), (" yes ", True),
+    ("0", False), ("false", False), ("no", False), ("", False), ("on", False), ("2", False), ("enable", False),
+])
+def test_the_safe_mode_switch_only_accepts_1_true_and_yes(tmp_path, clean_env, raw, expected):
+    """攔的 bug：打錯字（on、enable）被當成「開」而悄悄改變每個重點的寫法，或寫了 true 卻沒有開。"""
+    clean_env.setenv("SLIDEBOX_QUOTE_ONLY", raw)
+    assert _deck_usecase(serve_api.build_executor(_settings(tmp_path)))._quote_only is expected
 
 
 def test_the_capability_probe_is_the_very_diarizer_the_jobs_use(tmp_path, clean_env):
