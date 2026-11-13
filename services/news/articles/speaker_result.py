@@ -47,6 +47,12 @@ MAX_SECONDS = 24 * 3600     # 一天；影片上限是 --max-minutes（預設 18
 MAX_COUNT = 100_000         # 發言段落編號、段落數、重點數
 MAX_REQUESTED = 20          # 與 add_video --speakers 的上限一樣
 MAX_FOUND = 100             # 找到的人數、其他聲音的數量（GPU 自己在超過 8 位主要發言者時就會失敗）
+# 跟 GPU（usecases/speakers.py）一樣的門檻：Pi 要能自己從名單判斷 GPU 該不該失敗、該不該警告，不照單全收
+MAX_PARTICIPANTS = 8        # 主要發言者超過這麼多，GPU 就判定聲音區分不可靠、整支失敗
+UNASSIGNED_WARN_RATIO = 0.25    # 說話時間裡無法判斷是誰說的超過這個比例，就警告
+MANY_MINOR = 4              # 其他聲音有這麼多個以上，就警告
+SECONDS_SLACK = 0.05        # 每個人的秒數各自四捨五入到小數一位，加起來最多差這麼多（每人一次，全部說話時間一次）
+TIME_SLACK = 1.0            # 重點的時間跟說話者首末時間比對時留的餘地（GPU 的時間只取到小數一位）
 
 KINDS = ("participant", "minor")
 STATUSES = ("ok", "warn")
@@ -166,14 +172,19 @@ def clean_speakers(raw: object) -> list[dict]:
                   "名字與職稱只能由操作者用 label_video 設定，GPU 的結果不能自己帶")
         if any(label == s["label"] for s in speakers):
             _fail(f"{where}.label「{label}」重複了：兩位說話者會顯示成同一個名字")
+        first_seen = _number(item.get("first_seen"), f"{where}.first_seen")
+        last_seen = _number(item.get("last_seen"), f"{where}.last_seen")
+        if first_seen > last_seen:
+            _fail(f"{where}.first_seen（{first_seen:g}）晚於 last_seen（{last_seen:g}）：還沒開口就已經說完了")
         speakers.append({
             "id": speaker_id,
             "label": label,
             "kind": kind,
             "seconds": _number(item.get("seconds"), f"{where}.seconds"),
-            "turns": _int(item.get("turns"), f"{where}.turns"),
-            "first_seen": _number(item.get("first_seen"), f"{where}.first_seen"),
-            "last_seen": _number(item.get("last_seen"), f"{where}.last_seen"),
+            # 列在名單裡的人至少說過一段話（GPU 的名單就是從發言段落整理出來的）
+            "turns": _int(item.get("turns"), f"{where}.turns", low=1),
+            "first_seen": first_seen,
+            "last_seen": last_seen,
             "samples": _clean_samples(item.get("samples")),
             "flags": _clean_flags(item.get("flags")),
         })
@@ -328,9 +339,12 @@ def check_speaker_result(article, payload: object) -> SpeakerResult:
          requested_speakers 跟我們送出去的一樣（自動＝None，指定人數＝那個數字）：接回了另一種設定的工作時會對不上；
       3. speakers 是 1～12 位、編號不重複、種類是 participant／minor、至少一位 participant；稱呼（label）只能是
          程式給的中性形狀（participant＝「發言者 A」…、minor＝「其他聲音 1」…，形狀要跟種類一致）：人名、
-         「主持人」這類的字一律拒絕，名字只由操作者用 label_video 設定；
+         「主持人」這類的字一律拒絕，名字只由操作者用 label_video 設定；名單與 GPU 的區分報告對得上
+         （found_speakers／minor_speakers 就是 participant／minor 的人數、participant 不超過 8 位、指定 2 人以上
+         時至少 2 位、kept_points 不超過 proposed_points、每人至少說過一段話且首次出現不晚於最後出現、每人的秒數
+         加起來不超過全部說話的秒數），而且程式自己從名單算出 GPU 該給的四種警告，GPU 沒給的補上、狀態改成 warn；
       4. 每一頁至少一個重點；每個重點的說話者是列出來的 participant，turn 是整數、start 是有限的非負數、
-         text 1～120 字且不含 [[；同一個發言段落（turn）不能被標成兩個人；
+         text 1～120 字且不含 [[；同一個發言段落（turn）不能被標成兩個人；重點的時間落在這位說話者出現的時間裡；
       5. 逐字稿每一行是「mm:ss [[Sn]]：」開頭、Sn 是列出來的說話者或 S0；重點引用的發言段落（turn）真的在逐字稿裡，
          而且那一行的說話者與時間就是重點寫的（其他聲音與 S0 的段落因此不可能被引用）；條列正好是前 4 個重點各
          一項「[[Sn]]：重點」，完整敘述正好是連續同一人的重點併成一段「[[Sn]]：甲；乙。」、段與段之間一個空格：
@@ -360,6 +374,8 @@ def check_speaker_result(article, payload: object) -> SpeakerResult:
     participants = {s["id"] for s in speakers if s["kind"] == "participant"}
     if not participants:
         _fail("speakers 裡一位 participant 都沒有")
+    diarization = _reconcile(diarization, speakers, expected)
+    heard = {s["id"]: (s["first_seen"], s["last_seen"]) for s in speakers}
 
     transcript_text, transcript = _check_transcript(payload.get("transcript_text"), {s["id"] for s in speakers})
 
@@ -369,7 +385,7 @@ def check_speaker_result(article, payload: object) -> SpeakerResult:
     turn_speaker: dict[int, str] = {}
     slides: list[SlideResult] = []
     for position, raw in enumerate(raw_slides):
-        slides.append(_check_slide(raw, position, participants, turn_speaker, transcript))
+        slides.append(_check_slide(raw, position, participants, turn_speaker, transcript, heard))
     return SpeakerResult(transcript_text, speakers, diarization, slides)
 
 
@@ -408,7 +424,7 @@ def _check_transcript(raw: object, listed: set[str]) -> tuple[str, list[_Line]]:
 
 
 def _check_slide(raw: object, position: int, participants: set[str], turn_speaker: dict[int, str],
-                 transcript: list[_Line]) -> SlideResult:
+                 transcript: list[_Line], heard: dict[str, tuple[float, float]]) -> SlideResult:
     where = f"slides[{position}]"
     if not isinstance(raw, dict):
         _fail(f"{where} 要是物件，不是 {_show(raw)}")
@@ -425,10 +441,66 @@ def _check_slide(raw: object, position: int, participants: set[str], turn_speake
             _fail(f"{where}.points[{index}]：發言段落 {point['turn']} 被標成 {point['speaker']}，"
                   f"但前面已經把它標成 {turn_speaker[point['turn']]}（同一段話不可能是兩個人說的）")
         _check_cited_line(point, transcript, f"{where}.points[{index}]")
+        _check_heard(point, heard, f"{where}.points[{index}]")
 
     bullets = _check_bullets(raw.get("bullets"), points, where)
     detail = _check_detail(raw.get("detail"), points, where)
     return SlideResult(bullets, detail, points)
+
+
+def _reconcile(diarization: dict, speakers: list[dict], requested: int | None) -> dict:
+    """名單（speakers）與 GPU 的區分報告（diarization）要互相對得上；回傳補上程式自己算出的警告之後的報告。
+
+    這些數字會公開（API 的 found_speakers、kind、seconds、turns）也會印給操作者看，而且網站的警示條只看
+    status／warnings。GPU 的名單與報告是同一份資料算出來的，所以一定一致；對不上就是 GPU 的 bug、接回舊暫存或
+    兩邊版本沒對上，不知道哪一邊才對，兩邊都不信。GPU 判定「不可靠」而失敗的情況（超過 8 位主要發言者、指定
+    2 人以上卻只找到 1 位）如果還是被送過來，也一併拒絕。
+    """
+    participants = sum(1 for s in speakers if s["kind"] == "participant")
+    minors = len(speakers) - participants
+    if diarization["found_speakers"] != participants:
+        _fail(f"diarization.found_speakers 是 {diarization['found_speakers']}，但 speakers 裡有 {participants} 位"
+              "主要發言者（報告與名單對不上，不知道哪一邊才對）")
+    if diarization["minor_speakers"] != minors:
+        _fail(f"diarization.minor_speakers 是 {diarization['minor_speakers']}，但 speakers 裡有 {minors} 個"
+              "其他聲音（報告與名單對不上，不知道哪一邊才對）")
+    if participants > MAX_PARTICIPANTS:
+        _fail(f"主要發言者有 {participants} 位，超過上限 {MAX_PARTICIPANTS} 位（GPU 在這種情況會判定聲音區分"
+              "不可靠、不產出結果；結果裡還是有的話，可能是兩邊的版本沒對上）")
+    if requested is not None and participants == 1:
+        _fail(f"要求 {requested} 位說話者，結果卻只有 1 位主要發言者（可能把不同的人併成一個了；GPU 在這種情況會"
+              "判定聲音區分不可靠、不產出結果）")
+    if diarization["kept_points"] > diarization["proposed_points"]:
+        _fail(f"diarization.kept_points（{diarization['kept_points']}）比 proposed_points"
+              f"（{diarization['proposed_points']}）還多：留下的重點不可能比提出的多")
+    talked = sum(s["seconds"] for s in speakers)
+    if talked > diarization["speech_seconds"] + SECONDS_SLACK * (len(speakers) + 1):
+        _fail(f"說話者的秒數加起來（{talked:.1f} 秒）比全部說話的時間 diarization.speech_seconds"
+              f"（{diarization['speech_seconds']:g} 秒）還多")
+
+    derived = []
+    if requested is not None and participants != requested:
+        derived.append("count_mismatch")
+    if diarization["unassigned_ratio"] > UNASSIGNED_WARN_RATIO:
+        derived.append("high_unassigned")
+    if minors >= MANY_MINOR:
+        derived.append("many_minor")
+    if requested is None and participants == 1:
+        derived.append("single_found")
+    missing = [warning for warning in derived if warning not in diarization["warnings"]]
+    if not missing:
+        return diarization
+    # GPU 沒警告、但數字本身就是該警告的情況：網站的警示條靠這裡，不能只信 GPU 有沒有說
+    return {**diarization, "warnings": [*diarization["warnings"], *missing], "status": "warn"}
+
+
+def _check_heard(point: dict, heard: dict[str, tuple[float, float]], here: str) -> None:
+    """重點的時間要落在這位說話者出現的時間裡（第一次開口到最後一次說完）：他那時根本沒有在說話的話，這個
+    重點就不可能是他說的。GPU 的首末時間只取到小數一位，所以留 TIME_SLACK 秒的餘地。"""
+    first, last = heard[point["speaker"]]
+    if not first - TIME_SLACK <= point["start"] <= last + TIME_SLACK:
+        _fail(f"{here} 的時間 {_clock(int(point['start']))} 不在 {point['speaker']} 出現的時間"
+              f"（{_clock(int(first))}～{_clock(int(last))}）裡：他那時根本沒有在說話")
 
 
 def _check_cited_line(point: dict, transcript: list[_Line], here: str) -> None:

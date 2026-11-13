@@ -178,7 +178,8 @@ uv run python manage.py remove_video yt-jNQXAC9IVRw --force     # 緊急下架�
 - 結果自己說 `speaker_mode` 是 `diarize`（舊版 GPU 的單人或逐句標記格式會說明「GPU 很可能還沒更新」）、`video_id` 是這支影片的；
 - `diarization.status` 是 `ok` 或 `warn`、至少找到一位，`requested_speakers` 跟我們送出的一樣（自動是 `null`）；
 - `speakers` 1～12 位、編號 `S1`… 不重複、`kind` 是 `participant` 或 `minor`、至少一位 `participant`；`label` 只能是程式給的中性稱呼（participant 是「發言者 A」「發言者 B」…，minor 是「其他聲音 1」…，形狀要跟 `kind` 一致）：人名、「主持人」這類的字一律拒絕，網頁上顯示的名字只來自操作者的 `label_video`；
-- 每一頁至少一個重點；重點的說話者必須是列出來的 **participant**（只講了幾句的「其他聲音」與無法判斷的段落不能被引用），同一個發言段落不能被標成兩個人；
+- 名單與區分報告互相對得上：`found_speakers`／`minor_speakers` 就是名單裡 participant／minor 的人數；participant 不超過 8 位、指定 2 人以上時至少 2 位（這兩種情況 GPU 會直接判定不可靠、不產出結果，還是被送過來就是兩邊版本沒對上）；`kept_points` 不超過 `proposed_points`；每位至少說過一段（`turns` ≥ 1）、`first_seen` 不晚於 `last_seen`；每位的秒數加起來不超過 `speech_seconds`（各自四捨五入到小數一位的誤差不算）。**警告也由 Pi 自己從名單算**：人數與要求不符（`count_mismatch`）、無法判斷的說話時間超過 25%（`high_unassigned`）、其他聲音 4 個以上（`many_minor`）、自動模式只找到一位（`single_found`）；GPU 沒給的補上、狀態改成 `warn`（網站的警示條看狀態，不能只信 GPU 有沒有說）；
+- 每一頁至少一個重點；重點的說話者必須是列出來的 **participant**（只講了幾句的「其他聲音」與無法判斷的段落不能被引用），同一個發言段落不能被標成兩個人，重點的時間也要落在這位說話者出現的時間裡（第一次開口到最後一次說完，前後各留 1 秒的餘地）；
 - 逐字稿每一行是 `mm:ss [[Sn]]：內容`；每個重點引用的發言段落（`turn`＝逐字稿的第 turn 行，從 0 算）要真的在逐字稿裡，而且那一行的說話者與時間（`mm:ss`，捨去小數）就是重點寫的，所以其他聲音與 `S0` 的段落不可能被引用，重點的 `start` 也不會跟逐字稿差得遠（`label_video --audit` 的連結用它）；每頁條列正好是前 4 個重點各一項 `[[Sn]]：重點`，完整敘述正好是連續同一位說話者的重點併成一段 `[[Sn]]：甲；乙。`（段與段之間一個空格）——GPU 就是這樣從重點排出來的，三處寫得不一樣（不知道哪一邊才對）就整支拒絕；
 - 所有數字有限且在範圍內（NaN、無限大、布林、10^9 都拒絕）；所有文字先過 `clean_text` 再檢查（零寬字元夾出來的 `[[` 也擋得到），重點與條列的內容不能有 `[[` 或 `]]`；
 - GPU 的摘要卡一律不收（`brief` 存 `NULL`：摘要卡的「要求與回應」不分說話者，會把主持人的前提寫成來賓的數字）。

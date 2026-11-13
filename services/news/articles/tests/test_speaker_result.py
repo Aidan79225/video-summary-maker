@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import copy
 import json
+import re
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -60,6 +61,17 @@ def with_roster(payload, participants, minors):
     payload["speakers"] = roster(participants, minors)
     payload["diarization"].update(found_speakers=participants, minor_speakers=minors)
     return payload
+
+
+def spoken_by_one(payload, minors=0):
+    """整支都是 S1 一個人說的：逐字稿、重點、條列、完整敘述都跟著改（條列與完整敘述照 GPU 的規則重排），
+    名單是 1 位主要發言者加 minors 個其他聲音。"""
+    payload["transcript_text"] = re.sub(r"\[\[S\d+\]\]", "[[S1]]", payload["transcript_text"])
+    for slide in payload["slides"]:
+        for point in slide["points"]:
+            point["speaker"] = "S1"
+        rebuild(slide)
+    return with_roster(payload, participants=1, minors=minors)
 
 
 class AcceptanceTests(SimpleTestCase):
@@ -585,8 +597,8 @@ class TextTests(SimpleTestCase):
         def too_many(payload):
             slide = slide_of(payload)
             # 九個重點都是 S1 說的，逐字稿也有九行 S1：別的規則都成立，只剩「條列太多」
-            payload["transcript_text"] = "\n".join(f"00:0{n} [[S1]]：第 {n} 句" for n in range(9))
-            slide["points"] = [dict(slide["points"][0], turn=n, start=float(n)) for n in range(9)]
+            payload["transcript_text"] = "\n".join(f"00:{n + 5:02d} [[S1]]：第 {n} 句" for n in range(9))
+            slide["points"] = [dict(slide["points"][0], turn=n, start=float(n + 5)) for n in range(9)]
             slide["bullets"] = ["[[S1]]：" + slide["points"][0]["text"]] * 9
             slide["detail"] = "[[S1]]：好。"
 
@@ -828,6 +840,141 @@ class CrossCheckTests(SimpleTestCase):
         rebuild(slide)
         checked = check_speaker_result(video(), payload)
         self.assertEqual(checked.slides[0].points[0]["text"], "提到［附件］與【附表】還有《草案》")
+
+
+class RosterTests(SimpleTestCase):
+    """名單（speakers）、GPU 的區分報告（diarization）與重點互相對得上；對不上就是 GPU 的 bug 或兩邊版本沒對上。
+
+    這些數字會公開（API 的 kind、seconds、turns、found_speakers）也會印給操作者看，不能照單全收：
+    要求 3 人卻只有 1 位主要發言者、報告說找到 7 位名單卻只有 2 位，都不可能同時是真的。
+    """
+
+    def fails(self, mutate, fragment, count=None):
+        payload = good()
+        mutate(payload)
+        with self.assertRaises(JobFailed) as caught:
+            check_speaker_result(video(count), payload)
+        self.assertIn(fragment, str(caught.exception))
+        return str(caught.exception)
+
+    def stored(self, mutate, count=None):
+        payload = good()
+        mutate(payload)
+        return check_speaker_result(video(count), payload).diarization
+
+    # --- 人數 ---
+
+    def test_found_speakers_is_the_number_of_participants_listed(self):
+        for found in (1, 3, 7):
+            with self.subTest(found=found):
+                self.fails(lambda p, f=found: p["diarization"].update(found_speakers=f), "found_speakers")
+
+    def test_minor_speakers_is_the_number_of_minors_listed(self):
+        for minors in (0, 2, 5):
+            with self.subTest(minors=minors):
+                self.fails(lambda p, m=minors: p["diarization"].update(minor_speakers=m), "minor_speakers")
+
+    def test_the_most_participants_is_eight(self):
+        """GPU 發現超過 8 位主要發言者就判定區分不可靠、整支失敗；結果裡有 9 位就是版本沒對上。"""
+        message = self.fails(lambda p: with_roster(p, participants=9, minors=0), "超過上限")
+        self.assertIn("8", message)
+        payload = with_roster(good(), participants=8, minors=0)
+        self.assertEqual(len(check_speaker_result(video(), payload).speakers), 8)
+
+    def test_a_requested_count_of_two_or_more_needs_at_least_two_participants(self):
+        """要求 3 人、只找到 1 位主要發言者：可能把不同的人併成一個了，GPU 會直接判定不可靠、不產出結果。"""
+        def one_found(payload):
+            spoken_by_one(payload, minors=2)
+            payload["diarization"]["requested_speakers"] = 3
+
+        message = self.fails(one_found, "只有 1 位", count=3)
+        self.assertIn("3", message)
+        # 沒有指定人數（自動）時，只找到一位不是失敗，是警告（見下面）
+        stored = check_speaker_result(video(), spoken_by_one(good(), minors=2)).diarization
+        self.assertEqual(stored["warnings"], ["single_found"])
+
+    # --- 數字之間 ---
+
+    def test_kept_points_cannot_exceed_proposed_points(self):
+        self.fails(lambda p: p["diarization"].update(kept_points=6, proposed_points=5), "kept_points")
+        self.assertEqual(self.stored(lambda p: p["diarization"].update(kept_points=4, proposed_points=9))["kept_points"], 4)
+
+    def test_a_speaker_cannot_be_last_seen_before_first_seen(self):
+        self.fails(lambda p: p["speakers"][0].update(first_seen=300.0, last_seen=20.0), "first_seen")
+
+    def test_a_listed_speaker_has_spoken_at_least_once(self):
+        self.fails(lambda p: p["speakers"][1].update(turns=0), "turns")
+
+    def test_the_speakers_cannot_have_talked_longer_than_all_the_speech(self):
+        """speech_seconds 是全部說話的秒數（含無法判斷的）；每個人的秒數加起來不可能比它多。"""
+        self.fails(lambda p: p["diarization"].update(speech_seconds=1.0), "speech_seconds")
+        self.fails(lambda p: p["speakers"][2].update(seconds=5000.0, turns=400), "speech_seconds")
+        # 契約範例剛好相等；四捨五入到小數一位的誤差不算
+        self.assertEqual(self.stored(lambda p: p["diarization"].update(speech_seconds=711.8))["speech_seconds"], 711.8)
+
+    def test_a_point_has_to_lie_within_the_time_its_speaker_was_heard(self):
+        """重點的時間在這位說話者第一次或最後一次出現之外：他那時根本還沒（或已經沒）說話。"""
+        self.fails(lambda p: p["speakers"][0].update(first_seen=40.0), "出現的時間")
+        self.fails(lambda p: p["speakers"][1].update(last_seen=20.0), "出現的時間")
+
+    def test_the_time_of_a_point_may_be_off_by_the_rounding_the_gpu_does(self):
+        """GPU 的首末時間只取到小數一位（5.04 變 5.0、5.06 變 5.1），差一點點不能當成錯；留 1 秒的餘地，
+        超過就是另一回事。"""
+        for first_seen in (5.0, 5.1, 6.0):          # 這位說話者最早的重點在 5.0
+            with self.subTest(first_seen=first_seen):
+                payload = good()
+                payload["speakers"][0]["first_seen"] = first_seen
+                self.assertEqual(len(check_speaker_result(video(), payload).slides), 2)
+        self.fails(lambda p: p["speakers"][0].update(first_seen=6.1), "出現的時間")
+        for last_seen in (76.0, 75.0):              # 發言者 B 最晚的重點在 76.0
+            with self.subTest(last_seen=last_seen):
+                payload = good()
+                payload["speakers"][1]["last_seen"] = last_seen
+                self.assertEqual(len(check_speaker_result(video(), payload).slides), 2)
+        self.fails(lambda p: p["speakers"][1].update(last_seen=74.9), "出現的時間")
+
+    # --- 程式自己算的警告 ---
+
+    def test_the_contract_example_has_no_warning(self):
+        stored = self.stored(lambda p: None)
+        self.assertEqual((stored["status"], stored["warnings"]), ("ok", []))
+
+    def test_a_high_share_of_undecidable_speech_is_a_warning_whatever_the_gpu_says(self):
+        for ratio in (0.26, 0.3, 0.95):
+            with self.subTest(ratio=ratio):
+                stored = self.stored(lambda p, r=ratio: p["diarization"].update(unassigned_ratio=r))
+                self.assertEqual((stored["status"], stored["warnings"]), ("warn", ["high_unassigned"]))
+        self.assertEqual(self.stored(lambda p: p["diarization"].update(unassigned_ratio=0.25))["warnings"], [])
+
+    def test_a_count_that_was_asked_for_and_not_found_is_a_warning(self):
+        def mismatch(payload):
+            payload["diarization"]["requested_speakers"] = 3
+
+        stored = self.stored(mismatch, count=3)
+        self.assertEqual((stored["status"], stored["warnings"]), ("warn", ["count_mismatch"]))
+
+        def found(payload):
+            payload["diarization"]["requested_speakers"] = 2
+
+        self.assertEqual(self.stored(found, count=2)["warnings"], [])
+
+    def test_four_or_more_other_voices_are_a_warning(self):
+        warnings = check_speaker_result(video(), with_roster(good(), participants=2, minors=4)).diarization["warnings"]
+        self.assertEqual(warnings, ["many_minor"])
+        self.assertEqual(check_speaker_result(video(), with_roster(good(), 2, 3)).diarization["warnings"], [])
+
+    def test_only_one_participant_found_automatically_is_a_warning(self):
+        stored = check_speaker_result(video(), spoken_by_one(good())).diarization
+        self.assertEqual((stored["status"], stored["warnings"]), ("warn", ["single_found"]))
+
+    def test_the_gpus_own_warnings_stay_and_the_pis_are_added_without_repeats(self):
+        def mutate(payload):
+            payload["diarization"].update(warnings=["many_minor", "high_unassigned"], unassigned_ratio=0.4)
+            payload["diarization"]["requested_speakers"] = 3
+
+        stored = self.stored(mutate, count=3)
+        self.assertEqual(stored["warnings"], ["many_minor", "high_unassigned", "count_mismatch"])
+        self.assertEqual(stored["status"], "warn")
 
 
 class MessagesTests(SimpleTestCase):
