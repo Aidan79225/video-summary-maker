@@ -37,8 +37,10 @@ from slidebox.infrastructure.ollama_summarizer import (
     OllamaFollowUpJudge,
     OllamaTopicClassifier,
 )
+from slidebox.infrastructure.pyannote_diarizer import TOKEN_ENV
 from slidebox.usecases.conversation import CHUNK_CHARS_ENV, parse_chunk_chars
 from slidebox_api.app import create_app
+from slidebox_api.failures import FailureReporter
 from slidebox_api.jobs import JobKind, JobStore
 from slidebox_api.runner import (
     ByKindExecutor,
@@ -115,6 +117,13 @@ def build_executor(settings: Settings) -> ByKindExecutor:
     )
 
 
+def build_failures(settings: Settings) -> FailureReporter:
+    """存進 job.error 與進度狀態的文字要先遮掉的東西：Hugging Face token、API key、輸出資料夾的路徑。"""
+    return FailureReporter(
+        secrets=(os.environ.get(TOKEN_ENV, ""), os.environ.get("SLIDEBOX_API_KEY", "")),
+        paths=(settings.output_dir,))
+
+
 def build() -> FastAPI:
     warn_if_exposed_without_key()
     settings = build_settings()
@@ -122,7 +131,7 @@ def build() -> FastAPI:
     executor = build_executor(settings)
     return create_app(
         store=store,
-        worker=JobWorker(store, executor),
+        worker=JobWorker(store, executor, failures=build_failures(settings)),
         api_key=os.environ.get("SLIDEBOX_API_KEY", ""),
         model=settings.model,
         ollama_host=settings.ollama_host,
