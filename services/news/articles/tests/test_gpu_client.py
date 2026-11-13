@@ -1,6 +1,8 @@
 """GPU 摘要 API 的客戶端：用假的 request，不碰網路。"""
 from __future__ import annotations
 
+import http.client
+
 from django.test import SimpleTestCase
 
 from articles.gpu_client import GpuApiClient, GpuApiError, JobFailed
@@ -91,6 +93,32 @@ class GpuClientTests(SimpleTestCase):
         client, _, _ = _client([OSError("連線被拒")])
         with self.assertRaises(GpuApiError):
             client.submit("https://ivod/1")
+
+    def test_a_reply_cut_short_or_not_http_at_all_is_a_service_problem_too(self):
+        """攔的 bug：http.client 的例外（內容被截斷的 IncompleteRead、根本不是 HTTP 的 BadStatusLine…）不是 OSError，
+        漏出去就是一串 traceback：add_video 的預檢攔不住，夜間批次也整輪中止。每一種呼叫都要翻成 GpuApiError。"""
+        errors = (http.client.IncompleteRead(b'{"id"', 20), http.client.BadStatusLine("garbage"),
+                  http.client.LineTooLong("header line"), http.client.NotConnected())
+        calls = {
+            "submit": lambda client: client.submit("https://ivod/1"),
+            "job": lambda client: client.job("abc"),
+            "cancel": lambda client: client.cancel("abc"),
+            "capabilities": lambda client: client.capabilities(),
+            "wait": lambda client: client.wait("abc", timeout=600),
+        }
+        for error in errors:
+            for name, call in calls.items():
+                with self.subTest(error=type(error).__name__, call=name):
+                    client, _, _ = _client([error] * 10)
+                    with self.assertRaises(GpuApiError) as caught:
+                        call(client)
+                    # 說得出是什麼出了事：例外沒有文字（NotConnected()）時至少給類別名稱，而不是停在「連線失敗：」
+                    self.assertIn(str(error) or type(error).__name__, str(caught.exception))
+
+    def test_waiting_rides_out_a_reply_that_was_cut_short_like_any_other_blip(self):
+        client, _, clock = _client([http.client.IncompleteRead(b"{", 50), {"status": "done", "result": {"ok": 1}}])
+        self.assertEqual(client.wait("abc", timeout=600), {"ok": 1})
+        self.assertGreater(clock.value, 0)      # 重試之前睡了一下，不是立刻重打
 
     def test_a_response_without_an_id_is_refused(self):
         client, _, _ = _client([{"status": "queued"}])

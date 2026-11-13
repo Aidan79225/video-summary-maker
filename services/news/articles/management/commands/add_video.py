@@ -35,7 +35,7 @@ from django.conf import settings
 from django.core.management.base import BaseCommand, CommandError
 from django.utils import timezone
 
-from articles.gpu_client import SPEAKER_CONTRACT, GpuApiClient, GpuApiError, JobField
+from articles.gpu_client import SPEAKER_CONTRACT, GpuApiClient, GpuApiError, JobFailed, JobField
 from articles.ingest import (
     MAX_ATTEMPTS,
     RESUMABLE_STATUSES,
@@ -224,7 +224,8 @@ class Command(BaseCommand):
         """問 GPU 主機的能力；回傳不能用的原因，可以就是空字串。"""
         try:
             capabilities = client.capabilities()
-        except GpuApiError as e:
+        except (GpuApiError, JobFailed) as e:
+            # JobFailed：問能力的請求被 GPU 以 422 拒絕時（RequestRejected）丟的是它，不是 GpuApiError
             return f"沒有登記、也沒有送出：問不到 GPU 主機能不能區分說話者。{e}"
         if not isinstance(capabilities, dict):
             return "沒有登記、也沒有送出：GPU 主機回的能力資料不是預期的格式（它可能還沒更新到支援多人區分的版本）"
@@ -234,7 +235,8 @@ class Command(BaseCommand):
                     "等它準備好再試；只有一個人講話的影片可以加 --speakers 1。")
         contract = capabilities.get("speaker_contract")
         if isinstance(contract, bool) or not isinstance(contract, int) or contract != SPEAKER_CONTRACT:
-            shown = clean_text(str(contract))[:40] if contract is not None else "沒有回報"
+            # repr：文字 "1" 與數字 1 要看得出差別，不然訊息會變成「版本（1）和這一邊（1）不一樣」
+            shown = clean_text(repr(contract))[:40] if contract is not None else "沒有回報"
             return (f"沒有登記、也沒有送出：GPU 主機的說話者區分介面版本（{shown}）和這一邊（{SPEAKER_CONTRACT}）"
                     "不一樣；請把 GPU 主機和 Pi 更新到同一版（先更新 GPU 主機，再更新 Pi）。")
         return ""

@@ -5,12 +5,15 @@
 """
 from __future__ import annotations
 
+import http.client
+import io
 import time
+import urllib.error
 from datetime import timedelta
 
 from django.utils import timezone
 
-from articles.gpu_client import NOT_UPDATED, GpuApiError, JobFailed
+from articles.gpu_client import NOT_UPDATED, GpuApiClient, GpuApiError, JobFailed, RequestRejected
 from articles.models import Article, ArticleStatus
 from articles.tests import test_add_video as base
 from articles.tests.speaker_support import diarized_result
@@ -41,6 +44,17 @@ class PerVideoGpu(base.Gpu):
         return diarized_result(self.videos[job_id])
 
 
+def broken_wire(error):
+    """真的 GpuApiClient、壞掉的傳輸：每一次呼叫都在傳輸層丟出 error。回傳 (client, 收到的呼叫們)。"""
+    calls = []
+
+    def transport(url, method, api_key, body, timeout):
+        calls.append((method, url))
+        raise error
+
+    return GpuApiClient("http://gpu:8800", "", transport=transport), calls
+
+
 class ProbeTests(base.CommandTestCase):
     """多人模式送出之前先問 GPU 能不能區分說話者；不能就在登記之前停下來，資料庫完全沒動。"""
 
@@ -66,6 +80,30 @@ class ProbeTests(base.CommandTestCase):
     def test_a_gpu_that_cannot_be_reached_is_not_guessed_about(self):
         self.refused(base.Gpu(capabilities_error=GpuApiError("連線被拒")), fragment="連線被拒")
 
+    def test_a_gpu_that_rejects_the_question_itself_is_explained_not_a_traceback(self):
+        """攔的 bug：/capabilities 回 422 時 gpu_client 丟的是 RequestRejected（屬於 JobFailed，不是 GpuApiError），
+        預檢只接 GpuApiError，操作的人看到的是一串 traceback，而不是「沒有登記、也沒有送出」的說明。"""
+        error = RequestRejected("摘要 API 拒絕這個請求（422）：unprocessable")
+        message = self.refused(base.Gpu(capabilities_error=error), fragment="拒絕這個請求")
+        self.assertIn("沒有登記、也沒有送出", message)
+        self.refused(base.Gpu(capabilities_error=JobFailed("沒預期到的失敗")), fragment="沒預期到的失敗")
+
+    def test_a_reply_that_breaks_on_the_wire_is_explained_not_a_traceback(self):
+        """用真的 GpuApiClient、壞掉的傳輸：422、內容被截斷、根本不是 HTTP，都是同一種乾淨的說明；
+        資料庫沒動，也沒有任何請求送到 /jobs。"""
+        cases = {
+            "422": urllib.error.HTTPError("http://gpu:8800/capabilities", 422, "x", {}, io.BytesIO(b"unprocessable")),
+            "cut short": http.client.IncompleteRead(b'{"speaker', 40),
+            "not http": http.client.BadStatusLine("garbage"),
+        }
+        for name, error in cases.items():
+            with self.subTest(case=name):
+                client, calls = broken_wire(error)
+                message, *_ = self.fails(ZOO_URL, gpu=client)
+                self.assertIn("沒有登記、也沒有送出：問不到 GPU 主機能不能區分說話者", message)
+                self.assertFalse(Article.objects.exists(), "登記了影片")
+                self.assertEqual(calls, [("GET", "http://gpu:8800/capabilities")])
+
     def test_a_gpu_that_says_no_gives_its_reason(self):
         self.refused(base.Gpu(capabilities=NOT_READY), fragment="模型還沒下載")
         self.refused(base.Gpu(capabilities={"speaker_diarization": False}), fragment="GPU 沒有說明原因")
@@ -85,6 +123,20 @@ class ProbeTests(base.CommandTestCase):
                 capabilities = {"speaker_diarization": True, "reason": "", "speaker_contract": version}
                 self.refused(base.Gpu(capabilities=capabilities), fragment="介面版本")
         self.refused(base.Gpu(capabilities={"speaker_diarization": True}), fragment="沒有回報")
+
+    def test_the_message_shows_the_reported_version_the_way_it_really_is(self):
+        """攔的 bug：文字 "1" 跟數字 1 印出來一樣，訊息變成「版本（1）和這一邊（1）不一樣」，看不出哪裡不一樣。"""
+        for version, shown in (("1", "'1'"), (True, "True"), (1.0, "1.0"), (2, "2"), ([1], "[1]")):
+            with self.subTest(version=version):
+                capabilities = {"speaker_diarization": True, "reason": "", "speaker_contract": version}
+                self.refused(base.Gpu(capabilities=capabilities), fragment=f"介面版本（{shown}）和這一邊（1）不一樣")
+
+    def test_a_long_reported_version_is_cut_before_it_is_printed(self):
+        capabilities = {"speaker_diarization": True, "speaker_contract": "\x1b[2J\n" + "長" * 500}
+        message = self.refused(base.Gpu(capabilities=capabilities), fragment="介面版本（'")
+        self.assertNotIn("\x1b", message)
+        self.assertNotIn("\n", message)
+        self.assertLess(len(message), 250)
 
     def test_a_reply_that_is_not_an_object_is_refused(self):
         for reply in (["speaker_diarization"], "ok", 1, None, True):

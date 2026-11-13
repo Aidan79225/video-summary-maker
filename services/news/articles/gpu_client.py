@@ -7,6 +7,7 @@ Pi 上不跑任何模型，也不裝 slidebox——兩邊只透過 HTTP 說話�
 """
 from __future__ import annotations
 
+import http.client
 import json
 import time
 import urllib.error
@@ -238,8 +239,10 @@ class GpuApiClient:
             if e.code in _REQUEST_ERROR_CODES:
                 raise RequestRejected(f"摘要 API 拒絕這個請求（{e.code}）：{detail}") from e
             raise GpuApiError(f"摘要 API 回應 {e.code}：{detail}") from e
-        except (OSError, ValueError) as e:
-            raise GpuApiError(f"摘要 API 連線失敗：{str(e)[:200]}") from e
+        except (OSError, ValueError, http.client.HTTPException) as e:
+            # http.client 的例外（內容被截斷的 IncompleteRead、根本不是 HTTP 的 BadStatusLine…）不是 OSError：
+            # 不翻譯的話它們是一串 traceback，輪詢中途的一次截斷也不會像其他連線抖動一樣被重試
+            raise GpuApiError(f"摘要 API 連線失敗：{str(e)[:200] or type(e).__name__}") from e
         if not isinstance(payload, dict):
             raise GpuApiError("摘要 API 的回應格式不符預期")
         return payload
