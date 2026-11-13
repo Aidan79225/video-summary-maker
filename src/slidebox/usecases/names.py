@@ -24,6 +24,10 @@ _TITLED_RE = re.compile(rf"([一-鿿])({_PERSON_TITLES})")
 _ENDS_WITH_TITLE_RE = re.compile(rf"(?:{_PERSON_TITLES})$")
 # 職稱前面的這些字不是姓氏：「的教授」「這位老師」「總經理」「各位先生」…
 _NOT_A_NAME_CHAR = frozenset("的是這那個位請謝跟和與及讓給對向被把將於在到從由為各本前副總該每某老小阿一二兩三四五六七八九十")
+# 動詞、名詞的最後一個字剛好接上職稱，也不是姓氏：看醫生、找老師、報告局長、學校老師、今天局長、覺得局長
+_ENDS_A_WORD = frozenset("看找問當做叫聘約見告天得校")
+# 「任」是姓氏（任委員），但前面接這些字就是任期的意思：前任、現任、歷任、新任、卸任、接任、擔任局長
+_TENURE_BEFORE = frozenset("前現歷繼新卸上下接出擔升兼調就改轉派")
 _NICKNAME_RE = re.compile(
     r"(?:^|[\s，。！？、：「])((?:阿|小|老)[一-鿿])(?=你|您|妳|好|，|。|！|？|\s|$|大哥|大姊|哥|姐)")
 _THANKS_RE = re.compile(r"(?:謝謝|感謝|謝|請)((?:阿|小|老)[一-鿿])")
@@ -47,7 +51,14 @@ def detect_names(text: str) -> frozenset[str]:
     """這段逐字稿裡用來稱呼人的名字與稱謂（見模組說明）。"""
     found: set[str] = set()
     for match in _TITLED_RE.finditer(text):
-        if match.group(1) not in _NOT_A_NAME_CHAR:
+        char, before = match.group(1), text[max(0, match.start() - 1):match.start()]
+        if char == "告" and before == "報":
+            found.add("報告" + match.group(2))              # 「報告委員，…」是對人說話的稱呼，文字裡不要有
+        elif char in _NOT_A_NAME_CHAR or char in _ENDS_A_WORD:
+            continue
+        elif char == "任" and before in _TENURE_BEFORE:
+            continue
+        else:
             found.add(match.group(0))
     for pattern in (_NICKNAME_RE, _THANKS_RE):
         for match in pattern.finditer(text):

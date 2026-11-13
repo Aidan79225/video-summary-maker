@@ -71,6 +71,36 @@ def test_a_title_after_a_word_that_is_not_a_surname_is_not_a_name(char):
     assert detect_names(f"今天{char}教授說明預算。") == frozenset()
 
 
+# 動詞、名詞的最後一個字剛好接上職稱：看醫生、找老師、報告局長、前任局長、學校老師（真實逐字稿裡抓到過「看醫生」）
+@pytest.mark.parametrize("text", [
+    "有症狀的就請去看醫生", "我想找醫師談一談", "要問醫生才知道", "他想當老師", "我們要叫醫生過來",
+    "前任局長的做法", "現任局長還沒有回應", "歷任局長都說過", "新任局長今天上任", "學校老師都知道", "今天局長不在",
+    "覺得局長講得有道理", "要約律師談一談", "去見醫師", "這個我們要聘律師處理",
+])
+def test_a_verb_or_noun_that_happens_to_end_before_a_title_is_not_a_surname(text):
+    assert detect_names(text) == frozenset()
+
+
+@pytest.mark.parametrize("text, expected", [
+    ("請任局長說明", {"任局長"}),                  # 任是姓氏
+    ("謝謝任委員", {"任委員"}),
+    ("看看王醫生怎麼說", {"王醫生"}),
+    ("報告局長，任局長剛剛說的", {"報告局長", "任局長"}),
+])
+def test_a_real_surname_next_to_those_words_is_still_a_name(text, expected):
+    assert detect_names(text) == expected
+
+
+@pytest.mark.parametrize("text, expected", [
+    ("報告委員，已經修復四站", {"報告委員"}),
+    ("報告局長，我想請教", {"報告局長"}),
+    ("報告主席，各位委員好", {"報告主席"}),
+])
+def test_reporting_to_a_title_is_an_address_and_stays_out_of_the_text(text, expected):
+    """「報告委員，…」是對人說話的稱呼（模型常把它抄進重點的開頭）；整個稱呼算名字，不是「告委員」。"""
+    assert detect_names(text) == expected
+
+
 def test_nothing_in_nothing_out():
     assert detect_names("") == frozenset() and detect_names("今天討論預算與期程。") == frozenset()
 
