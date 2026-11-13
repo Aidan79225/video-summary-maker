@@ -532,8 +532,6 @@ docker compose -f compose.gpu.yaml --env-file .env.gpu exec -e SLIDEBOX_DIARIZAT
 
 三個來源的差別只在「怎麼找到當天的片段」：立法院查開放 API，臺中逐一翻 61 位議員的頁面（每天 61 次 HTTP），新北查影音系統的日期查詢（見下）。臺中不想抓的話設 `TCCC_ENABLED=false`、新北設 `NTPC_ENABLED=false`；只想補某一個來源用 `ingest_ivod --source tccc`（或 `ly`、`ntpc`）。臺中的片段長、要跑語音辨識，一篇 10～20 分鐘；`GPU_JOB_TIMEOUT_SECONDS` 預設 1800 對 60 分鐘的片段偏緊，建議設 2700。
 
-YouTube 影片不在這三個來源裡：它們不是每天自動發現的，而是你手動貼網址加進來的，不進每晚排程，也不算議會（沒有人物側寫、議題分類、追問、會期），見下面的「YouTube 手動加入」。
-
 ### 新北市議會
 
 來源代碼 `ntpc`，查的是「議事影音隨選視訊系統」（`vod.ntp.gov.tw/VodCloudV2`）：每天一次日期查詢，再為每段要收的片段看一次播放器頁，全部循序、間隔一秒。**一個媒體檔登記一篇**，`ivod_id` 是 `ntpc-<檔案 key>`（例：`ntpc-0408R1150916020`）；同一個檔案被上架兩次（兩個 GUID）也只登記一次。沒有逐字稿，一律在 GPU 主機跑語音辨識；市政總質詢一段最長兩個多小時，`GPU_JOB_TIMEOUT_SECONDS` 可能要比臺中再調大。
@@ -554,58 +552,6 @@ python manage.py ingest_ivod --source ntpc --date 2026-09-17 --days 400 --discov
 大約 400 次查詢加上每段一次播放器頁，一秒一個請求，十幾分鐘。登記好的文章交給每天的處理上限（`INGEST_DAILY_LIMIT`）慢慢消化。
 
 設定：`NTPC_ENABLED`（預設 `true`）、`NTPC_INCLUDE_MIXED`（預設 `true`）、`NTPC_VOD_BASE`（`https://vod.ntp.gov.tw`）、`NTPC_WEB_BASE`（`https://www.ntp.gov.tw`）。
-
-### YouTube 手動加入
-
-來源代碼 `youtube`。進 Pi 的容器，用一個指令貼上手打的 YouTube 網址；影片走跟其他文章同一條 GPU 摘要管線（逐段截圖、重點、完整敘述、可展開的逐字稿），完成之後出現在網站的專屬頁面 `/videos`，並連回原影片。**網址一定要加單引號**：沒加的話 bash 會在 `&` 截斷。指令第一行永遠先印出解析出的影片 id 與正規網址，截斷了一眼就看得出來。
-
-```bash
-# 先預檢：只讀影片資料、印出會登記什麼，不寫資料庫、不呼叫 GPU
-sudo docker exec ly-news-api python manage.py add_video 'https://www.youtube.com/watch?v=jNQXAC9IVRw' --dry-run
-
-# 加入：預設用聲音區分說話者；確定只有一人時才加 --speakers 1
-sudo docker exec ly-news-api python manage.py add_video 'https://www.youtube.com/watch?v=jNQXAC9IVRw'
-# 確定從頭到尾只有一人時：
-sudo docker exec ly-news-api python manage.py add_video 'https://www.youtube.com/watch?v=jNQXAC9IVRw' --speakers 1
-```
-
-長影片建議在背景執行，斷線不影響；輸出寫進 `/data/add-video.log`（`DATA_DIR` 那個磁碟）。之後再跑一次同樣的指令，會接回 GPU 上已經做完的工作，不會重做：
-
-```bash
-sudo docker exec -d ly-news-api sh -c "python manage.py add_video 'https://www.youtube.com/watch?v=jNQXAC9IVRw' >> /data/add-video.log 2>&1"
-sudo docker exec ly-news-api tail -f /data/add-video.log
-```
-
-下架（刪文章與它的截圖檔案；管理頁刪文章不會刪檔案，而把文章改回失敗或待處理沒有用，夜間排程會把它重做回來）。可以給網址、文章的 slug 或 `yt-<影片 id>`，先 `--dry-run` 看會刪什麼，跑兩次是安全的：
-
-```bash
-sudo docker exec ly-news-api python manage.py remove_video 'https://www.youtube.com/watch?v=jNQXAC9IVRw' --dry-run
-sudo docker exec ly-news-api python manage.py remove_video yt-jNQXAC9IVRw
-```
-
-截圖網址在 Cloudflare 的邊緣快取最多留一天；急著讓它消失的話，到 Cloudflare 後台手動清快取。
-
-| 旗標 | 說明 |
-|---|---|
-| `--speakers` | 省略時預設啟用 GPU 的聲音區分；`--speakers 1` 明確指定單人並跳過區分；`--speakers N`（2～20）指定固定的人數。GPU 未提供多人能力時，指令會在寫入資料庫前失敗。每個人使用匿名標籤「說話者 1」等；沒有足夠證據安全歸人時標成「多位說話者／未辨識」，不猜真人姓名 |
-| `--dry-run` | 只做預檢並印出會登記的資料，不寫資料庫、不呼叫 GPU |
-| `--rerun` | 重做已經發佈的影片；重做期間影片留在網站上，失敗也不會下架 |
-| `--force` | 允許剛結束、YouTube 還在轉檔的直播（沒有字幕、下載很慢，常常失敗） |
-| `--allow-unlisted` | 允許「不公開」的影片（有連結的人才看得到，但摘要、逐字稿與截圖會公開在網站上） |
-| `--allow-music` | 允許音樂類別的影片（整首歌詞會被當成逐字稿公開） |
-| `--max-minutes N` | 長度上限（分鐘），預設 180；加大時也要調大 `GPU_JOB_TIMEOUT_SECONDS` |
-| `--min-slides N` / `--max-slides N` | 覆寫頁數範圍（1～50）。預設依長度算：最少 ⌈分鐘÷6⌉（夾在 3～8）、最多 ⌈分鐘÷2⌉（夾在 6～50）；GPU 的預設 8～15 頁會讓短影片失敗 |
-| `--title` / `--speaker` / `--date YYYY-MM-DD` | 覆寫讀到的標題、講者（頻道名稱）、日期；只能搭配一個網址。`--speaker` 讓改過名的頻道新舊影片維持同一個名字；處理完成後登記的標題不會被 GPU 的標題換掉 |
-
-- **接受的網址**：`watch?v=`（帶任何其他參數）、`youtu.be/`、`shorts/`、`live/`、`embed/`、舊的 `/v/` 與 `/e/`、沒有協定的寫法、單獨的 11 碼 id（開頭是 `-` 也行）。一律換成 `https://www.youtube.com/watch?v=<id>` 存起來，所以同一支影片怎麼貼都是同一篇。**拒絕並說明**：只有清單的網址、頻道頁（頻道的 `/live` 每次指向不同影片，請貼影片自己的網址）、搜尋、`/clip/`（網址裡沒有影片 id）、`v=` 不是剛好 11 碼。
-- **預檢**（寫進資料庫之前，影片資料用標準函式庫讀 oEmbed 與影片頁）：不存在或不能播、直播中或尚未首播、Shorts → 拒絕（沒有旗標可以蓋過）；不公開、音樂類別、超過長度上限、剛結束的直播 → 拒絕，訊息會寫出要加哪個旗標。日期是影片（或直播開始）當下的**台北時間**日期，讀不到就用今天並警告。
-- **已經加過的影片**，再貼同一個網址會說清楚結果：已發佈 → 告訴你在 `/article/…`（要重做加 `--rerun`）；失敗，或夜間重試的次數用完 → 重設次數重做；上一輪還在處理中 → 先問 GPU 那個工作的狀態，做完了或還在跑就接回去，別人真的還在跑就說還要幾分鐘才會被視為卡住。管理頁的「重新排隊」會把 GPU 工作編號清掉，幾十分鐘的成品就丟了，所以斷線之後請再跑一次同樣的指令，不要用它。
-- 完成時印出 `/article/<slug>` 與 `/videos`（相對路徑，不寫死網站網域）。處理失敗指令會以非零結束，並把原因原樣印出來。
-- **等待時間**用 `GPU_JOB_TIMEOUT_SECONDS`，沒有 `--timeout`：夜間批次用同一個數字判斷「卡住」，指令等得比它久的話，夜間會把還在跑的工作取消掉。長影片要在 `api` 與 `scheduler` 兩個容器都調大這個環境變數。
-- 影片不進每晚排程（`ingest_ivod` 的處理、`--retry-imageless`、`--rerun-ready` 都只處理議會），也不算議會：人物側寫、議題分類、追問、會期、人物名單都不碰它；網站首頁與篩選器維持原樣，影片只在 `/videos`（`/api/articles?source=youtube`）。
-- **第一次加影片之前**，在 GPU 主機設定 `HUGGINGFACE_TOKEN`，確認 pyannote 說話者區分模型可載入，再做一次 yt-dlp 煙霧測試（先短的 `jNQXAC9IVRw`，再長的 `f4r2yWk4LV0`）；失敗時 `add_video` 會把錯誤原樣顯示。公開網站上放別人的影片，這版對影片頁加 `noindex`、固定標示「由 AI 自動整理」並連回原影片；要不要公開、放多少，是你的決定。
-
-設計與每個決定的理由：`docs/superpowers/specs/2026-10-31-youtube-videos-design.md`。
 
 ### 人物、任期與政黨
 
