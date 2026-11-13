@@ -433,6 +433,24 @@ describe('normalizePoints', () => {
     );
   });
 
+  it('start 超過契約的上限（一天）就是 null：不顯示時間、不產生 &t= 連結，重點本身留著', () => {
+    const out = normalizePoints(
+      [
+        { speaker: 'S1', start: 86400, text: 'a' },
+        { speaker: 'S1', start: 86400.5, text: 'b' },
+        { speaker: 'S1', start: 1e9, text: 'c' },
+        { speaker: 'S1', start: 1e308, text: 'd' },
+        { speaker: 'S1', start: Number.MAX_VALUE, text: 'e' },
+      ],
+      speakers,
+    );
+    assert.equal(out.length, 5);
+    assert.deepEqual(
+      out.map((p) => p.start),
+      [86400, null, null, null, null],
+    );
+  });
+
   it('display 沒給就用編號查說話者；查不到就是（未知發言者），不猜', () => {
     const out = normalizePoints(
       [
@@ -628,6 +646,10 @@ describe('其他小工具', () => {
   it('cardParticipantCount：列表卡片的人數只收正整數，其餘不顯示', () => {
     assert.equal(cardParticipantCount(2), 2);
     assert.equal(cardParticipantCount(12), 12);
+    // 契約：一支影片最多 12 位說話者（參與者加短暫的聲音），人數不可能比它多
+    for (const huge of [13, 25, 1e21, Number.MAX_SAFE_INTEGER]) {
+      assert.equal(cardParticipantCount(huge), undefined, String(huge));
+    }
     for (const bad of [0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY, '2', null, undefined, {}, [2], true]) {
       assert.equal(cardParticipantCount(bad), undefined, String(bad));
     }

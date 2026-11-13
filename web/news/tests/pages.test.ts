@@ -736,6 +736,30 @@ describe('正式站的路徑（假後端）', () => {
     assert.ok(/\.wrap-anywhere\s*\{[^}]*overflow-wrap:\s*anywhere/.test(css), '樣式表裡沒有 wrap-anywhere');
   });
 
+  it('重點的時間大得不合理（超過一天）：不顯示時間、不產生 &t= 連結；重點本身還在', async () => {
+    stub.detail.set(
+      'hugestart',
+      withPoints([
+        { speaker: 'S1', display: '發言者 A', start: 1e308, text: '時間亂寫的重點' },
+        { speaker: 'S1', display: '發言者 A', start: 1e9, text: '時間大得離譜的重點' },
+        { speaker: 'S1', display: '發言者 A', start: 90, text: '時間正常的重點' },
+      ]),
+    );
+    const { status, html } = await get(site, '/article/hugestart');
+    assert.equal(status, 200);
+    const lis = elements(html, 'li', 'data-point');
+    assert.equal(lis.length, 3);
+    for (const [i, want] of ['時間亂寫的重點', '時間大得離譜的重點'].entries()) {
+      const li = lis[i]?.inner ?? '';
+      assert.ok(text(li).includes(want));
+      assert.ok(!li.includes('href='), `${want}：不能有時間連結`);
+      assert.ok(!/\d:\d\d/.test(text(li)), `${want}：不能顯示時間：${text(li)}`);
+    }
+    assert.ok(unescape(lis[2]?.inner ?? '').includes('&t=90s'));
+    assert.ok(text(lis[2]?.inner ?? '').includes('01:30'));
+    assert.ok(!/[?&]t=[\d.]*e/.test(unescape(html)), '連結裡不能出現指數寫法的秒數');
+  });
+
   it('殘留的 [[Sn]]：每個會顯示的字串都清掉，換成（未知發言者）', async () => {
     stub.detail.set(
       'leaky',
@@ -864,7 +888,7 @@ describe('正式站的路徑（假後端）', () => {
       ...over,
     });
     stub.list.value = {
-      count: 5,
+      count: 7,
       page: 1,
       page_size: 12,
       pages: 1,
@@ -874,13 +898,15 @@ describe('正式站的路徑（假後端）', () => {
         card('c', { participant_count: -1 }),
         card('d', { participant_count: 2.5 }),
         card('e', {}),
+        card('f', { participant_count: 13 }),
+        card('g', { participant_count: 1e21 }),
       ],
     };
     const { status, html } = await get(site, '/videos');
     assert.equal(status, 200);
     assert.ok(!html.includes('[[S'));
     const cards = [...html.matchAll(/<article\b[\s\S]*?<\/article>/g)].map((m) => text(m[0]));
-    assert.equal(cards.length, 5);
+    assert.equal(cards.length, 7);
     assert.ok(cards[0]?.includes('3 位說話者'));
     for (const c of cards.slice(1)) assert.ok(!c.includes('位說話者'), c);
   });

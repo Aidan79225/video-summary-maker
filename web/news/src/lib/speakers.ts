@@ -102,6 +102,15 @@ const MAX_SPEAKERS = 24;
 const MAX_POINTS = 40;
 const MAX_WARNINGS = 8;
 
+/*
+ * 數字的上限，照 Pi 端的契約（services/news/articles/speaker_result.py）：超過的一定是壞資料。
+ * 寧可不顯示（沒有時間連結、沒有人數），也不把亂數字印到頁面上、或做成 &t=1e%2B308s 這種連結。
+ */
+/** 一個時間點最大的秒數：契約的 MAX_SECONDS（一天）。影片本身預設最長 3 小時，遠遠不到 */
+const CONTRACT_MAX_SECONDS = 24 * 3600;
+/** 一支影片最多幾位說話者（參與者加短暫的聲音）：契約的 MAX_SPEAKERS。參與者的人數不可能比它多 */
+const CONTRACT_MAX_SPEAKERS = 12;
+
 /**
  * speakers：不是陣列、元素不是物件（舊版逐句標記時代是字串陣列）、沒有編號、編號重複的，
  * 一律丟掉。kind 只有 minor 是次要的；basis 只有剛好是 operator 才算編輯確認過。
@@ -177,8 +186,8 @@ export function diarizationNotes(d: Diarization | null): string[] {
 }
 
 /**
- * points：沒有說話者編號或沒有內容的丟掉。start 不是有限的非負數就是 null（重點留著，
- * 只是沒有時間連結）。display 沒給就用編號查 speakers，查不到是「（未知發言者）」，不猜。
+ * points：沒有說話者編號或沒有內容的丟掉。start 不是有限的非負數、或超過一天（契約的上限）就是
+ * null（重點留著，只是沒有時間與連結）。display 沒給就用編號查 speakers，查不到是「（未知發言者）」，不猜。
  */
 export function normalizePoints(raw: unknown, speakers: readonly VideoSpeaker[] = []): Point[] {
   if (!Array.isArray(raw)) return [];
@@ -189,7 +198,12 @@ export function normalizePoints(raw: unknown, speakers: readonly VideoSpeaker[] 
     const text = str(item.text).trim();
     if (!speaker || !text) continue;
     const start =
-      typeof item.start === 'number' && Number.isFinite(item.start) && item.start >= 0 ? item.start : null;
+      typeof item.start === 'number' &&
+      Number.isFinite(item.start) &&
+      item.start >= 0 &&
+      item.start <= CONTRACT_MAX_SECONDS
+        ? item.start
+        : null;
     const display = str(item.display).trim() || speakers.find((s) => s.id === speaker)?.display || UNKNOWN_DISPLAY;
     out.push({ speaker, display, start, text });
     if (out.length >= MAX_POINTS) break;
@@ -205,9 +219,11 @@ export function normalizeSlides(raw: unknown, speakers: readonly VideoSpeaker[] 
     .map((s) => ({ ...s, points: normalizePoints(s.points, speakers) }) as unknown as Slide);
 }
 
-/** 列表卡片的參與者人數：不是正整數就不顯示 */
+/** 列表卡片的參與者人數：不是正整數、或比一支影片可能有的說話者還多（契約上限 12 位）就不顯示 */
 export function cardParticipantCount(raw: unknown): number | undefined {
-  return typeof raw === 'number' && Number.isInteger(raw) && raw > 0 ? raw : undefined;
+  return typeof raw === 'number' && Number.isInteger(raw) && raw > 0 && raw <= CONTRACT_MAX_SPEAKERS
+    ? raw
+    : undefined;
 }
 
 /** 參與者人數：合併後同名的算一位，短暫的聲音不算 */
