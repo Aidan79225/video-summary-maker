@@ -15,9 +15,12 @@ diarization 環境裡執行，那裡沒有 slidebox、fastapi、faster-whisper�
 
 用法（由 pyannote_diarizer.PyannoteSpeakerDiarizer 啟動，不是給人直接叫的）：
 
-    python -P -X utf8 pyannote_worker.py probe
-    python -P -X utf8 pyannote_worker.py run --audio PATH --model NAME --device auto|cpu|cuda \\
+    python -I -X utf8 pyannote_worker.py probe
+    python -I -X utf8 pyannote_worker.py run --audio PATH --model NAME --device auto|cpu|cuda \\
                                               --ffmpeg EXE --result PATH [--speakers N]
+
+-I（隔離模式）：不吃 PYTHONPATH、使用者的 site-packages，腳本所在的資料夾也不加進搜尋路徑——這個行程
+看到的就是它那個環境自己有的東西。
 
 - token 只從環境變數 HUGGINGFACE_TOKEN 讀：命令列會出現在行程清單裡，不能放。
 - 進度寫到 stderr，一行一則：`SLIDEBOX_PROGRESS {"fraction": null, "text": "…"}`；其他輸出（函式庫的
