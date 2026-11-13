@@ -8,8 +8,8 @@
 兩層：
   clean_speakers／clean_points／clean_diarization：白名單清理。只留契約裡的鍵、列舉與上限、有限的數字、
     控制字元與雙向覆寫字元一律拿掉（youtube_source.clean_text），不認得的鍵丟掉。形狀不對就丟 JobFailed。
-  check_speaker_result：跨欄位的規則（echo 對得上、每個重點的說話者是列出來的主要發言者、條列與完整敘述裡的
-    記號跟重點對得上…），通過才回傳清理過的結果給 save_result。
+  check_speaker_result：跨欄位的規則（echo 對得上、每個重點的說話者是列出來的主要發言者、逐字稿／條列／完整敘述
+    都跟重點對得上…），通過才回傳清理過的結果給 save_result。
 
 名字從來不在 GPU 的結果裡：name、role、basis、merged_into 是 Pi 自己的欄位，只有操作者（label_video）會改。
 """
@@ -40,6 +40,7 @@ SAMPLE_LENGTH = 80
 POINT_TEXT_LENGTH = 120
 EVIDENCE_LENGTH = 120
 BULLET_LENGTH = 300
+MAX_BULLET_POINTS = 4       # 一頁的條列只放前幾個重點（GPU 的 conversation.MAX_BULLETS）
 DETAIL_LENGTH = 8000
 DESCRIPTION_LENGTH = 120
 MAX_SECONDS = 24 * 3600     # 一天；影片上限是 --max-minutes（預設 180 分鐘），遠遠不到
@@ -60,7 +61,7 @@ _LABEL_SHAPES = {"participant": (_PARTICIPANT_LABEL, "發言者 A、發言者 B�
                  "minor": (_MINOR_LABEL, "其他聲音 1、其他聲音 2…")}
 _FINGERPRINT = re.compile(r"[0-9a-f]{16}")
 # 逐字稿的每一行：「mm:ss [[Sn]]：內容」（分鐘可以超過 99）
-_TRANSCRIPT_LINE = re.compile(r"\d{1,4}:[0-5]\d \[\[(S\d+)\]\]：")
+_TRANSCRIPT_LINE = re.compile(r"(\d{1,4}):([0-5]\d) \[\[(S\d+)\]\]：")
 # 條列的每一項：「[[Sn]]：重點」
 _BULLET = re.compile(r"\[\[(S[1-9][0-9]{0,2})\]\]：(.+)", re.S)
 
@@ -86,6 +87,16 @@ def _show(value: object) -> str:
 
 def _has_brackets(text: str) -> bool:
     return "[[" in text or "]]" in text
+
+
+def _squash(text: str) -> str:
+    """連續的空白收成一個：兩邊只差空白的文字不算「寫得不一樣」。"""
+    return " ".join(text.split())
+
+
+def _clock(seconds: int) -> str:
+    """5 → 「00:05」、7530 → 「125:30」（跟 GPU 的 clock 一樣，分鐘不封頂）。"""
+    return f"{seconds // 60:02d}:{seconds % 60:02d}"
 
 
 # --- 原子欄位 ---
@@ -286,6 +297,13 @@ def requested_speaker_count(article) -> int | None:
 
 
 @dataclass(frozen=True)
+class _Line:
+    """逐字稿的一行。第 k 行（從 0 算）就是編號 k 的發言段落（turn）。"""
+    seconds: int        # mm:ss 換成秒（GPU 的 mm:ss 是那一段開始時間捨去小數）
+    speaker: str        # Sn，或 S0＝無法判斷
+
+
+@dataclass(frozen=True)
 class SlideResult:
     bullets: list[str]
     detail: str
@@ -313,8 +331,10 @@ def check_speaker_result(article, payload: object) -> SpeakerResult:
          「主持人」這類的字一律拒絕，名字只由操作者用 label_video 設定；
       4. 每一頁至少一個重點；每個重點的說話者是列出來的 participant，turn 是整數、start 是有限的非負數、
          text 1～120 字且不含 [[；同一個發言段落（turn）不能被標成兩個人；
-      5. 逐字稿每一行是「mm:ss [[Sn]]：」開頭、Sn 是列出來的說話者或 S0；條列的第 i 項記號就是第 i 個重點的
-         說話者、完整敘述裡記號的順序就是重點的說話者依序（連續同一人併成一段）；
+      5. 逐字稿每一行是「mm:ss [[Sn]]：」開頭、Sn 是列出來的說話者或 S0；重點引用的發言段落（turn）真的在逐字稿裡，
+         而且那一行的說話者與時間就是重點寫的（其他聲音與 S0 的段落因此不可能被引用）；條列正好是前 4 個重點各
+         一項「[[Sn]]：重點」，完整敘述正好是連續同一人的重點併成一段「[[Sn]]：甲；乙。」、段與段之間一個空格：
+         GPU 就是這樣從重點排出來的，三處寫得不一樣就是壞結果；
       6. brief 一律不收（GPU 在多人模式不會產生；產了也丟掉）。
     """
     if not isinstance(payload, dict):
@@ -341,7 +361,7 @@ def check_speaker_result(article, payload: object) -> SpeakerResult:
     if not participants:
         _fail("speakers 裡一位 participant 都沒有")
 
-    transcript = _check_transcript(payload.get("transcript_text"), {s["id"] for s in speakers})
+    transcript_text, transcript = _check_transcript(payload.get("transcript_text"), {s["id"] for s in speakers})
 
     raw_slides = payload.get("slides")
     if not isinstance(raw_slides, list) or not 1 <= len(raw_slides) <= MAX_SLIDES:
@@ -349,8 +369,8 @@ def check_speaker_result(article, payload: object) -> SpeakerResult:
     turn_speaker: dict[int, str] = {}
     slides: list[SlideResult] = []
     for position, raw in enumerate(raw_slides):
-        slides.append(_check_slide(raw, position, participants, turn_speaker))
-    return SpeakerResult(transcript, speakers, diarization, slides)
+        slides.append(_check_slide(raw, position, participants, turn_speaker, transcript))
+    return SpeakerResult(transcript_text, speakers, diarization, slides)
 
 
 def _check_video(article, payload: dict) -> None:
@@ -363,24 +383,32 @@ def _check_video(article, payload: dict) -> None:
         _fail(f"結果是另一支影片的（video_id 是 {_show(got)}，這支是 {_show(expected)}）")
 
 
-def _check_transcript(raw: object, listed: set[str]) -> str:
+def _check_transcript(raw: object, listed: set[str]) -> tuple[str, list[_Line]]:
+    """逐字稿清理過的文字，以及每一行的（時間、說話者）：重點引用的發言段落要拿它們對照。
+
+    空行不算（清理完什麼都不剩）；GPU 一個發言段落一行，所以第 k 個非空行就是編號 k 的段落。
+    """
     if not isinstance(raw, str):
         _fail(f"transcript_text 要是文字，不是 {_show(raw)}")
     lines = [line for line in (clean_text(line) for line in raw.split("\n")) if line]
     if not lines:
         _fail("transcript_text 是空的")
+    parsed: list[_Line] = []
     for number, line in enumerate(lines, start=1):
         head = _TRANSCRIPT_LINE.match(line)
         if head is None:
             _fail(f"逐字稿第 {number} 行不是「mm:ss [[Sn]]：內容」的格式：{_show(line[:20])}")
-        if head.group(1) != UNDECIDABLE and head.group(1) not in listed:
-            _fail(f"逐字稿第 {number} 行的 {head.group(1)} 不在 speakers 裡（只能是列出來的人或 S0）")
+        speaker = head.group(3)
+        if speaker != UNDECIDABLE and speaker not in listed:
+            _fail(f"逐字稿第 {number} 行的 {speaker} 不在 speakers 裡（只能是列出來的人或 S0）")
         if _has_brackets(line[head.end():]):
             _fail(f"逐字稿第 {number} 行的內容裡多出了 [[ 或 ]]")
-    return "\n".join(lines)
+        parsed.append(_Line(int(head.group(1)) * 60 + int(head.group(2)), speaker))
+    return "\n".join(lines), parsed
 
 
-def _check_slide(raw: object, position: int, participants: set[str], turn_speaker: dict[int, str]) -> SlideResult:
+def _check_slide(raw: object, position: int, participants: set[str], turn_speaker: dict[int, str],
+                 transcript: list[_Line]) -> SlideResult:
     where = f"slides[{position}]"
     if not isinstance(raw, dict):
         _fail(f"{where} 要是物件，不是 {_show(raw)}")
@@ -396,17 +424,42 @@ def _check_slide(raw: object, position: int, participants: set[str], turn_speake
         if turn_speaker.setdefault(point["turn"], point["speaker"]) != point["speaker"]:
             _fail(f"{where}.points[{index}]：發言段落 {point['turn']} 被標成 {point['speaker']}，"
                   f"但前面已經把它標成 {turn_speaker[point['turn']]}（同一段話不可能是兩個人說的）")
+        _check_cited_line(point, transcript, f"{where}.points[{index}]")
 
     bullets = _check_bullets(raw.get("bullets"), points, where)
     detail = _check_detail(raw.get("detail"), points, where)
     return SlideResult(bullets, detail, points)
 
 
+def _check_cited_line(point: dict, transcript: list[_Line], here: str) -> None:
+    """重點引用的發言段落真的在逐字稿裡，而且那一行的說話者與時間就是重點寫的。
+
+    GPU 的重點是從它引用的段落複製說話者與開始時間的（逐字稿的 mm:ss 是同一個時間捨去小數），所以三者一定
+    一致。對不上的話，不知道是重點還是逐字稿錯了，網頁上兩個地方的說話者就會不一樣：兩邊都不信。
+    其他聲音（minor）與無法判斷（S0）的段落不能被引用，也在這裡一併擋下：那幾行的說話者不會是重點的 participant。
+    """
+    turn = point["turn"]
+    if turn >= len(transcript):
+        _fail(f"{here} 引用的發言段落 {turn} 不在逐字稿裡（逐字稿只有 {len(transcript)} 行）")
+    line = transcript[turn]
+    if line.speaker != point["speaker"]:
+        _fail(f"{here} 寫的是 {point['speaker']} 說的，但它引用的發言段落 {turn}（逐字稿第 {turn + 1} 行）是 "
+              f"{line.speaker}（重點和逐字稿對不上，不知道哪一邊才對；其他聲音與無法判斷的段落也不能被引用）")
+    if int(point["start"]) != line.seconds:
+        _fail(f"{here} 的時間 {_clock(int(point['start']))} 跟它引用的逐字稿第 {turn + 1} 行（{_clock(line.seconds)}）"
+              "對不上（連結會跳到別人說話的地方）")
+
+
 def _check_bullets(raw: object, points: list[dict], where: str) -> list[str]:
+    """條列正好是這一頁前 MAX_BULLET_POINTS 個重點各一項「[[Sn]]：重點」（GPU 就是這樣排的）。"""
     if not isinstance(raw, list) or len(raw) > MAX_BULLETS:
         _fail(f"{where}.bullets 要是不超過 {MAX_BULLETS} 項的清單")
     if len(raw) > len(points):
         _fail(f"{where}.bullets 有 {len(raw)} 項，比重點（{len(points)} 個）還多")
+    expected = points[:MAX_BULLET_POINTS]
+    if len(raw) != len(expected):
+        _fail(f"{where}.bullets 要是前 {MAX_BULLET_POINTS} 個重點各一項（這一頁有 {len(points)} 個重點，"
+              f"所以是 {len(expected)} 項），不是 {len(raw)} 項")
     bullets: list[str] = []
     for index, item in enumerate(raw):
         if not isinstance(item, str):
@@ -417,9 +470,12 @@ def _check_bullets(raw: object, points: list[dict], where: str) -> list[str]:
             _fail(f"{where}.bullets[{index}] 要是「[[Sn]]：重點」、不超過 {BULLET_LENGTH} 個字")
         if _has_brackets(match.group(2)):
             _fail(f"{where}.bullets[{index}] 的內容裡多出了 [[ 或 ]]")
-        if match.group(1) != points[index]["speaker"]:
+        if match.group(1) != expected[index]["speaker"]:
             _fail(f"{where}.bullets[{index}] 寫的是 {match.group(1)}，但對應的重點是 "
-                  f"{points[index]['speaker']} 說的（條列和重點對不上，不知道哪一邊才對）")
+                  f"{expected[index]['speaker']} 說的（條列和重點對不上，不知道哪一邊才對）")
+        if _squash(match.group(2)) != expected[index]["text"]:
+            _fail(f"{where}.bullets[{index}] 的內容跟對應的重點（{where}.points[{index}]）不一樣"
+                  "（條列要原樣是重點的文字，不知道哪一邊才對）")
         bullets.append(bullet)
     return bullets
 
@@ -432,10 +488,16 @@ def _check_detail(raw: object, points: list[dict], where: str) -> str:
         _fail(f"{where}.detail 要是 1～{DETAIL_LENGTH} 個字")
     if _has_brackets(PLACEHOLDER.sub("", detail)):
         _fail(f"{where}.detail 裡有格式不對的 [[ 或 ]]")
-    runs = [speaker for speaker, _ in groupby(p["speaker"] for p in points)]
-    if PLACEHOLDER.findall(detail) != runs:
+    runs = [(speaker, [p["text"] for p in group]) for speaker, group in groupby(points, key=lambda p: p["speaker"])]
+    order = [speaker for speaker, _ in runs]
+    if PLACEHOLDER.findall(detail) != order:
         _fail(f"{where}.detail 裡的說話者記號順序（{'、'.join(PLACEHOLDER.findall(detail)) or '沒有'}）"
-              f"跟重點的說話者順序（{'、'.join(runs)}）對不上")
+              f"跟重點的說話者順序（{'、'.join(order)}）對不上")
+    # 記號順序對了還不夠：每一段的內容也要正是那位說話者的重點（連續同一人的併成一段，用「；」接起來、以「。」收尾）
+    expected = " ".join(f"[[{speaker}]]：{'；'.join(texts)}。" for speaker, texts in runs)
+    if _squash(detail) != _squash(expected):
+        _fail(f"{where}.detail 的內容不是這一頁的重點（每一段要是「[[Sn]]：重點；重點。」，連續同一位說話者的重點"
+              "併成一段；多一句、少一句、換了字都不行，不知道哪一邊才對）")
     return detail
 
 

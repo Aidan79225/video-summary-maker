@@ -22,6 +22,7 @@ from articles.speaker_result import (
     requested_speaker_count,
     with_pi_fields,
 )
+from articles.tests.speaker_support import rebuild, rendered
 
 CONTRACT = json.loads((Path(__file__).parent / "fixtures" / "speaker_contract_v1.json").read_text("utf-8"))
 NOT_UPDATED = "還沒更新"
@@ -479,13 +480,13 @@ class PointsTests(SimpleTestCase):
                 self.point("text", bad)
         payload = good()
         slide_of(payload)["points"][0]["text"] = "字" * 120
-        slide_of(payload)["bullets"][0] = "[[S1]]：" + "字" * 120
+        rebuild(slide_of(payload))
         self.assertEqual(len(check_speaker_result(video(), payload).slides[0].points[0]["text"]), 120)
 
     def test_the_text_is_cleaned_before_it_is_measured(self):
         payload = good()
         slide_of(payload)["points"][0]["text"] = "字" * 119 + "\x1b\x1b\x1b\u200b\u202e"
-        slide_of(payload)["bullets"][0] = "[[S1]]：" + "字" * 119
+        rebuild(slide_of(payload))
         self.assertEqual(len(check_speaker_result(video(), payload).slides[0].points[0]["text"]), 119)
 
     def test_the_text_never_contains_a_placeholder(self):
@@ -497,7 +498,7 @@ class PointsTests(SimpleTestCase):
     def test_the_text_may_contain_an_ordinary_square_bracket(self):
         payload = good()
         slide_of(payload)["points"][0]["text"] = "提到[附件]三"
-        slide_of(payload)["bullets"][0] = "[[S1]]：提到[附件]三"
+        rebuild(slide_of(payload))
         self.assertEqual(check_speaker_result(video(), payload).slides[0].points[0]["text"], "提到[附件]三")
 
     def test_the_evidence_is_text_up_to_one_hundred_twenty_characters(self):
@@ -527,8 +528,12 @@ class PointsTests(SimpleTestCase):
     def test_one_turn_can_carry_several_points_by_the_same_speaker(self):
         payload = good()
         slide_of(payload)["points"].append(dict(slide_of(payload)["points"][3], text="再補充一點"))
+        rebuild(slide_of(payload))
         checked = check_speaker_result(video(), payload)
         self.assertEqual(len(checked.slides[0].points), 5)
+        # 條列只放前 4 個，第 5 個只出現在完整敘述裡（同一位說話者連續的重點併成一段）
+        self.assertEqual(len(checked.slides[0].bullets), 4)
+        self.assertTrue(checked.slides[0].detail.endswith("[[S2]]：公共托育名額不夠，家長排了兩年沒有消息；再補充一點。"))
 
     def test_the_cleaner_alone_checks_the_speaker_against_the_participants_it_is_given(self):
         points = CONTRACT["result"]["slides"][0]["points"]
@@ -579,7 +584,9 @@ class TextTests(SimpleTestCase):
 
         def too_many(payload):
             slide = slide_of(payload)
-            slide["points"] = [dict(slide["points"][0], turn=n) for n in range(9)]
+            # 九個重點都是 S1 說的，逐字稿也有九行 S1：別的規則都成立，只剩「條列太多」
+            payload["transcript_text"] = "\n".join(f"00:0{n} [[S1]]：第 {n} 句" for n in range(9))
+            slide["points"] = [dict(slide["points"][0], turn=n, start=float(n)) for n in range(9)]
             slide["bullets"] = ["[[S1]]：" + slide["points"][0]["text"]] * 9
             slide["detail"] = "[[S1]]：好。"
 
@@ -646,9 +653,181 @@ class TextTests(SimpleTestCase):
 
     def test_the_transcript_is_cleaned_line_by_line(self):
         payload = good()
-        payload["transcript_text"] = "00:05 [[S1]]：嗨\x1b[2J\u202e\r\n\n00:09 [[S2]]：好\x00"
+        lines = CONTRACT["result"]["transcript_text"].split("\n")
+        payload["transcript_text"] = "\r\n\n".join([lines[0] + "\x1b[2J\u202e", lines[1] + "\x00", *lines[2:]])
         self.assertEqual(check_speaker_result(video(), payload).transcript_text,
-                         "00:05 [[S1]]：嗨[2J\n00:09 [[S2]]：好")
+                         "\n".join([lines[0] + "[2J", *lines[1:]]))
+
+
+class CrossCheckTests(SimpleTestCase):
+    """逐字稿、條列、完整敘述都由重點（points）決定，GPU 照固定的規則排出來；四者互相矛盾就是壞結果，一個字都不能發佈。
+
+    只有 GPU 的 bug、接回舊的暫存、或版本沒對上才會產生這些矛盾，但這是公開之前的最後一道關：
+    誰說了什麼要是兩個地方寫得不一樣，不知道哪一邊才對，兩邊都不信。
+    """
+
+    def fails(self, mutate, fragment):
+        payload = good()
+        mutate(payload)
+        with self.assertRaises(JobFailed) as caught:
+            check_speaker_result(video(), payload)
+        self.assertIn(fragment, str(caught.exception))
+        return str(caught.exception)
+
+    def lines(self, payload):
+        return payload["transcript_text"].split("\n")
+
+    def set_line(self, payload, number, text):
+        lines = self.lines(payload)
+        lines[number] = text
+        payload["transcript_text"] = "\n".join(lines)
+
+    def test_the_helper_models_the_gpu_exactly(self):
+        """rendered() 是 GPU 排版規則的複本：契約範例的每一頁都要原樣重現，否則下面的測試沒有意義。"""
+        for slide in CONTRACT["result"]["slides"]:
+            self.assertEqual(rendered(slide["points"]), (slide["bullets"], slide["detail"]))
+
+    # --- 逐字稿 ↔ 重點 ---
+
+    def test_a_point_whose_transcript_line_names_someone_else_is_refused(self):
+        """逐字稿第 4 行說是 S1，條列卻寫 S2 說了「名額不夠」：網頁上兩個地方的說話者不一樣。"""
+        self.fails(lambda p: self.set_line(p, 3, "00:38 [[S1]]：名額不夠，很多家長排不到，排了兩年也沒有消息。"), "逐字稿第 4 行")
+
+    def test_a_point_cannot_cite_an_undecidable_line(self):
+        self.fails(lambda p: self.set_line(p, 3, "00:38 [[S0]]：名額不夠，很多家長排不到。"), "逐字稿第 4 行")
+
+    def test_a_point_cannot_cite_a_line_of_a_minor_voice(self):
+        """其他聲音（minor）不能被引用：重點引的那一行是 S3 的話，說話者一定對不上。"""
+        self.fails(lambda p: slide_of(p)["points"][3].update(turn=4), "逐字稿第 5 行")
+
+    def test_a_point_cannot_cite_a_turn_the_transcript_does_not_have(self):
+        for turn in (7, 999, 99999):
+            with self.subTest(turn=turn):
+                message = self.fails(lambda p, t=turn: slide_of(p)["points"][3].update(turn=t), "不在逐字稿裡")
+                self.assertIn("7", message)
+
+    def test_a_truncated_transcript_is_refused(self):
+        """逐字稿只剩前兩行：後面的重點引用的段落都不見了。"""
+        self.fails(lambda p: p.update(transcript_text="\n".join(self.lines(p)[:2])), "不在逐字稿裡")
+
+    def test_the_time_of_a_point_has_to_be_the_time_of_the_line_it_cites(self):
+        """label_video --audit 的連結用重點的時間：它跟逐字稿那一行差得遠，操作者聽到的就是別人。"""
+        for start in (600.0, 6.0, 4.0, 14.0, 31.0):
+            with self.subTest(start=start):
+                message = self.fails(lambda p, s=start: slide_of(p)["points"][0].update(start=s), "時間")
+                self.assertIn("00:05", message)
+
+    def test_a_fraction_of_a_second_is_the_same_second(self):
+        """逐字稿的 mm:ss 是秒數捨去小數；重點的 start 是帶小數的原始時間。"""
+        payload = good()
+        slide_of(payload)["points"][0]["start"] = 5.999
+        slide_of(payload)["points"][1]["start"] = 14
+        self.assertEqual(len(check_speaker_result(video(), payload).slides[0].points), 4)
+
+    def test_minutes_past_ninety_nine_are_compared_too(self):
+        payload = good()
+        self.set_line(payload, 6, "125:30 [[S2]]：至少要把公共托育的名額加倍，還要提高保母的薪資。")
+        slide_of(payload, 1)["points"][1]["start"] = 7530.4
+        payload["speakers"][1]["last_seen"] = 7600.0         # 發言者 B 一直講到兩個小時之後
+        self.assertEqual(len(check_speaker_result(video(), payload).slides), 2)
+        slide_of(payload, 1)["points"][1]["start"] = 76.0
+        with self.assertRaises(JobFailed):
+            check_speaker_result(video(), payload)
+
+    def test_blank_lines_in_the_transcript_do_not_shift_the_turn_numbers(self):
+        payload = good()
+        payload["transcript_text"] = "\n\n".join(self.lines(payload)) + "\n"
+        self.assertEqual(len(check_speaker_result(video(), payload).slides), 2)
+
+    def test_undecidable_and_minor_lines_are_fine_when_nobody_cites_them(self):
+        payload = good()
+        payload["transcript_text"] += "\n02:00 [[S0]]：聽不清楚的一段\n02:05 [[S3]]：另一個聲音"
+        self.assertEqual(len(check_speaker_result(video(), payload).slides), 2)
+
+    # --- 條列 ↔ 重點 ---
+
+    def test_a_bullet_whose_text_is_not_the_text_of_its_point_is_refused(self):
+        """標記對、內容卻不是那個重點：讀者看到的是一句沒有人驗證過的話。"""
+        message = self.fails(lambda p: slide_of(p)["bullets"].__setitem__(0, "[[S1]]：批評補助政策完全失敗"), "bullets[0]")
+        self.assertIn("內容", message)
+
+    def test_a_slide_with_points_cannot_have_no_bullets(self):
+        self.fails(lambda p: slide_of(p).update(bullets=[]), "bullets")
+
+    def test_the_bullets_are_exactly_the_first_four_points(self):
+        # 少一項
+        self.fails(lambda p: slide_of(p)["bullets"].pop(), "bullets")
+        # 一頁有 5 個重點時，條列還是 4 項：第 5 項不能出現
+        def five(payload):
+            slide = slide_of(payload)
+            slide["points"].append(dict(slide["points"][3], text="再補充一點"))
+            rebuild(slide)
+            slide["bullets"].append("[[S2]]：再補充一點")
+
+        self.fails(five, "bullets")
+
+    def test_a_short_slide_has_as_many_bullets_as_points(self):
+        payload = good()
+        self.assertEqual([len(s.bullets) for s in check_speaker_result(video(), payload).slides], [4, 2])
+
+    def test_whitespace_differences_between_bullet_and_point_are_not_a_contradiction(self):
+        payload = good()
+        slide_of(payload)["bullets"][0] = "[[S1]]：詢問目前補助  政策的成效"
+        slide_of(payload)["points"][0]["text"] = "詢問目前補助 政策的成效"
+        slide_of(payload)["detail"] = slide_of(payload)["detail"].replace("詢問目前補助政策的成效", "詢問目前補助 政策的成效")
+        checked = check_speaker_result(video(), payload)
+        self.assertEqual(checked.slides[0].bullets[0], "[[S1]]：詢問目前補助 政策的成效")
+
+    # --- 完整敘述 ↔ 重點 ---
+
+    def test_a_detail_with_the_right_markers_but_other_words_is_refused(self):
+        """標記順序一樣，內容卻是不相干的文字：標記對得上不代表這些話是那個人說的。"""
+        message = self.fails(lambda p: slide_of(p).update(
+            detail="[[S1]]：甲。 [[S2]]：乙。 [[S1]]：丙。 [[S2]]：丁。"), "detail")
+        self.assertIn("重點", message)
+
+    def test_a_detail_that_drops_or_adds_a_clause_is_refused(self):
+        detail = slide_of(good())["detail"]
+        self.fails(lambda p: slide_of(p).update(detail=detail.replace("現金補助有幫助，但托育資源更重要。", "。")), "detail")
+        self.fails(lambda p: slide_of(p).update(detail=detail.replace("追問公共托育現在有什麼不足。",
+                                                                       "追問公共托育現在有什麼不足；順便說他反對。")), "detail")
+
+    def test_the_points_of_one_speaker_in_a_row_are_one_run_joined_by_a_semicolon(self):
+        payload = good()
+        slide = slide_of(payload)
+        slide["points"][3]["speaker"] = "S1"
+        self.set_line(payload, 3, "00:38 [[S1]]：名額不夠，很多家長排不到，排了兩年也沒有消息。")
+        slide["points"][2]["speaker"] = "S1"
+        slide["points"][1]["speaker"] = "S1"
+        self.set_line(payload, 1, "00:14 [[S1]]：現金補助有幫助，但不能只靠現金，托育資源更重要。")
+        self.set_line(payload, 2, "00:31 [[S1]]：那公共托育現在有什麼不足？")
+        rebuild(slide)
+        self.assertEqual(slide["detail"].count("[[S1]]"), 1)
+        check_speaker_result(video(), payload)
+        slide["detail"] = slide["detail"].replace("；", " ")
+        with self.assertRaises(JobFailed):
+            check_speaker_result(video(), payload)
+
+    def test_a_point_that_is_a_rescued_quote_is_accepted_everywhere(self):
+        """以逐字引文救回來的重點（「…」）：條列與完整敘述照常是「[[Sn]]：」加上同一段文字。"""
+        payload = good()
+        slide = slide_of(payload)
+        slide["points"][0]["text"] = "「先請教您怎麼看目前的補助政策」"
+        slide["points"][0]["evidence"] = "先請教您怎麼看目前的補助政策"
+        slide["points"][1]["text"] = "「現金補助有幫助，但不能只靠現金」"
+        rebuild(slide)
+        checked = check_speaker_result(video(), payload)
+        self.assertEqual(checked.slides[0].bullets[0], "[[S1]]：「先請教您怎麼看目前的補助政策」")
+        self.assertIn("[[S2]]：「現金補助有幫助，但不能只靠現金」。", checked.slides[0].detail)
+
+    def test_full_width_square_brackets_in_the_text_are_ordinary_text(self):
+        """只有成對的 [[ 或 ]] 是記號；全形的單個方括號、書名號、引號都是一般文字。"""
+        payload = good()
+        slide = slide_of(payload)
+        slide["points"][0]["text"] = "提到［附件］與【附表】還有《草案》"
+        rebuild(slide)
+        checked = check_speaker_result(video(), payload)
+        self.assertEqual(checked.slides[0].points[0]["text"], "提到［附件］與【附表】還有《草案》")
 
 
 class MessagesTests(SimpleTestCase):

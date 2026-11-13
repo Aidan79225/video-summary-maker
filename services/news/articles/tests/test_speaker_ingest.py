@@ -25,7 +25,7 @@ from articles.ingest import process_articles, register_video, save_result, wants
 from articles.models import Article, ArticleSource, ArticleStatus, Slide
 from articles.speakers import render_placeholders
 from articles.tests import test_youtube_ingest as yt
-from articles.tests.speaker_support import CONTRACT, CONTRACT_VIDEO, diarized_result
+from articles.tests.speaker_support import CONTRACT, CONTRACT_VIDEO, diarized_result, rebuild
 
 VIDEO = CONTRACT_VIDEO
 IMAGE = b"\x00\x01fake-webp\xff"
@@ -431,18 +431,17 @@ class RerunTests(IngestCase):
         payload["speakers"] = payload["speakers"][:2]
         payload["diarization"]["found_speakers"] = 2
         payload["diarization"]["minor_speakers"] = 0
+        # 這一次整支影片都是發言者 A 在講：每一行逐字稿、每個重點都是 S1（S2 還列在清單裡，但沒有人引用）
+        payload["transcript_text"] = re.sub(r"\[\[S\d+\]\]", "[[S1]]", payload["transcript_text"])
         for slide in payload["slides"]:
             for point in slide["points"]:
                 point["speaker"] = "S1"
-        payload["transcript_text"] = "00:05 [[S1]]：只剩一個人"
-        for slide in payload["slides"]:
-            slide["bullets"] = [f"[[S1]]：{p['text']}" for p in slide["points"]]
-            # 同一個人連續講的話是一段（一個記號）：整頁都是 S1，就只有一個記號
-            slide["detail"] = "[[S1]]：" + "。 ".join(p["text"] for p in slide["points"]) + "。"
+            rebuild(slide)       # 同一個人連續講的話是一段（一個記號）：整頁都是 S1，就只有一個記號
         stored = self.rerun(payload)
         self.assertEqual([s["id"] for s in stored.speakers], ["S1", "S2"])
         self.assertEqual({p["speaker"] for s in stored.slides.all() for p in s.points}, {"S1"})
-        self.assertEqual(stored.transcript_text, "00:05 [[S1]]：只剩一個人")
+        self.assertEqual(stored.transcript_text, payload["transcript_text"])
+        self.assertEqual(stored.slides.get(index=2).detail.count("[[S1]]"), 1)
 
     def test_a_rerun_from_a_single_speaker_video_to_multi_speaker_works_too(self):
         video = register(speaker_count=1, video_id=yt.ZOO)

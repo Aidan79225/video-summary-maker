@@ -42,6 +42,25 @@ def run_with_deadline(function, *args, seconds: float = 5.0):
     return outcome["value"]
 
 
+def rendered(points: list[dict]) -> tuple[list[str], str]:
+    """GPU 的 render_slide：條列＝前 4 個重點各一項「[[Sn]]：重點」，完整敘述＝連續同一位說話者的重點併成一段
+    「[[Sn]]：甲；乙。」、段與段之間一個空格。測試改了重點之後用它重排，條列和完整敘述才會跟著對得上。"""
+    bullets = [f"[[{p['speaker']}]]：{p['text']}" for p in points[:4]]
+    runs: list[tuple[str, list[str]]] = []
+    for point in points:
+        if runs and runs[-1][0] == point["speaker"]:
+            runs[-1][1].append(point["text"])
+        else:
+            runs.append((point["speaker"], [point["text"]]))
+    return bullets, " ".join(f"[[{speaker}]]：{'；'.join(texts)}。" for speaker, texts in runs)
+
+
+def rebuild(slide: dict) -> dict:
+    """重點改了之後，這一頁的條列與完整敘述照 GPU 的規則重排（原地改，回傳同一頁）。"""
+    slide["bullets"], slide["detail"] = rendered(slide["points"])
+    return slide
+
+
 def diarized_result(video_id: str = CONTRACT_VIDEO, requested: int | None = None) -> dict:
     """契約範例的多人結果，改成指定那支影片的、指定人數（None＝自動）的版本。每次回傳新的副本。"""
     payload = copy.deepcopy(CONTRACT["result"])
