@@ -227,6 +227,23 @@ def test_when_attribution_fails_the_job_fails_with_the_reason_and_nothing_is_del
     assert type(error).__name__ in view["error"] and str(error) in view["error"]
 
 
+def test_a_conversation_with_more_than_twelve_voices_fails_the_job_and_delivers_nothing():
+    """真的 use case（假零件）從頭到尾：13 個聲音，工作失敗、沒有成品、沒有任何一次模型呼叫，
+    而且前兩個階段的存檔還在，錯誤訊息把人數與下一步講清楚。"""
+    from tests.slidebox import diarized_support as support
+
+    parts = support.crowd_parts(10)
+
+    view, _ = finish(CONTRACT["request"], usecase=parts.usecase)
+
+    assert view["status"] == JobStatus.FAILED and view["result"] is None
+    assert view["error"].startswith("AttributionUnreliable: ")
+    for needle in ("2 位主要發言者", "11 個其他聲音", "共 13 個", "上限 12 個", "--speakers N"):
+        assert needle in view["error"], needle
+    assert parts.conversation.calls == [] and parts.renderer.rendered == []
+    assert parts.checkpoints.stages("OUT", support.URL) == ["diarization", "words"]
+
+
 def test_a_diarized_deck_that_lost_its_sources_is_not_delivered():
     """use case 若因為任何原因交出缺出處的成品，payload 這一層是最後一道關：任務失敗，不是交出去。"""
     from dataclasses import replace

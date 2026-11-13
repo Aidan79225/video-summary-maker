@@ -694,6 +694,61 @@ def test_more_than_eight_participants_fails():
     assert report(eight, summarize_speakers(eight)).found_speakers == 8
 
 
+def test_twelve_voices_in_all_are_published_and_a_thirteenth_fails():
+    """攔的 bug：只數主要發言者，8 位主要＋20 個其他聲音照樣過關，到新聞服務才因為
+    speakers 超過 12 個被擋下來——GPU 白白做完整支影片，還把不可靠的區分當成可以發佈。"""
+    twelve = balanced(2, 100.0, minors=10)
+    assert len(summarize_speakers(twelve)) == 12
+    out = report(twelve, summarize_speakers(twelve))
+    assert (out.found_speakers, out.minor_speakers) == (2, 10)
+
+    thirteen = balanced(2, 100.0, minors=11)
+    assert len(summarize_speakers(thirteen)) == 13
+    with pytest.raises(AttributionUnreliable):
+        report(thirteen, summarize_speakers(thirteen))
+
+
+def test_the_limit_counts_participants_and_other_voices_together():
+    eight_and_four = balanced(8, 100.0, minors=4)
+    assert report(eight_and_four, summarize_speakers(eight_and_four)).found_speakers == 8
+    eight_and_five = balanced(8, 100.0, minors=5)
+    with pytest.raises(AttributionUnreliable, match="13"):
+        report(eight_and_five, summarize_speakers(eight_and_five))
+
+
+def test_the_limit_is_the_one_the_news_service_checks_before_it_saves():
+    assert speakers.MAX_PUBLISHED_SPEAKERS == 12
+
+
+def test_the_message_for_too_many_voices_has_every_count_and_the_way_out():
+    turns = balanced(3, 100.0, minors=11)
+
+    with pytest.raises(AttributionUnreliable) as raised:
+        report(turns, summarize_speakers(turns))
+
+    message = str(raised.value)
+    for needle in ("3 位主要發言者", "11 個其他聲音", "共 14 個", "上限 12 個", "--speakers N"):
+        assert needle in message, needle
+
+
+def test_when_a_count_was_already_given_the_message_does_not_tell_the_operator_to_give_one():
+    turns = balanced(3, 100.0, minors=11)
+
+    with pytest.raises(AttributionUnreliable) as raised:
+        report(turns, summarize_speakers(turns), requested_speakers=4)
+
+    message = str(raised.value)
+    assert "已指定 4 人" in message and "共 14 個" in message and "--speakers N" not in message
+
+
+def test_too_many_participants_is_still_reported_as_that_and_not_as_too_many_voices():
+    """舊的失敗不變：同樣的輸入同樣的訊息。"""
+    turns = balanced(9, 100.0, minors=5)
+
+    with pytest.raises(AttributionUnreliable, match="找到 9 位主要發言者，超過上限 8 位"):
+        report(turns, summarize_speakers(turns))
+
+
 def test_no_participant_at_all_fails():
     with pytest.raises(AttributionUnreliable):
         report([Turn(0, 0.0, 5.0, "S0", "？")], summarize_speakers([Turn(0, 0.0, 5.0, "S0", "？")]))

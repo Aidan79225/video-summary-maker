@@ -22,7 +22,13 @@ from slidebox.domain.errors import (
 from slidebox.usecases import diarized_pipeline
 from slidebox.usecases.conversation import chunk_turns, format_window
 from slidebox.usecases.naming import deck_folder_name
-from slidebox.usecases.speakers import transcript_lines
+from slidebox.usecases.speakers import (
+    assign_speakers,
+    build_turns,
+    normalize_turns,
+    summarize_speakers,
+    transcript_lines,
+)
 
 from .diarized_support import (
     CLIP,
@@ -37,11 +43,13 @@ from .diarized_support import (
     FakeWordTranscriber,
     FlakyRenderer,
     at,
+    crowd_parts,
     good_points,
     good_reply,
     make,
     run,
     settings,
+    with_extra_voices,
 )
 from .fakes import FakeAudioGateway
 
@@ -627,6 +635,60 @@ def test_an_unreliable_diarization_fails_before_any_model_call():
         run(parts, speaker_count=2)
     assert parts.conversation.calls == [] and parts.renderer.rendered == []
     assert parts.audio.events[-1] == "cleanup"
+
+
+def test_the_helper_that_adds_voices_really_adds_one_published_speaker_each():
+    """測試用的人數要對：3 位原有的說話者再加幾個，發佈的清單就是幾個。"""
+    for extra in (0, 1, 9, 10):
+        turns = build_turns(assign_speakers(
+            with_extra_voices(extra).words, normalize_turns(with_extra_voices(extra).output.turns)))
+        listed = summarize_speakers(turns)
+        assert len(listed) == 3 + extra
+        assert [s.kind for s in listed].count("participant") == 2
+        assert list(turns[:len(TURNS)]) == list(TURNS)
+
+
+def test_more_than_twelve_voices_fail_before_any_model_call_and_keep_the_finished_stages():
+    """攔的 bug：第 13 個聲音一路走到新聞服務才被擋下來——GPU 先花了整段模型呼叫的時間，
+    還把這樣的區分結果當成可以發佈的。這裡 13 個原始聲音（2 位主要發言者、11 個其他聲音）。"""
+    parts = crowd_parts(10)
+    with pytest.raises(AttributionUnreliable) as raised:
+        run(parts)
+    message = str(raised.value)
+    assert "2 位主要發言者" in message and "11 個其他聲音" in message
+    assert "共 13 個" in message and "上限 12 個" in message and "--speakers N" in message
+    assert parts.conversation.calls == [] and parts.renderer.rendered == []
+    assert parts.sections.timestamps == []
+    assert stored(parts) == ["diarization", "words"] and parts.checkpoints.cleared == []
+    assert parts.audio.events[-1] == "cleanup"
+
+
+def test_a_rerun_after_too_many_voices_does_not_diarize_or_recognize_again():
+    """存檔留著，所以操作者換個做法（例如指定人數）之後，語音辨識不必重來。"""
+    parts = crowd_parts(10)
+    with pytest.raises(AttributionUnreliable):
+        run(parts)
+    with pytest.raises(AttributionUnreliable):
+        run(parts)
+    assert len(parts.diarizer.calls) == 1 and len(parts.words.calls) == 1
+    assert parts.conversation.calls == []
+
+
+def test_exactly_twelve_voices_are_published_with_the_usual_warning_for_many_minor_voices():
+    parts = crowd_parts(9)
+    deck = run(parts).deck
+    assert len(deck.speakers) == 12
+    assert (deck.diarization.found_speakers, deck.diarization.minor_speakers) == (2, 10)
+    assert deck.diarization.status == "warn" and "many_minor" in deck.diarization.warnings
+    assert len(parts.conversation.calls) >= 1 and parts.checkpoints.cleared == [("OUT", URL)]
+
+
+def test_a_given_speaker_count_does_not_change_the_limit():
+    """--speakers N 只是告訴區分器有幾個人；發佈的上限還是 12 個。"""
+    parts = crowd_parts(10)
+    with pytest.raises(AttributionUnreliable, match="已指定 4 人.*共 13 個.*上限 12 個"):
+        run(parts, speaker_count=4)
+    assert parts.conversation.calls == []
 
 
 def test_a_diarizer_that_finds_a_different_count_than_asked_publishes_with_a_warning():

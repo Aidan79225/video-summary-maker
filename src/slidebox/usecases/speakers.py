@@ -56,6 +56,10 @@ MINOR_TURNS = 3
 SAMPLE_COUNT = 3
 SAMPLE_CHARS = 80
 MAX_PARTICIPANTS = 8
+# 發佈的說話者清單（主要發言者加其他聲音）最多幾個。新聞服務存檔之前也檢查同一個數字
+# （services/news/articles/speaker_result.py 的 MAX_SPEAKERS，speakers 要 1 到 12 個），
+# 兩邊要一起改；這裡先擋，才不會等整支影片都做完、成品交到新聞服務才被拒絕。
+MAX_PUBLISHED_SPEAKERS = 12
 UNASSIGNED_WARN_RATIO = 0.25
 MANY_MINOR = 4
 
@@ -459,6 +463,17 @@ def summarize_speakers(turns: Sequence[Turn]) -> tuple[SpeakerInfo, ...]:
     return tuple(infos)
 
 
+def _too_many_voices(participants: int, minors: int, total: int, requested: int | None) -> str:
+    """發佈的清單放不下這麼多聲音：每個數字都寫出來，並說明下一步（不猜、不把聲音併進 S0）。"""
+    counts = (f"{participants} 位主要發言者、{minors} 個其他聲音，共 {total} 個聲音，"
+              f"超過發佈上限 {MAX_PUBLISHED_SPEAKERS} 個")
+    if requested is None:
+        return (f"找到 {counts}；聲音區分不可靠，不發佈（通常是同一個人被分成好幾個聲音）。"
+                "若確知實際人數，請用 --speakers N 指定人數再試一次")
+    return (f"已指定 {requested} 人，仍找到 {counts}；聲音區分不可靠，不發佈。"
+            "請確認指定的人數是否正確，或換成較短、雜音較少的片段")
+
+
 def diarization_report(
     turns: Sequence[Turn],
     speakers: Sequence[SpeakerInfo],
@@ -472,7 +487,8 @@ def diarization_report(
 ) -> DiarizationReport:
     """這次說話者區分的品質；明顯不可靠就 raise AttributionUnreliable（工作失敗，不發佈）。
 
-    失敗：要求 2 人以上卻只找到 1 位發言者、發言者超過 8 位、一位發言者都沒有。
+    失敗：要求 2 人以上卻只找到 1 位發言者、主要發言者超過 8 位、主要發言者與其他聲音合計
+    超過 12 個（發佈的說話者清單放不下）、一位發言者都沒有。
     警告（照常發佈，但網站會標出來）：人數與要求不符、S0 超過 25%、其他聲音 4 個以上、
     自動模式只找到 1 位發言者。found_speakers 是主要發言者（participant）的人數。
     proposed_points／kept_points 由 use case 在模型的重點檢查完之後補上。
@@ -487,6 +503,8 @@ def diarization_report(
     if found > MAX_PARTICIPANTS:
         raise AttributionUnreliable(
             f"找到 {found} 位主要發言者，超過上限 {MAX_PARTICIPANTS} 位；聲音區分不可靠")
+    if len(speakers) > MAX_PUBLISHED_SPEAKERS:
+        raise AttributionUnreliable(_too_many_voices(found, len(minors), len(speakers), requested))
     if requested is not None and found == 1:
         raise AttributionUnreliable(
             f"指定 {requested} 人，卻只找到 1 位主要發言者；可能把不同的人合併成一個了")
