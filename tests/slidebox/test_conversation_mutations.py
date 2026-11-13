@@ -120,7 +120,7 @@ ANSWER_TURNS, ANSWER_GOOD = with_anchors(("S1", "是不是還要提高保母的�
 
 # 內容在附近找不到依據，quote 本身也不夠格改顯示原話的各種情況
 UNSAID = "宣布將立法禁止外送平台"
-PRONOUN_TURNS, PRONOUN_GOOD = with_anchors(("S2", "他們說名額不夠，很多家長排不到，排了兩年也沒有消息。"),
+PRONOUN_TURNS, PRONOUN_GOOD = with_anchors(("S2", "他們的名額不夠，很多家長排不到，排了兩年也沒有消息。"),
                                            ("S1", "謝謝您的說明。"))
 SKIP_TURNS, SKIP_GOOD = with_anchors(("S2", "名額不夠，很多家長排不到，排了兩年也沒有消息。"), ("S1", "謝謝您的說明。"))
 SHORT_TURNS, SHORT_GOOD = with_anchors(("S2", "名額不夠。"), ("S1", "謝謝您的說明。"))
@@ -162,10 +162,10 @@ SCENARIOS: dict[str, Scenario] = {
         kept_with=(), kept_without=(), reason="不能引用", reason_without="連續照抄的原文"),
     "leading_pronoun_or_title": Scenario(
         "_leading_problem", nothing,
-        (RawPoint(at("名額不夠"), "他認為名額不夠，家長排不到"), RawPoint(BUDGET, "陳教授指出預算大約要三千億")),
+        (RawPoint(at("名額不夠"), "他認為名額不夠，家長排不到"), RawPoint(BUDGET, "林校長指出預算大約要三千億")),
         kept_with=(),
         kept_without=(tri("S2", at("名額不夠"), "他認為名額不夠，家長排不到"),
-                      tri("S2", BUDGET, "陳教授指出預算大約要三千億")),
+                      tri("S2", BUDGET, "林校長指出預算大約要三千億")),
         reason="開頭"),
     "pronoun_in_the_middle_of_the_text": Scenario(
         "_PRONOUN_RE", NEVER, (RawPoint(at("謝謝邱委員"), "詢問預算要怎麼編才夠，他們需要答覆"),),
@@ -247,7 +247,7 @@ SCENARIOS: dict[str, Scenario] = {
         "_wording_hit", nothing, (RawPoint(0, UNSAID),),
         turns=PRONOUN_TURNS, speakers=TWO, good=PRONOUN_GOOD,
         kept_with=(), reason="也不能改用原話",
-        kept_without=(tri("S2", 0, quoted("他們說名額不夠，很多家長排不到，排了兩年也沒有消息")),)),
+        kept_without=(tri("S2", 0, quoted("他們的名額不夠，很多家長排不到，排了兩年也沒有消息")),)),
     "rescue_needs_a_contiguous_quote": Scenario(
         "contiguous_span", the_quote_as_written, (RawPoint(0, UNSAID, quote="名額不夠，排了兩年也沒有消息"),),
         turns=SKIP_TURNS, speakers=TWO, good=SKIP_GOOD,
@@ -272,10 +272,10 @@ SCENARIOS: dict[str, Scenario] = {
         kept_with=(), reason="複述對方", kept_without=(tri("S1", 0, quoted("所以名額加倍就算達成目標")),)),
     # --- 安全模式：每個點都只顯示照抄的原話，所以原話要先過同一道門檻 ---
     "quote_only_refuses_a_pronoun_quote": Scenario(
-        "_wording_hit", nothing, (RawPoint(0, "文字不會顯示，所以不看", quote="他們說名額不夠，很多家長排不到"),),
+        "_wording_hit", nothing, (RawPoint(0, "文字不會顯示，所以不看", quote="他們的名額不夠，很多家長排不到"),),
         turns=PRONOUN_TURNS, speakers=TWO, good=PRONOUN_GOOD, extra={"quote_only": True},
         kept_with=(), reason="quote 不能直接當重點顯示",
-        kept_without=(tri("S2", 0, quoted("他們說名額不夠，很多家長排不到")),)),
+        kept_without=(tri("S2", 0, quoted("他們的名額不夠，很多家長排不到")),)),
 }
 
 

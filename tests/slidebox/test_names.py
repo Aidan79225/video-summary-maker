@@ -90,3 +90,29 @@ def test_every_name_found_is_written_in_the_text():
         text = "".join(rng.choice(pool) for _ in range(rng.randint(0, 40)))
         for name in detect_names(text):
             assert name in text
+
+
+# --- 審查補的：名字不只有「姓＋職稱」與「阿X」 ---
+
+
+@pytest.mark.parametrize("title", ["顧問", "律師", "法官", "總監", "副總", "秘書", "助理", "主播", "教練", "醫生", "檢察官"])
+def test_more_titles_make_a_surname_and_a_title_a_name(title):
+    assert detect_names(f"今天請李{title}說明。") == {f"李{title}"}
+
+
+@pytest.mark.parametrize("text, expected", [
+    ("志豪，你怎麼看明年的預算？", {"志豪"}),
+    ("好，怡君，您覺得這個方案可行嗎？", {"怡君"}),
+    ("Kevin，你怎麼看明年的預算？", {"Kevin"}),
+    ("謝謝。志豪，你先說。", {"志豪"}),
+])
+def test_a_given_name_used_as_address_before_you_is_a_name(text, expected):
+    assert detect_names(text) == expected
+
+
+@pytest.mark.parametrize("text", [
+    "所以，你覺得呢？", "但是，你要知道這件事", "我覺得，你說得對", "首先，你要了解背景", "那麼，您的看法是什麼",
+    "如果，你同意的話", "其實，你也知道", "不過，你可以再想想", "我們來談預算，你要先看這份資料",
+])
+def test_a_connector_or_a_phrase_before_you_is_not_a_name(text):
+    assert detect_names(text) == frozenset()

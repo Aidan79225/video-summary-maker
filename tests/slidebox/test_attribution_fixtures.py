@@ -48,6 +48,10 @@ STRICTER = {
                           "產品要求整個數字相符（第一次真模型的完整跑一遍，2 次裡有 2 次出現這個錯）"),
     ("F10_gemma4_overlong_slide", 3, 22): (
         "pronoun_in_text", "「對方」在文字中間：產品把代名詞檢查延伸到整段文字，實驗室的參考只看句首"),
+    ("F10_gemma4_overlong_slide", 3, 6): (
+        "reported_speech", "quote 是「他們說想續約但是要砍價」：說話者在轉述客戶的話。產品一律擋下「他們說、有人說、"
+                          "根據報導」這類轉述（審查用模型的寫法試過：「有人說…，我認為這是誇大的」會被寫成說話者自己的"
+                          "主張，意思整個反過來），實驗室的參考沒有這道檢查；這一點的文字雖然只是「說明」，產品仍不冒險"),
 }
 # 兩邊都丟，但原因碼不同：產品先看文字（名字）、再看出處（anchor），最後才看數字、問句
 CODE_ORDER = {
@@ -244,8 +248,8 @@ def test_the_counts_of_a_whole_window_add_up(name):
 
 
 # 每份的整窗數字：(提出, 留下, 其中顯示原話, 有問題, 查不出來, 同頁規則)，砍頁之後、進整份的比例檢查之前。
-# 和實驗室比：留下的點少的，只有 F01（兩個單字的回答）、F03（一個數字：三分鐘 ≠ 三十分鐘）與 F10（一個代名詞）；
-# F10 提出的 25 個比模型寫的 48 個少 23 個：
+# 和實驗室比：留下的點少的，只有 F01（兩個單字的回答）、F03（一個數字：三分鐘 ≠ 三十分鐘）與 F10（一個代名詞、
+# 一個轉述）；F10 提出的 26 個比模型寫的 48 個少 22 個：
 # 留下的點超過每頁 4 個的部分不算提出，也不算丟掉；F09 少的 4 個是被砍掉的第 6 頁。
 WINDOW_TOTALS = {
     "F01_prod_qa_official_names": (45, 5, 0, 36, 2, 2),
@@ -257,7 +261,7 @@ WINDOW_TOTALS = {
     "F07_p4_asr_numbers_and_false_flags": (16, 13, 2, 2, 1, 0),
     "F08_p4f_press_wrong_speaker_reanchor": (16, 14, 1, 1, 1, 0),
     "F09_p4f_monologue_percent_to_cheng": (20, 17, 1, 3, 0, 0),
-    "F10_gemma4_overlong_slide": (25, 9, 0, 14, 2, 0),
+    "F10_gemma4_overlong_slide": (26, 9, 0, 15, 2, 0),
 }
 # 這些窗在管線的比例檢查（被丟掉的不超過 25%）會過關；沒過關的，管線會帶著原因再問一次。
 # F01 的舊提示詞、F04 的接合引文、F10 的長頁都在這裡被擋下來，F02 的第一次也是（見下面）。
@@ -289,8 +293,8 @@ def test_f10_a_slide_of_thirty_nine_points_shows_four_and_its_other_points_are_n
 
     assert [len(slide.points) for slide in replay.raw] == [4, 5, 39]
     assert [len(slide.points) for slide in result.slides] == [2, 3, conv.MAX_BULLETS]
-    assert sum(len(slide.points) for slide in replay.raw) - result.proposed == 23       # 留下卻超出每頁 4 點的
-    assert result.proposed - result.kept == 16 == sum(n for _, n in result.dropped_by_code)
+    assert sum(len(slide.points) for slide in replay.raw) - result.proposed == 22       # 留下卻超出每頁 4 點的
+    assert result.proposed - result.kept == 17 == sum(n for _, n in result.dropped_by_code)
 
 
 # --- 這幾份各自要釘住的事（manifest.json 的 why）---

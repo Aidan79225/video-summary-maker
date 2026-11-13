@@ -24,7 +24,7 @@ from functools import lru_cache
 
 from ..domain.entities import Point, RawPoint, RawSlide, Slide, SpeakerInfo, Turn
 from .names import detect_names
-from .numerals import number_problem
+from .numerals import PERCENT, mentions, number_problem
 from .quotes import (
     ECHO_START_RE,
     MAX_RESCUED_QUOTE_CHARS,
@@ -250,6 +250,8 @@ NUMBER_MISMATCH = "number_mismatch"
 NEGATION_MISMATCH = "negation_mismatch"
 QUESTION_STATED_AS_FACT = "question_stated_as_fact"
 ECHO = "echo"
+REPORTED_SPEECH = "reported_speech"
+ROLE_NOT_SAID = "role_not_said"
 BAD_INLINE_QUOTE = "bad_inline_quote"
 DUPLICATE_POINT = "duplicate_point"
 SLIDE_TOO_SMALL = "slide_too_small"
@@ -326,23 +328,25 @@ _TURN_TAG_RE = re.compile(r"\[\s*T\d+\s*\]", re.IGNORECASE)
 _SPEAKER_TAG_RE = re.compile(r"(?<![0-9A-Za-z])S\d+(?![0-9A-Za-z])")
 _LABEL_WORDS = (
     "發言者", "說話者", "講者", "主持人", "來賓", "嘉賓", "受訪者", "被訪者", "與談人", "與談者",
-    "提問者", "回答者", "回應者", "主講人", "主講者", "其他聲音",
+    "提問者", "回答者", "回應者", "主講人", "主講者", "其他聲音", "發言人",
 )
 # 引號裡是引述原話（另外核對過），不算
 _QUOTED_RE = re.compile(r"「[^」]*」|『[^』]*』|“[^”]*”|\"[^\"]*\"")
 _QUOTE_BODY_RE = re.compile(r"「([^」]*)」|『([^』]*)』|“([^”]*)”|\"([^\"]*)\"")
 # 「我國」「自我」是一般用語，不是視角問題（與單人模式的判斷一致）
-_FIRST_PERSON_RE = re.compile(r"我們|我方|本席|咱們|咱|本人|在下|敝|(?<!自)我(?![國們方])")
+# 機關、公司的第一人稱（本部、本公司…）與自謙的稱呼（小弟）也是；「本部分」「本會期」是一般用語
+_FIRST_PERSON_RE = re.compile(
+    r"我們|我方|本席|咱們|咱|本人|在下|敝|小弟|本公司|本校|本局|本院|本部(?!分)|本會(?!期)|(?<!自)我(?![國們方])")
 
 _SURNAMES = ("陳林黃張李王吳劉蔡楊許鄭謝郭洪邱曾廖賴徐周葉蘇莊呂江何蕭羅高潘朱簡鍾彭游詹胡施沈余趙盧梁顏柯孫魏"
              "翁戴范宋方鄧杜傅侯曹薛丁卓阮馬董溫唐藍蔣石古紀姚連馮歐程湯田康姜汪白鄒尤巫黎塗龔嚴韓袁金童陸夏柳邵")
 _TITLES = ("委員|部長|院長|市長|縣長|鄉長|鎮長|區長|里長|局長|處長|署長|廳長|科長|議員|議長|主席|主任|秘書長|"
            "總統|副總統|總理|校長|教授|老師|博士|醫師|醫生|律師|法官|檢察官|董事長|理事長|執行長|總經理|"
-           "先生|小姐|女士|立委")
+           "先生|小姐|女士|立委|記者|發言人|官員")
 _MAJOR_TITLES = "部長|院長|署長|廳長|總統|副總統|總理|董事長|理事長|執行長|總經理|秘書長|議長|主席"
 # 「委員會」「長期」「長大」這類普通詞不是稱呼
 _NOT_A_TITLE = "(?![會期久遠大度短途年時])"
-_PRONOUN = r"(?:他們|她們|牠們|(?:他|她|牠)(?![人山方鄉])|對方|此人|該員|該名|該位)"
+_PRONOUN = r"(?:他們|她們|牠們|(?:他|她|牠)(?![人山方鄉])|對方|此人|該員|該名|該位|雙方|前者|後者)"
 _LEADING_RE = re.compile(
     rf"^(?:{_PRONOUN}"
     rf"|(?:[{_SURNAMES}][一-鿿]{{0,2}})?(?:{_TITLES}){_NOT_A_TITLE}"
@@ -374,7 +378,10 @@ _NO_LEADS = (
 )
 
 # 問句與複述：問句要寫成「詢問…」，複述別人的話不能算在複述的人頭上
-_QUESTION_RE = re.compile(r"[？?]|嗎|呢|是不是|對不對|好不好|行不行|有沒有|能不能|可不可以|是否|對吧|是吧")
+# Whisper 常常不給問號：「請問…」「您怎麼看…」「為什麼…」「難道…」「怎麼可能…」也是問句（反問也是）
+_QUESTION_RE = re.compile(
+    r"[？?]|嗎|呢|是不是|對不對|好不好|行不行|有沒有|能不能|可不可以|是否|對吧|是吧|"
+    r"請問|請教|想問|怎麼看|為什麼|為何|難道|何必|怎麼可能|您怎麼|你怎麼")
 _ASK_RE = re.compile(
     r"詢問|追問|請教|請問|提問|質疑|質問|反問|想知道|想了解|問(?!題)|是否|能否|可否|有沒有|是不是|對不對|"
     r"如何|怎麼|怎樣|為何|為什麼|什麼|哪|多少|嗎|呢")
@@ -382,6 +389,27 @@ _RESTATING_RE = re.compile(
     r"[？?]|嗎|呢|是不是|對不對|對吧|是吧|是否|有沒有|"
     r"剛才|剛剛|方才|您說|你說|妳說|您提到|你提到|他說|她說|他們說|所說|意思是|也就是說|換句話說|"
     r"你是說|您是說|說過|[「『“]")
+
+# 轉述第三方的話（有人說、網友說、根據報導、部長表示、專家預測、聽說…）：說話者是在轉述別人的說法，
+# 不是自己的主張。第三方在影片外，比對不到「更早的另一位說話者」，所以另外用字眼擋
+_REPORTED_RE = re.compile(
+    r"(?:他們|她們|牠們|有人|有些人|網友|鄉民|大家|外界|外面|媒體|專家|學者|業者|民眾|官方|當局|"
+    r"[一-鿿]{1,4}(?:部長|院長|署長|局長|處長|市長|縣長|委員|議員|教授|發言人|主任|董事長|執行長|總經理))"
+    r"(?:都|也|還|又|已經|曾經|先前|日前|昨天|今天)?(?:說|表示|指出|認為|預測|宣稱|聲稱|強調|透露|稱|提到|主張|批評|質疑)"
+    r"|(?:記者會|受訪|訪問|節目|會議|臉書|社群|網路)(?:上|中|時)?(?:說|表示|指出|強調|宣布|宣稱|透露)"
+    r"|根據[^，。；]{0,12}(?:報導|資料|統計|調查|研究|消息)|據(?:報導|說|稱|悉)|聽說|傳說|傳聞")
+# quote 前面緊接著以冒號結尾的引言（「我引用市場上的說法：」「根據報導：」）：後面是轉述的內容
+_LEAD_IN_RE = re.compile(r"[^。！？!?\n：:]{0,40}[：:]\s*$")
+_LEAD_IN_FRAME_RE = re.compile(r"引用|引述|轉述|說法|傳言|報導|聽說|據說")
+# 改顯示原話時，原話前面若有這些條件字眼，單獨顯示會缺少條件
+_CONDITION_RE = re.compile(r"如果|假如|要是|萬一|假設|只要|除非|若|就算|即使|倘若|雖然")
+_HEDGE_RE = re.compile(r"可能|也許|或許|大概|似乎|好像|聽說|據說|不確定|未必")
+_CLAUSE_PUNCT = "，。！？；：,.!?;:、…「『“"
+# 文字自己標明是轉述，就不是把別人的話說成他的主張
+_SAYS_REPORTED = ("轉述", "引述", "轉達")
+# 文字裡的稱謂若不是那段話自己說的，就是模型加上去的（市長已承諾…）
+_ROLE_WORD_RE = re.compile(
+    r"市長|縣長|部長|院長|署長|局長|處長|議員|總統|總理|主席|教授|記者(?!會)|發言人|官員|老師|醫師|委員(?!會)")
 
 _CLAUSE_RE = re.compile(r"([^，。！？；：,.!?;:…]+)([，。！？；：,.!?;:…]*)")
 _TRAILING_PUNCT = "，。！？；：,.!?;:… \t　"
@@ -455,7 +483,8 @@ def validate_points(
         if len(kept) > MAX_BULLETS:                              # 多出來的點不會顯示，也不算提出過
             proposed -= len(kept) - MAX_BULLETS
             kept = kept[:MAX_BULLETS]
-        title_problem = _title_problem(raw.title)
+        cited_text = " ".join(by_index[point.turn].text for point, _ in kept)
+        title_problem = _title_problem(raw.title, names, cited_text)
         if title_problem:
             problems.append(f"第 {page} 頁的標題{title_problem}，改用中性標題")
             title = f"{clock(kept[0][0].start)} 起的討論"
@@ -551,11 +580,15 @@ def _check_point(
         support_text = anchor.text
         earlier = [t for t in in_window if t.index < anchor.index]
 
-    problem = _number_problem(text, support_text) or _negation_problem(text, support_text)
+    problem = (_number_problem(text, support_text) or _negation_problem(text, support_text)
+               or _role_problem(text, support_text))
     if problem:
         return PointCheck(problem=_at(problem, anchor))
 
     evidence, is_question = _evidence(anchor.text, claim)
+    problem = _reported_speech_problem(text, raw.quote, anchor.text)
+    if problem:
+        return PointCheck(problem=_at(problem, anchor))
     problem = _question_problem(is_question, text)
     if problem:
         return PointCheck(problem=_at(problem, anchor))
@@ -595,7 +628,8 @@ def _clean_text(text: object) -> str:
     """模型寫的文字整理成單行；不是文字（None、數字…）就當作空的，不要變成「None」這個詞。"""
     if not isinstance(text, str):
         return ""
-    flat = " ".join(text.split()).lstrip(_LEAD_STRIP)
+    visible = "".join(ch for ch in text if unicodedata.category(ch) != "Cf")      # 零寬字元等看不見的格式字元
+    flat = " ".join(visible.split()).lstrip(_LEAD_STRIP)
     return flat.rstrip(_TEXT_TRAILING)
 
 
@@ -619,7 +653,8 @@ def _rescue_quote(turn: Turn, quote: str, names: frozenset[str], note: str | Non
 def _quote_to_show(turn: Turn, quote: str, names: frozenset[str]) -> QuoteSpan | str:
     """quote 能不能當作原話直接顯示：能就回傳那一段（逐字稿的原文位置），不能就回傳原因。
 
-    條件：是那一輪裡連續的一段（跳過字句的不行：顯示出來像是連著說了那兩句）；至少 8 個字、
+    條件：是那一輪裡連續的一段（跳過字句的不行：顯示出來像是連著說了那兩句），前面被截掉的字
+    沒有否定、條件或語氣詞（我不同意…、如果…、可能…）、不是在轉述第三方的話；至少 8 個字、
     不超過 MAX_RESCUED_QUOTE_CHARS 個字；沒有代名詞、角色字眼、稱呼說話者的字眼、逐字稿裡用來稱呼人的名字；
     不是「你剛才說…」開頭；不是複述對方、等對方確認的那半句（單獨顯示會變成這個人自己的主張）。
     原話裡的第一人稱不算問題：那是他自己說的話。
@@ -638,6 +673,17 @@ def _quote_to_show(turn: Turn, quote: str, names: frozenset[str]) -> QuoteSpan |
         return "原話一開頭就是在轉述對方（你剛才說…）"
     if is_restatement(span):
         return "原話是複述對方、等對方確認的那半句，單獨顯示會變成這個人自己的主張"
+    if _REPORTED_RE.search(span.text) or _lead_in_reports(span.flat, span.start):
+        return "原話是在轉述別人的說法（有人說、根據報導…），不是這位說話者自己的主張"
+    before = span.flat[:span.start]
+    clause_start = max((before.rfind(char) for char in _CLAUSE_PUNCT), default=-1) + 1
+    lost = before[clause_start:]                       # 同一個子句裡被截掉的前半（我不同意…、可能…）
+    if (_NEGATION_RE.search(lost) or _HEDGE_RE.search(lost) or _CONDITION_RE.search(lost)
+            or any(word in lost for word in _NO_LEADS)):
+        return "原話前面（同一個子句）有否定、條件或語氣詞，單獨顯示會缺少它們"
+    sentence_start = max((before.rfind(char) for char in "。！？!?"), default=-1) + 1
+    if _CONDITION_RE.search(before[sentence_start:]):
+        return "原話前面有「如果…」之類的條件，單獨顯示會缺少條件"
     return span
 
 
@@ -677,7 +723,7 @@ def _text_problem(text: str) -> Problem | None:
     return None
 
 
-def _title_problem(title: str) -> str | None:
+def _title_problem(title: str, names: frozenset[str] = frozenset(), support_text: str = "") -> str | None:
     flat = " ".join(str(title).split())
     if not flat:
         return "是空的"
@@ -686,6 +732,11 @@ def _title_problem(title: str) -> str | None:
     for check in (_marker_problem, _label_problem, _leading_problem, _first_person_problem):
         if check(flat):
             return "含有稱呼、代名詞或標記"
+    if _name_problem(flat, names):
+        return "含有逐字稿裡用來稱呼人的名字"
+    # 「第二次」「兩點」不是數字資訊；百分比與 10 以上的數字才要在那一頁引用的發言裡有依據
+    if any(m.kind == PERCENT or m.value >= 10 for m in mentions(flat)) and number_problem(flat, support_text):
+        return "含有那一頁引用的發言裡沒有的數字"
     return None
 
 
@@ -854,6 +905,42 @@ def _negation_problem(text: str, support_text: str) -> Problem | None:
     if _NEGATION_RE.search(_outside_quotes(text)) and not any(ch in support_text for ch in _NEGATION_CHARS):
         return Problem(NEGATION_MISMATCH, "重點有否定的說法，但被引用的那段話沒有，意思可能寫反了")
     return None
+
+
+def _role_problem(text: str, support_text: str) -> Problem | None:
+    """文字（「」以外）裡的稱謂（市長、記者、發言人…）必須是那段話自己說的；否則是模型加上去的。"""
+    for match in _ROLE_WORD_RE.finditer(_outside_quotes(text)):
+        if match.group(0) not in support_text:
+            return Problem(ROLE_NOT_SAID, (
+                f"文字裡有「{match.group(0)}」，但被引用的那段話沒有說；不要加上說話者沒說的身分，只寫那段話說的事"))
+    return None
+
+
+def _reported_speech_problem(text: str, quote: object, turn_text: str) -> Problem | None:
+    """quote 是在轉述第三方的話（有人說、網友說、根據報導…），或前面緊接著這樣的引言：不能寫成說話者自己的主張。
+
+    文字自己標明「轉述…」「引述…」就不擋（那是照實說他在轉述）。
+    """
+    if text.startswith(_SAYS_REPORTED):
+        return None
+    match = _REPORTED_RE.search(quote if isinstance(quote, str) else "")
+    if match:
+        return Problem(REPORTED_SPEECH, _reported_message(match.group(0)))
+    located = contiguous_span(turn_text, quote)
+    if located is not None and _lead_in_reports(located.flat, located.start):
+        return Problem(REPORTED_SPEECH, _reported_message("引言"))
+    return None
+
+
+def _reported_message(frame: str) -> str:
+    return (f"這句話是在轉述別人的說法（「{frame}」），不是這位說話者自己的主張；"
+            f"不要把它寫成他的主張，要寫請以「轉述…」開頭")
+
+
+def _lead_in_reports(flat: str, start: int) -> bool:
+    """quote 前面緊接著的引言（以冒號結尾）是不是在說「接下來是別人的說法」。"""
+    lead = _LEAD_IN_RE.search(flat[:start])
+    return bool(lead and (_LEAD_IN_FRAME_RE.search(lead.group(0)) or _REPORTED_RE.search(lead.group(0))))
 
 
 def _question_problem(is_question: bool, text: str) -> Problem | None:
