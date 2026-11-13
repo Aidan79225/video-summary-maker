@@ -175,7 +175,7 @@ uv run python manage.py remove_video yt-jNQXAC9IVRw --force     # 緊急下架�
 
 **結果落地之前先過 `check_speaker_result`**（`save_result` 在動資料庫與檔案之前呼叫；不合契約就丟 `JobFailed`：文章不發佈、重跑時舊內容原封不動、下次重試仍然要求多人區分）。全部成立才通過：
 
-- 結果自己說 `speaker_mode` 是 `diarize`（舊版 GPU 的單人或逐句標記格式會說明「GPU 很可能還沒更新」）、`video_id` 是這支影片的；
+- 結果自己說 `speaker_mode` 是 `diarize`（舊版 GPU 的單人或逐句標記格式會說明「GPU 很可能還沒更新」）、`video_id` 與 `source_url` 都要有（缺了一樣說明 GPU 可能還沒更新）、而且都是這支影片的（`source_url` 只比影片 id，短網址或多一個時間參數都算同一支）；
 - `diarization.status` 是 `ok` 或 `warn`、至少找到一位，`requested_speakers` 跟我們送出的一樣（自動是 `null`）；
 - `speakers` 1～12 位、編號 `S1`… 不重複、`kind` 是 `participant` 或 `minor`、至少一位 `participant`；`label` 只能是程式給的中性稱呼（participant 是「發言者 A」「發言者 B」…，minor 是「其他聲音 1」…，形狀要跟 `kind` 一致）：人名、「主持人」這類的字一律拒絕，網頁上顯示的名字只來自操作者的 `label_video`；
 - 名單與區分報告互相對得上：`found_speakers`／`minor_speakers` 就是名單裡 participant／minor 的人數；participant 不超過 8 位、指定 2 人以上時至少 2 位（這兩種情況 GPU 會直接判定不可靠、不產出結果，還是被送過來就是兩邊版本沒對上）；`kept_points` 不超過 `proposed_points`；每位至少說過一段（`turns` ≥ 1）、`first_seen` 不晚於 `last_seen`；每位的秒數加起來不超過 `speech_seconds`（各自四捨五入到小數一位的誤差不算）。**警告也由 Pi 自己從名單算**：人數與要求不符（`count_mismatch`）、無法判斷的說話時間超過 25%（`high_unassigned`）、其他聲音 4 個以上（`many_minor`）、自動模式只找到一位（`single_found`）；GPU 沒給的補上、狀態改成 `warn`（網站的警示條看狀態，不能只信 GPU 有沒有說）；

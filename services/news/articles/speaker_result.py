@@ -23,7 +23,7 @@ from typing import NoReturn
 
 from .gpu_client import JobFailed
 from .speakers import PLACEHOLDER, SPEAKER_ID, UNDECIDABLE
-from .youtube_source import clean_text, video_id_from_ivod_id
+from .youtube_source import UrlRejected, clean_text, parse_video_url, video_id_from_ivod_id
 
 MODE = "diarize"
 
@@ -43,6 +43,7 @@ BULLET_LENGTH = 300
 MAX_BULLET_POINTS = 4       # 一頁的條列只放前幾個重點（GPU 的 conversation.MAX_BULLETS）
 DETAIL_LENGTH = 8000
 DESCRIPTION_LENGTH = 120
+URL_LENGTH = 500            # 與 Article.ivod_url 的 max_length 一樣
 MAX_SECONDS = 24 * 3600     # 一天；影片上限是 --max-minutes（預設 180 分鐘），遠遠不到
 MAX_COUNT = 100_000         # 發言段落編號、段落數、重點數
 MAX_REQUESTED = 20          # 與 add_video --speakers 的上限一樣
@@ -335,7 +336,7 @@ def check_speaker_result(article, payload: object) -> SpeakerResult:
 
     在 save_result 動資料庫與檔案之前呼叫。全部成立才通過：
       1. 結果自己說是多人模式（speaker_mode == "diarize"），不是舊版 GPU 的單人或逐句標記格式；
-      2. 結果的 video_id（有給的話）是這支影片的；diarization 的狀態是 ok／warn、至少找到一位說話者，而且
+      2. 結果的 video_id 與 source_url 都要有、而且都是這支影片的；diarization 的狀態是 ok／warn、至少找到一位說話者，而且
          requested_speakers 跟我們送出去的一樣（自動＝None，指定人數＝那個數字）：接回了另一種設定的工作時會對不上；
       3. speakers 是 1～12 位、編號不重複、種類是 participant／minor、至少一位 participant；稱呼（label）只能是
          程式給的中性形狀（participant＝「發言者 A」…、minor＝「其他聲音 1」…，形狀要跟種類一致）：人名、
@@ -390,13 +391,30 @@ def check_speaker_result(article, payload: object) -> SpeakerResult:
 
 
 def _check_video(article, payload: dict) -> None:
-    """結果自己說的 video_id 要是這支影片的：拿到另一支影片的說話者清單，比任何一個格式錯誤都更危險。"""
+    """結果自己說的 video_id 與 source_url 都要有，而且都是這支影片的。
+
+    拿到另一支影片的說話者清單，比任何一個格式錯誤都更危險；說不出自己是哪一支影片的結果，更沒有理由相信它。
+    GPU 一定會給：video_id 是它處理的那支影片，source_url 是送給它的網址（我們送的是正規網址）。缺了就是兩邊的
+    版本沒對上，說明 GPU 可能還沒更新。source_url 只比影片 id，不比整個字串：多一個時間或清單參數、短網址都還是
+    同一支影片。
+    """
+    expected = video_id_from_ivod_id(getattr(article, "ivod_id", "") or "")
     got = payload.get("video_id")
     if got is None:
-        return
-    expected = video_id_from_ivod_id(getattr(article, "ivod_id", "") or "")
+        _fail_old("沒有 video_id")
     if not isinstance(got, str) or got != expected:
         _fail(f"結果是另一支影片的（video_id 是 {_show(got)}，這支是 {_show(expected)}）")
+    url = payload.get("source_url")
+    if url is None:
+        _fail_old("沒有 source_url")
+    if not isinstance(url, str) or len(url) > URL_LENGTH:
+        _fail(f"source_url 要是這支影片的網址（不超過 {URL_LENGTH} 個字），不是 {_show(url)}")
+    try:
+        seen = parse_video_url(clean_text(url)).video_id
+    except UrlRejected:
+        _fail(f"source_url 不是 YouTube 單一影片的網址：{_show(url)}")
+    if seen != expected:
+        _fail(f"結果是另一支影片的（source_url 指到 {_show(seen)}，這支是 {_show(expected)}）")
 
 
 def _check_transcript(raw: object, listed: set[str]) -> tuple[str, list[_Line]]:

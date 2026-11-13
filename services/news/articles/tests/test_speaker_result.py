@@ -23,7 +23,7 @@ from articles.speaker_result import (
     requested_speaker_count,
     with_pi_fields,
 )
-from articles.tests.speaker_support import rebuild, rendered
+from articles.tests.speaker_support import rebuild, rendered, video_keys
 
 CONTRACT = json.loads((Path(__file__).parent / "fixtures" / "speaker_contract_v1.json").read_text("utf-8"))
 NOT_UPDATED = "還沒更新"
@@ -201,8 +201,59 @@ class EchoTests(SimpleTestCase):
 
     def test_a_result_for_this_video_passes_whatever_the_other_ids_look_like(self):
         payload = good()
-        payload["video_id"] = "-abcdefghij"
+        payload.update(video_keys("-abcdefghij"))
         check_speaker_result(video(ivod_id="yt--abcdefghij"), payload)
+
+    def test_a_result_that_cannot_say_which_video_it_is_for_is_refused(self):
+        """攔的 bug：沒有 video_id 的結果被當成「對的那支」收下，拿到別支影片的說話者清單也看不出來。
+        契約範例與 GPU 一定會給；沒有就是版本沒對上。"""
+        for missing in (None, "gone"):
+            with self.subTest(video_id=missing):
+                payload = good()
+                if missing is None:
+                    payload["video_id"] = None
+                else:
+                    del payload["video_id"]
+                message = self.fails(payload, NOT_UPDATED)
+                self.assertIn("video_id", message)
+
+    def test_the_source_url_has_to_be_there_and_point_at_this_video(self):
+        payload = good()
+        del payload["source_url"]
+        self.assertIn("source_url", self.fails(payload, NOT_UPDATED))
+        payload["source_url"] = None
+        self.assertIn("source_url", self.fails(payload, NOT_UPDATED))
+        for other in ("https://www.youtube.com/watch?v=zzzzzzzzzzz", "https://youtu.be/zzzzzzzzzzz",
+                      "https://www.youtube.com/shorts/zzzzzzzzzzz"):
+            with self.subTest(source_url=other):
+                payload["source_url"] = other
+                self.assertIn("另一支影片", self.fails(payload, "source_url"))
+        for junk in ("", "   ", 5, ["https://www.youtube.com/watch?v=abcdefghijk"], {"u": 1}, True,
+                     "https://example.com/watch?v=abcdefghijk", "https://www.youtube.com/watch",
+                     "https://www.youtube.com/playlist?list=PLabc", "javascript:alert(1)", "https://y" + "x" * 3000,
+                     "https://www.youtube.com/watch?v=abcdefghijk&" + "x" * 600,        # 這支影片的網址，但長得離譜
+                     "https://www.youtube.com/watch?v=abcdefghijk https://www.youtube.com/watch?v=zzzzzzzzzzz"):
+            with self.subTest(source_url=junk):
+                payload["source_url"] = junk
+                self.fails(payload, "source_url")
+
+    def test_every_way_of_writing_this_videos_address_is_accepted(self):
+        """GPU 交出的是送給它的網址；多一個時間或清單參數、短網址都還是這支影片。"""
+        for url in ("https://www.youtube.com/watch?v=abcdefghijk", "https://youtu.be/abcdefghijk",
+                    "https://www.youtube.com/watch?v=abcdefghijk&t=5s", "https://m.youtube.com/watch?v=abcdefghijk",
+                    "https://www.youtube.com/watch?v=abcdefghijk&list=PLabcdef", "abcdefghijk"):
+            with self.subTest(source_url=url):
+                payload = good()
+                payload["source_url"] = url
+                check_speaker_result(video(), payload)
+
+    def test_the_address_in_the_error_cannot_carry_control_characters_to_the_terminal(self):
+        payload = good()
+        payload["source_url"] = "https://evil.example/\x1b[2J\u202e"
+        with self.assertRaises(JobFailed) as caught:
+            check_speaker_result(video(), payload)
+        self.assertNotIn("\x1b", str(caught.exception))
+        self.assertNotIn("\u202e", str(caught.exception))
 
     def test_a_row_whose_id_is_not_a_video_id_cannot_match_any_result(self):
         with self.assertRaises(JobFailed):

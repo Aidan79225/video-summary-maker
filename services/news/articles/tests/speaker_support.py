@@ -11,6 +11,8 @@ import threading
 from datetime import date
 from pathlib import Path
 
+from articles.youtube_source import canonical_url
+
 CONTRACT = json.loads((Path(__file__).parent / "fixtures" / "speaker_contract_v1.json").read_text("utf-8"))
 # 契約範例的影片 id（結果裡的 video_id）
 CONTRACT_VIDEO = CONTRACT["result"]["video_id"]
@@ -61,10 +63,15 @@ def rebuild(slide: dict) -> dict:
     return slide
 
 
+def video_keys(video_id: str) -> dict:
+    """結果裡說「我是哪一支影片」的兩個鍵：video_id 與 source_url（GPU 交出的是送給它的那個正規網址）。"""
+    return {"video_id": video_id, "source_url": canonical_url(video_id)}
+
+
 def diarized_result(video_id: str = CONTRACT_VIDEO, requested: int | None = None) -> dict:
     """契約範例的多人結果，改成指定那支影片的、指定人數（None＝自動）的版本。每次回傳新的副本。"""
     payload = copy.deepcopy(CONTRACT["result"])
-    payload["video_id"] = video_id
+    payload.update(video_keys(video_id))
     payload["diarization"]["requested_speakers"] = requested
     return payload
 

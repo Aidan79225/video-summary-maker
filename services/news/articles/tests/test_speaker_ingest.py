@@ -25,7 +25,7 @@ from articles.ingest import process_articles, register_video, save_result, wants
 from articles.models import Article, ArticleSource, ArticleStatus, Slide
 from articles.speakers import render_placeholders
 from articles.tests import test_youtube_ingest as yt
-from articles.tests.speaker_support import CONTRACT, CONTRACT_VIDEO, diarized_result, rebuild
+from articles.tests.speaker_support import CONTRACT, CONTRACT_VIDEO, diarized_result, rebuild, video_keys
 
 VIDEO = CONTRACT_VIDEO
 IMAGE = b"\x00\x01fake-webp\xff"
@@ -124,7 +124,7 @@ class PublishedResultTests(IngestCase):
         payload = with_images(diarized_result())
         payload["brief"] = {"one_liner": "GPU 偷偷產的摘要卡", "key_numbers": [], "asks": ["要求"]}
         again = register(video_id="x0000000001")
-        save_result(again, payload | {"video_id": "x0000000001"})
+        save_result(again, payload | video_keys("x0000000001"))
         self.assertIsNone(Article.objects.get(pk=again.pk).brief)
         self.assertIsNone(self.article.brief)
 
@@ -163,7 +163,7 @@ class PublishedResultTests(IngestCase):
         dirty["slides"][0]["points"][0]["text"] = "詢問\u202e目前補助\x07政策的成效"
         dirty["slides"][0]["points"][0]["evidence"] = "先請教\u202e您怎麼看目前的補助政策"
         article = register(video_id="x0000000002")
-        save_result(article, dirty | {"video_id": "x0000000002"})
+        save_result(article, dirty | video_keys("x0000000002"))
         stored = Article.objects.get(pk=article.pk)
         slide = stored.slides.get(index=1)
         for text in (stored.transcript_text, *slide.bullets, slide.detail,
