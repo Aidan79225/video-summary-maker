@@ -1,0 +1,374 @@
+{
+ "fixture": "F07_p4_asr_numbers_and_false_flags",
+ "about": "points of call.json",
+ "points": [
+  {
+   "page": 1,
+   "number": 1,
+   "cited_turn": 1,
+   "text": "說明目前 bug backlog 剩餘 23 個，其中 P0 嚴重問題有 4 個",
+   "context": [],
+   "quote": "bug的部分就是現在backlog現在還有23個 其中P0有4個",
+   "scorer_category": "unmatched",
+   "cited_speaker": "S2",
+   "hybrid_decision": "kept_paraphrase",
+   "reference_v1b_v2_v3": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 1,
+    "reanchored": false
+   },
+   "reference_v1b_v2_v3_fragment_quote_guard": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 1,
+    "reanchored": false
+   }
+  },
+  {
+   "page": 1,
+   "number": 2,
+   "cited_turn": 3,
+   "text": "指出離線同步需下週完成，因涉及資料庫結構修改",
+   "context": [],
+   "quote": "離線同步比較麻煩 可能要拖到下禮拜 因為牽涉到資料庫的結構要改",
+   "scorer_category": "unmatched",
+   "cited_speaker": "S2",
+   "hybrid_decision": "kept_paraphrase",
+   "reference_v1b_v2_v3": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 3,
+    "reanchored": false
+   },
+   "reference_v1b_v2_v3_fragment_quote_guard": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 3,
+    "reanchored": false
+   }
+  },
+  {
+   "page": 1,
+   "number": 3,
+   "cited_turn": 12,
+   "text": "建議將資料庫備份頻率從每天一次改為每小時一次",
+   "context": [],
+   "quote": "我們資料庫的備份現在一天只有一次 我想改成每小時一次",
+   "scorer_category": "unmatched",
+   "cited_speaker": "S2",
+   "hybrid_decision": "kept_paraphrase",
+   "reference_v1b_v2_v3": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 12,
+    "reanchored": false
+   },
+   "reference_v1b_v2_v3_fragment_quote_guard": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 12,
+    "reanchored": false
+   }
+  },
+  {
+   "page": 1,
+   "number": 4,
+   "cited_turn": 12,
+   "text": "說明上月曾發生客戶刪除門市資料，僅能還原至前一日",
+   "context": [],
+   "quote": "上個月有一個客戶不小心刪掉整個門市的資料 我們只能還原到前一天晚上",
+   "scorer_category": "hallucinated",
+   "cited_speaker": "S2",
+   "hybrid_decision": "kept_paraphrase",
+   "reference_v1b_v2_v3": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 12,
+    "reanchored": false
+   },
+   "reference_v1b_v2_v3_fragment_quote_guard": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 12,
+    "reanchored": false
+   }
+  },
+  {
+   "page": 2,
+   "number": 1,
+   "cited_turn": 14,
+   "text": "指出青蛙診所試用期將滿，對方要求續約但希望降價",
+   "context": [],
+   "quote": "青蛙診所試用30天快到期了 他們說想續約但是要砍價",
+   "scorer_category": "unmatched",
+   "cited_speaker": "S3",
+   "hybrid_decision": "dropped:clause_pronoun",
+   "reference_v1b_v2_v3": {
+    "status": "dropped",
+    "code": "clause_pronoun",
+    "anchor_turn": null,
+    "reanchored": null
+   },
+   "reference_v1b_v2_v3_fragment_quote_guard": {
+    "status": "dropped",
+    "code": "clause_pronoun",
+    "anchor_turn": null,
+    "reanchored": null
+   }
+  },
+  {
+   "page": 2,
+   "number": 2,
+   "cited_turn": 19,
+   "text": "反對直接降價，擔心開先例後其他客戶也會要求降價",
+   "context": [],
+   "quote": "所以我才說不能打啦 一旦開了先例 其他客戶都會來要",
+   "scorer_category": "unmatched",
+   "cited_speaker": "S3",
+   "hybrid_decision": "kept_paraphrase",
+   "reference_v1b_v2_v3": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 19,
+    "reanchored": false
+   },
+   "reference_v1b_v2_v3_fragment_quote_guard": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 19,
+    "reanchored": false
+   }
+  },
+  {
+   "page": 2,
+   "number": 3,
+   "cited_turn": 26,
+   "text": "回應客戶需求，建議推出月費 2980 的輕量版方案",
+   "context": [],
+   "quote": "海膽方案現在好幾個客戶都在問有沒有便宜一點的 我覺得要出一個輕量版",
+   "scorer_category": "correct",
+   "cited_speaker": "S3",
+   "hybrid_decision": "dropped:question_stated_as_fact",
+   "reference_v1b_v2_v3": {
+    "status": "dropped",
+    "code": "question_stated_as_fact",
+    "anchor_turn": null,
+    "reanchored": null
+   },
+   "reference_v1b_v2_v3_fragment_quote_guard": {
+    "status": "dropped",
+    "code": "question_stated_as_fact",
+    "anchor_turn": null,
+    "reanchored": null
+   }
+  },
+  {
+   "page": 2,
+   "number": 4,
+   "cited_turn": 33,
+   "text": "說明對手豆芽菜最低方案為 1990，且無客服電話與完整功能",
+   "context": [],
+   "quote": "豆芽菜他們最低的方案是月費1990 也沒有客服電話 只有一個信箱",
+   "scorer_category": "unmatched",
+   "cited_speaker": "S3",
+   "hybrid_decision": "kept_paraphrase",
+   "reference_v1b_v2_v3": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 33,
+    "reanchored": false
+   },
+   "reference_v1b_v2_v3_fragment_quote_guard": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 33,
+    "reanchored": false
+   }
+  },
+  {
+   "page": 3,
+   "number": 1,
+   "cited_turn": 38,
+   "text": "告知老街茶行因店員操作困難欲退租，月費為 6800",
+   "context": [],
+   "quote": "老街茶行說他們要退租 月費6800 理由是店員學不會",
+   "scorer_category": "unmatched",
+   "cited_speaker": "S3",
+   "hybrid_decision": "kept_paraphrase",
+   "reference_v1b_v2_v3": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 38,
+    "reanchored": false
+   },
+   "reference_v1b_v2_v3_fragment_quote_guard": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 38,
+    "reanchored": false
+   }
+  },
+  {
+   "page": 3,
+   "number": 2,
+   "cited_turn": 41,
+   "text": "建議製作教學影片以解決店員操作困難問題，取代頻繁現場指導",
+   "context": [],
+   "quote": "店員學不會這個問題 你有沒有想過做教學影片 我覺得比一直跑現場有效",
+   "scorer_category": "hallucinated",
+   "cited_speaker": "S1",
+   "hybrid_decision": "rescued_quote",
+   "reference_v1b_v2_v3": {
+    "status": "dropped",
+    "code": "unsupported",
+    "anchor_turn": null,
+    "reanchored": null
+   },
+   "reference_v1b_v2_v3_fragment_quote_guard": {
+    "status": "dropped",
+    "code": "unsupported",
+    "anchor_turn": null,
+    "reanchored": null
+   }
+  },
+  {
+   "page": 3,
+   "number": 3,
+   "cited_turn": 44,
+   "text": "統計本週客服電話共 47 通，其中 18 通與離線同步問題相關",
+   "context": [],
+   "quote": "客服的數字這個禮拜一共接了47通電話 其中18通是離線同步的問題",
+   "scorer_category": "correct",
+   "cited_speaker": "S3",
+   "hybrid_decision": "kept_paraphrase",
+   "reference_v1b_v2_v3": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 44,
+    "reanchored": false
+   },
+   "reference_v1b_v2_v3_fragment_quote_guard": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 44,
+    "reanchored": false
+   }
+  },
+  {
+   "page": 3,
+   "number": 4,
+   "cited_turn": 47,
+   "text": "指出多數店長自行重開機解決問題，導致客服未接到相關電話",
+   "context": [],
+   "quote": "大部分的店長會自己重開機 重開機有時候就好了 所以沒有人打電話",
+   "scorer_category": "hallucinated",
+   "cited_speaker": "S2",
+   "hybrid_decision": "rescued_quote",
+   "reference_v1b_v2_v3": {
+    "status": "dropped",
+    "code": "unsupported",
+    "anchor_turn": null,
+    "reanchored": null
+   },
+   "reference_v1b_v2_v3_fragment_quote_guard": {
+    "status": "dropped",
+    "code": "unsupported",
+    "anchor_turn": null,
+    "reanchored": null
+   }
+  },
+  {
+   "page": 4,
+   "number": 1,
+   "cited_turn": 51,
+   "text": "說明目前燒錢速度為每月 62 萬，現金流僅剩 7 個月，需在九月前融資",
+   "context": [],
+   "quote": "burn rate目前一個月62萬 runway只剩7個月 所以我們一定要在九月前拿到錢",
+   "scorer_category": "unmatched",
+   "cited_speaker": "S1",
+   "hybrid_decision": "kept_paraphrase",
+   "reference_v1b_v2_v3": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 51,
+    "reanchored": false
+   },
+   "reference_v1b_v2_v3_fragment_quote_guard": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 51,
+    "reanchored": false
+   }
+  },
+  {
+   "page": 4,
+   "number": 2,
+   "cited_turn": 57,
+   "text": "確認鯨落創投意向投資 2000 萬，公司估值為 1.2 億",
+   "context": [],
+   "quote": "鯨落創投的合夥人上禮拜跟我說 他們願意投2000萬 估值1.2億",
+   "scorer_category": "unmatched",
+   "cited_speaker": "S1",
+   "hybrid_decision": "kept_paraphrase",
+   "reference_v1b_v2_v3": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 57,
+    "reanchored": false
+   },
+   "reference_v1b_v2_v3_fragment_quote_guard": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 57,
+    "reanchored": false
+   }
+  },
+  {
+   "page": 4,
+   "number": 3,
+   "cited_turn": 67,
+   "text": "詢問資深後端薪資，得知市場價為 11 至 13 萬，並有人願於 15 日前回覆",
+   "context": [],
+   "quote": "資深後端月薪要多少 市場價大概11萬到13萬 我認識一個人 他願意15號之前給答覆",
+   "scorer_category": "unmatched",
+   "cited_speaker": "S2",
+   "hybrid_decision": "dropped:bad_quote",
+   "reference_v1b_v2_v3": {
+    "status": "dropped",
+    "code": "unsupported",
+    "anchor_turn": null,
+    "reanchored": null
+   },
+   "reference_v1b_v2_v3_fragment_quote_guard": {
+    "status": "dropped",
+    "code": "bad_quote",
+    "anchor_turn": null,
+    "reanchored": null
+   }
+  },
+  {
+   "page": 4,
+   "number": 4,
+   "cited_turn": 71,
+   "text": "確認山羌版將於 3 月 28 日上線，並會於前一日完成完整回歸測試",
+   "context": [],
+   "quote": "山羌版我排三月二十八號上線 前一天會在staging跑完整回歸",
+   "scorer_category": "unmatched",
+   "cited_speaker": "S2",
+   "hybrid_decision": "kept_paraphrase",
+   "reference_v1b_v2_v3": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 71,
+    "reanchored": false
+   },
+   "reference_v1b_v2_v3_fragment_quote_guard": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 71,
+    "reanchored": false
+   }
+  }
+ ]
+}

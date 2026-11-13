@@ -1,0 +1,176 @@
+{
+ "fixture": "F02_prod_retry_debate",
+ "about": "points of call_first.json (attempt 1)",
+ "points": [
+  {
+   "page": 1,
+   "number": 1,
+   "cited_turn": 0,
+   "text": "將二百六十格停車格改為有隔離的自行車道，施工分三個階段進行。",
+   "context": [],
+   "quote": null,
+   "scorer_category": "correct",
+   "cited_speaker": "S1",
+   "hybrid_decision": null,
+   "reference_v1b_v2_v3": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 0,
+    "reanchored": false
+   }
+  },
+  {
+   "page": 1,
+   "number": 2,
+   "cited_turn": 1,
+   "text": "預估營業額會掉百分之十二，這是店家自己填的問卷結果。",
+   "context": [],
+   "quote": null,
+   "scorer_category": "correct",
+   "cited_speaker": "S2",
+   "hybrid_decision": null,
+   "reference_v1b_v2_v3": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 1,
+    "reanchored": false
+   }
+  },
+  {
+   "page": 2,
+   "number": 1,
+   "cited_turn": 3,
+   "text": "兩百一十份問卷在店門口發放，不能拿來當政策依據。",
+   "context": [],
+   "quote": null,
+   "scorer_category": "unmatched",
+   "cited_speaker": "S2",
+   "hybrid_decision": null,
+   "reference_v1b_v2_v3": {
+    "status": "dropped",
+    "code": "number_mismatch",
+    "anchor_turn": null,
+    "reanchored": null
+   }
+  },
+  {
+   "page": 2,
+   "number": 2,
+   "cited_turn": 4,
+   "text": "市府委託的一千兩百人抽樣中，七成贊成改自行車道。",
+   "context": [],
+   "quote": null,
+   "scorer_category": "correct",
+   "cited_speaker": "S1",
+   "hybrid_decision": null,
+   "reference_v1b_v2_v3": {
+    "status": "slide_dropped",
+    "code": null,
+    "anchor_turn": 4,
+    "reanchored": false
+   }
+  },
+  {
+   "page": 3,
+   "number": 1,
+   "cited_turn": 8,
+   "text": "試辦半年事故下降百分之三十八，單車流量成長三點一倍。",
+   "context": [],
+   "quote": null,
+   "scorer_category": "correct",
+   "cited_speaker": "S1",
+   "hybrid_decision": null,
+   "reference_v1b_v2_v3": {
+    "status": "slide_dropped",
+    "code": null,
+    "anchor_turn": 8,
+    "reanchored": false
+   }
+  },
+  {
+   "page": 3,
+   "number": 2,
+   "cited_turn": 9,
+   "text": "榕溪路平日單車使用率只有百分之四，拿掉車位客人會走。",
+   "context": [],
+   "quote": null,
+   "scorer_category": "correct",
+   "cited_speaker": "S2",
+   "hybrid_decision": null,
+   "reference_v1b_v2_v3": {
+    "status": "dropped",
+    "code": "question_stated_as_fact",
+    "anchor_turn": null,
+    "reanchored": null
+   }
+  },
+  {
+   "page": 4,
+   "number": 1,
+   "cited_turn": 19,
+   "text": "一公里工程費要二千六百萬，施工八個月店家房租誰付。",
+   "context": [],
+   "quote": null,
+   "scorer_category": "correct",
+   "cited_speaker": "S2",
+   "hybrid_decision": null,
+   "reference_v1b_v2_v3": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 19,
+    "reanchored": false
+   }
+  },
+  {
+   "page": 4,
+   "number": 2,
+   "cited_turn": 20,
+   "text": "用標線加膠分隔墩，一公里只要三百八十萬，可出示報價單。",
+   "context": [],
+   "quote": null,
+   "scorer_category": "correct",
+   "cited_speaker": "S1",
+   "hybrid_decision": null,
+   "reference_v1b_v2_v3": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 20,
+    "reanchored": false
+   }
+  },
+  {
+   "page": 5,
+   "number": 1,
+   "cited_turn": 38,
+   "text": "七十歲以上住戶買菜看醫需停車，走到哪裡都是坡。",
+   "context": [],
+   "quote": null,
+   "scorer_category": "unmatched",
+   "cited_speaker": "S2",
+   "hybrid_decision": null,
+   "reference_v1b_v2_v3": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 38,
+    "reanchored": false
+   }
+  },
+  {
+   "page": 5,
+   "number": 2,
+   "cited_turn": 41,
+   "text": "十二格身障車位會增加到二十格，違規直接拖吊。",
+   "context": [],
+   "quote": null,
+   "scorer_category": "merged",
+   "cited_speaker": "S1",
+   "hybrid_decision": null,
+   "reference_v1b_v2_v3": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 41,
+    "reanchored": false
+   }
+  }
+ ]
+}

@@ -1,0 +1,183 @@
+{
+ "fixture": "F02_prod_retry_debate",
+ "about": "points of call.json",
+ "points": [
+  {
+   "page": 1,
+   "number": 1,
+   "cited_turn": 4,
+   "text": "質疑兩百出頭的樣本不足以推論營業額將掉百分之十二。",
+   "context": [],
+   "quote": null,
+   "scorer_category": "misattributed",
+   "cited_speaker": "S1",
+   "hybrid_decision": null,
+   "hand_adjudication": [
+    {
+     "truth": "false_positive",
+     "kind": "echo_legit",
+     "note": "S1 T4 restates the figure inside his own argument"
+    }
+   ],
+   "reference_v1b_v2_v3": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 4,
+    "reanchored": false
+   }
+  },
+  {
+   "page": 1,
+   "number": 2,
+   "cited_turn": 5,
+   "text": "反駁市府抽樣對象非榕溪路店家，認為問卷在店門口發給店家才正確。",
+   "context": [],
+   "quote": null,
+   "scorer_category": "unmatched",
+   "cited_speaker": "S2",
+   "hybrid_decision": null,
+   "reference_v1b_v2_v3": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 5,
+    "reanchored": false
+   }
+  },
+  {
+   "page": 2,
+   "number": 1,
+   "cited_turn": 8,
+   "text": "陳述試辦半年後事故下降百分之三十八，單車流量成長三點一倍。",
+   "context": [],
+   "quote": null,
+   "scorer_category": "correct",
+   "cited_speaker": "S1",
+   "hybrid_decision": null,
+   "reference_v1b_v2_v3": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 8,
+    "reanchored": false
+   }
+  },
+  {
+   "page": 2,
+   "number": 2,
+   "cited_turn": 9,
+   "text": "質疑單車流量從零開始算，指出平日使用率僅有百分之四。",
+   "context": [],
+   "quote": null,
+   "scorer_category": "unmatched",
+   "cited_speaker": "S2",
+   "hybrid_decision": null,
+   "reference_v1b_v2_v3": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 9,
+    "reanchored": false
+   }
+  },
+  {
+   "page": 3,
+   "number": 1,
+   "cited_turn": 19,
+   "text": "詢問一公里工程費要二千六百萬，施工八個月期間店家損失誰付。",
+   "context": [],
+   "quote": null,
+   "scorer_category": "correct",
+   "cited_speaker": "S2",
+   "hybrid_decision": null,
+   "reference_v1b_v2_v3": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 19,
+    "reanchored": false
+   }
+  },
+  {
+   "page": 3,
+   "number": 2,
+   "cited_turn": 28,
+   "text": "說明每段只封兩個月夜間施工，補償金每家每月一萬二已編預算。",
+   "context": [],
+   "quote": null,
+   "scorer_category": "unmatched",
+   "cited_speaker": "S1",
+   "hybrid_decision": null,
+   "reference_v1b_v2_v3": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 28,
+    "reanchored": false
+   }
+  },
+  {
+   "page": 4,
+   "number": 1,
+   "cited_turn": 38,
+   "text": "詢問七十歲以上住戶買菜看醫藥，若無車位需走到哪裡。",
+   "context": [],
+   "quote": null,
+   "scorer_category": "unmatched",
+   "cited_speaker": "S2",
+   "hybrid_decision": null,
+   "reference_v1b_v2_v3": {
+    "status": "dropped",
+    "code": "negation_mismatch",
+    "anchor_turn": null,
+    "reanchored": null
+   }
+  },
+  {
+   "page": 4,
+   "number": 2,
+   "cited_turn": 41,
+   "text": "說明十二格身障車位全保留並增至二十格，違規將拖吊。",
+   "context": [],
+   "quote": null,
+   "scorer_category": "misattributed",
+   "cited_speaker": "S1",
+   "hybrid_decision": null,
+   "reference_v1b_v2_v3": {
+    "status": "slide_dropped",
+    "code": null,
+    "anchor_turn": 41,
+    "reanchored": false
+   }
+  },
+  {
+   "page": 5,
+   "number": 1,
+   "cited_turn": 42,
+   "text": "詢問九十趟貨車臨停卸貨若無車位，貨車將停在車道上。",
+   "context": [],
+   "quote": null,
+   "scorer_category": "correct",
+   "cited_speaker": "S2",
+   "hybrid_decision": null,
+   "reference_v1b_v2_v3": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 42,
+    "reanchored": false
+   }
+  },
+  {
+   "page": 5,
+   "number": 2,
+   "cited_turn": 45,
+   "text": "說明已與十一家物流業者談妥夜間配送，時間表會貼在網站。",
+   "context": [],
+   "quote": null,
+   "scorer_category": "unmatched",
+   "cited_speaker": "S1",
+   "hybrid_decision": null,
+   "reference_v1b_v2_v3": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 45,
+    "reanchored": false
+   }
+  }
+ ]
+}

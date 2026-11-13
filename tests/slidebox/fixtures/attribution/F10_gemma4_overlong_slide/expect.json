@@ -1,0 +1,1117 @@
+{
+ "fixture": "F10_gemma4_overlong_slide",
+ "about": "points of call.json",
+ "points": [
+  {
+   "page": 1,
+   "number": 1,
+   "cited_turn": 0,
+   "text": "說明會議主要討論三件事：工程進度、客戶和資金",
+   "context": [],
+   "quote": "今天主要三件事 第一個是工程進度 第二個是客戶 第三個是錢",
+   "scorer_category": "unmatched",
+   "cited_speaker": "S1",
+   "hybrid_decision": "dropped:question_stated_as_fact",
+   "reference_v1b_v2_v3": {
+    "status": "dropped",
+    "code": "question_stated_as_fact",
+    "anchor_turn": null,
+    "reanchored": null
+   },
+   "reference_v1b_v2_v3_fragment_quote_guard": {
+    "status": "dropped",
+    "code": "question_stated_as_fact",
+    "anchor_turn": null,
+    "reanchored": null
+   }
+  },
+  {
+   "page": 1,
+   "number": 2,
+   "cited_turn": 0,
+   "text": "提醒大家必須在一小時內結束會議",
+   "context": [],
+   "quote": "一個小時內要結束拜託大家 不要講太久好不好",
+   "scorer_category": "unmatched",
+   "cited_speaker": "S1",
+   "hybrid_decision": "dropped:question_stated_as_fact",
+   "reference_v1b_v2_v3": {
+    "status": "dropped",
+    "code": "question_stated_as_fact",
+    "anchor_turn": null,
+    "reanchored": null
+   },
+   "reference_v1b_v2_v3_fragment_quote_guard": {
+    "status": "dropped",
+    "code": "question_stated_as_fact",
+    "anchor_turn": null,
+    "reanchored": null
+   }
+  },
+  {
+   "page": 1,
+   "number": 3,
+   "cited_turn": 1,
+   "text": "報告上禮拜sprint 14已完成，關閉了31張ticket",
+   "context": [],
+   "quote": "上禮拜sprint 14收掉了 我們關掉31張ticket",
+   "scorer_category": "unmatched",
+   "cited_speaker": "S2",
+   "hybrid_decision": "kept_paraphrase",
+   "reference_v1b_v2_v3": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 1,
+    "reanchored": false
+   },
+   "reference_v1b_v2_v3_fragment_quote_guard": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 1,
+    "reanchored": false
+   }
+  },
+  {
+   "page": 1,
+   "number": 4,
+   "cited_turn": 1,
+   "text": "說明目前backlog還有23個，其中P0有4個，屬於較嚴重問題",
+   "context": [],
+   "quote": "還有23個 其中P0有4個 這個是比較嚴重的",
+   "scorer_category": "correct",
+   "cited_speaker": "S2",
+   "hybrid_decision": "kept_paraphrase",
+   "reference_v1b_v2_v3": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 1,
+    "reanchored": false
+   },
+   "reference_v1b_v2_v3_fragment_quote_guard": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 1,
+    "reanchored": false
+   }
+  },
+  {
+   "page": 2,
+   "number": 1,
+   "cited_turn": 3,
+   "text": "說明P0問題包括離線同步和權限問題",
+   "context": [],
+   "quote": "三個是離線同步的問題 還有一個是權限",
+   "scorer_category": "unmatched",
+   "cited_speaker": "S2",
+   "hybrid_decision": "dropped:number_mismatch",
+   "reference_v1b_v2_v3": {
+    "status": "dropped",
+    "code": "number_mismatch",
+    "anchor_turn": null,
+    "reanchored": null
+   },
+   "reference_v1b_v2_v3_fragment_quote_guard": {
+    "status": "dropped",
+    "code": "number_mismatch",
+    "anchor_turn": null,
+    "reanchored": null
+   }
+  },
+  {
+   "page": 2,
+   "number": 2,
+   "cited_turn": 3,
+   "text": "指出離線同步問題較麻煩，可能需要延到下禮拜",
+   "context": [],
+   "quote": "離線同步比較麻煩 可能要拖到下禮拜",
+   "scorer_category": "unmatched",
+   "cited_speaker": "S2",
+   "hybrid_decision": "kept_paraphrase",
+   "reference_v1b_v2_v3": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 3,
+    "reanchored": false
+   },
+   "reference_v1b_v2_v3_fragment_quote_guard": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 3,
+    "reanchored": false
+   }
+  },
+  {
+   "page": 2,
+   "number": 3,
+   "cited_turn": 5,
+   "text": "報告本週已將查詢API從820毫秒降到",
+   "context": [],
+   "quote": "latency的部分 我們這個禮拜已經把查詢的API從820毫秒降到",
+   "scorer_category": "correct",
+   "cited_speaker": "S2",
+   "hybrid_decision": "kept_paraphrase",
+   "reference_v1b_v2_v3": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 5,
+    "reanchored": false
+   },
+   "reference_v1b_v2_v3_fragment_quote_guard": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 5,
+    "reanchored": false
+   }
+  },
+  {
+   "page": 2,
+   "number": 4,
+   "cited_turn": 7,
+   "text": "說明查詢API已降至310毫秒",
+   "context": [],
+   "quote": "310毫秒了 大概這樣啦",
+   "scorer_category": "unmatched",
+   "cited_speaker": "S2",
+   "hybrid_decision": "dropped:number_mismatch",
+   "reference_v1b_v2_v3": {
+    "status": "dropped",
+    "code": "number_mismatch",
+    "anchor_turn": null,
+    "reanchored": null
+   },
+   "reference_v1b_v2_v3_fragment_quote_guard": {
+    "status": "dropped",
+    "code": "number_mismatch",
+    "anchor_turn": null,
+    "reanchored": null
+   }
+  },
+  {
+   "page": 2,
+   "number": 5,
+   "cited_turn": 8,
+   "text": "提到晴天洗衣分店資料無法對齊，導致老闆娘來電抱怨",
+   "context": [],
+   "quote": "資料一直對不起來 然後老闆娘昨天還打電話來罵我",
+   "scorer_category": "unmatched",
+   "cited_speaker": "S3",
+   "hybrid_decision": "kept_paraphrase",
+   "reference_v1b_v2_v3": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 8,
+    "reanchored": false
+   },
+   "reference_v1b_v2_v3_fragment_quote_guard": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 8,
+    "reanchored": false
+   }
+  },
+  {
+   "page": 3,
+   "number": 1,
+   "cited_turn": 9,
+   "text": "建議優先修復兩間分店的問題，確認OK後再推給其他分店",
+   "context": [],
+   "quote": "這兩間要優先 就是修完以後先給那兩間測 確認OK再推給其他分店",
+   "scorer_category": "unmatched",
+   "cited_speaker": "S1",
+   "hybrid_decision": "kept_paraphrase",
+   "reference_v1b_v2_v3": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 9,
+    "reanchored": false
+   },
+   "reference_v1b_v2_v3_fragment_quote_guard": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 9,
+    "reanchored": false
+   }
+  },
+  {
+   "page": 3,
+   "number": 2,
+   "cited_turn": 10,
+   "text": "提醒不要向客戶承諾禮拜五修好，實際可測試時間是下週二3/11",
+   "context": [],
+   "quote": "比較實際的是下週二3/11 你們不要跟客戶講禮拜五",
+   "scorer_category": "correct",
+   "cited_speaker": "S2",
+   "hybrid_decision": "kept_paraphrase",
+   "reference_v1b_v2_v3": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 10,
+    "reanchored": false
+   },
+   "reference_v1b_v2_v3_fragment_quote_guard": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 10,
+    "reanchored": false
+   }
+  },
+  {
+   "page": 3,
+   "number": 3,
+   "cited_turn": 11,
+   "text": "說明晴天洗衣老闆娘非常緊張，擔心開幕當天系統掛掉",
+   "context": [],
+   "quote": "他們老闆娘超緊張 就是怕開幕那天系統掛掉",
+   "scorer_category": "unmatched",
+   "cited_speaker": "S3",
+   "hybrid_decision": "kept_paraphrase",
+   "reference_v1b_v2_v3": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 11,
+    "reanchored": false
+   },
+   "reference_v1b_v2_v3_fragment_quote_guard": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 11,
+    "reanchored": false
+   }
+  },
+  {
+   "page": 3,
+   "number": 4,
+   "cited_turn": 12,
+   "text": "提出資料庫備份機制應從一天一次改為每小時一次",
+   "context": [],
+   "quote": "我們資料庫的備份現在一天只有一次 我想改成每小時一次",
+   "scorer_category": "unmatched",
+   "cited_speaker": "S2",
+   "hybrid_decision": "kept_paraphrase",
+   "reference_v1b_v2_v3": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 12,
+    "reanchored": false
+   },
+   "reference_v1b_v2_v3_fragment_quote_guard": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 12,
+    "reanchored": false
+   }
+  },
+  {
+   "page": 3,
+   "number": 5,
+   "cited_turn": 14,
+   "text": "報告目前MRR為38萬，比上個月多4萬2",
+   "context": [],
+   "quote": "目前MRR是38萬 比上個月多了4萬2",
+   "scorer_category": "unmatched",
+   "cited_speaker": "S3",
+   "hybrid_decision": "kept_paraphrase",
+   "reference_v1b_v2_v3": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 14,
+    "reanchored": false
+   },
+   "reference_v1b_v2_v3_fragment_quote_guard": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 14,
+    "reanchored": false
+   }
+  },
+  {
+   "page": 3,
+   "number": 6,
+   "cited_turn": 14,
+   "text": "說明青蛙診所試用期快到，希望續約但要求降價",
+   "context": [],
+   "quote": "青蛙診所試用30天快到期了 他們說想續約但是要砍價",
+   "scorer_category": "unmatched",
+   "cited_speaker": "S3",
+   "hybrid_decision": "kept_paraphrase",
+   "reference_v1b_v2_v3": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 14,
+    "reanchored": false
+   },
+   "reference_v1b_v2_v3_fragment_quote_guard": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 14,
+    "reanchored": false
+   }
+  },
+  {
+   "page": 3,
+   "number": 7,
+   "cited_turn": 19,
+   "text": "主張不要降價，改為贈送三個月的進階報表",
+   "context": [],
+   "quote": "我的想法是不要降價 改成送他們三個月的進階報表",
+   "scorer_category": "correct",
+   "cited_speaker": "S3",
+   "hybrid_decision": "kept_paraphrase",
+   "reference_v1b_v2_v3": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 19,
+    "reanchored": false
+   },
+   "reference_v1b_v2_v3_fragment_quote_guard": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 19,
+    "reanchored": false
+   }
+  },
+  {
+   "page": 3,
+   "number": 8,
+   "cited_turn": 23,
+   "text": "建議先製作簡單版，只放三張圖表，預計3月21號前完成",
+   "context": [],
+   "quote": "只放三張圖表 大概5個人天 3月21號前可以給你",
+   "scorer_category": "correct",
+   "cited_speaker": "S2",
+   "hybrid_decision": "kept_paraphrase",
+   "reference_v1b_v2_v3": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 23,
+    "reanchored": false
+   },
+   "reference_v1b_v2_v3_fragment_quote_guard": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 23,
+    "reanchored": false
+   }
+  },
+  {
+   "page": 3,
+   "number": 9,
+   "cited_turn": 24,
+   "text": "指出診所客戶只關心耗材庫存週轉和過期提醒等問題",
+   "context": [],
+   "quote": "只在乎耗材庫存週轉跟過期提醒 其他都不重要",
+   "scorer_category": "unmatched",
+   "cited_speaker": "S3",
+   "hybrid_decision": "kept_paraphrase",
+   "reference_v1b_v2_v3": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 24,
+    "reanchored": false
+   },
+   "reference_v1b_v2_v3_fragment_quote_guard": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 24,
+    "reanchored": false
+   }
+  },
+  {
+   "page": 3,
+   "number": 10,
+   "cited_turn": 25,
+   "text": "指示與青蛙診所談判時，不談折扣，而是以贈送報表作為加值",
+   "context": [],
+   "quote": "小安你拿去跟青蛙診所談 不打折 就說我們送報表 這是加值不是折扣",
+   "scorer_category": "unmatched",
+   "cited_speaker": "S1",
+   "hybrid_decision": "kept_paraphrase",
+   "reference_v1b_v2_v3": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 25,
+    "reanchored": false
+   },
+   "reference_v1b_v2_v3_fragment_quote_guard": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 25,
+    "reanchored": false
+   }
+  },
+  {
+   "page": 3,
+   "number": 11,
+   "cited_turn": 26,
+   "text": "建議推出月費2980的輕量版，以吸引更多小店客戶",
+   "context": [],
+   "quote": "我覺得要出一個輕量版 月費2980 這樣可以把小店拉進來",
+   "scorer_category": "correct",
+   "cited_speaker": "S3",
+   "hybrid_decision": "dropped:question_stated_as_fact",
+   "reference_v1b_v2_v3": {
+    "status": "dropped",
+    "code": "question_stated_as_fact",
+    "anchor_turn": null,
+    "reanchored": null
+   },
+   "reference_v1b_v2_v3_fragment_quote_guard": {
+    "status": "dropped",
+    "code": "question_stated_as_fact",
+    "anchor_turn": null,
+    "reanchored": null
+   }
+  },
+  {
+   "page": 3,
+   "number": 12,
+   "cited_turn": 27,
+   "text": "指出月費2980比標準版4800便宜近四成",
+   "context": [],
+   "quote": "月費2980喔 比標準版的4800便宜快四成",
+   "scorer_category": "misattributed",
+   "cited_speaker": "S1",
+   "hybrid_decision": "dropped:question_stated_as_fact",
+   "reference_v1b_v2_v3": {
+    "status": "dropped",
+    "code": "question_stated_as_fact",
+    "anchor_turn": null,
+    "reanchored": null
+   },
+   "reference_v1b_v2_v3_fragment_quote_guard": {
+    "status": "dropped",
+    "code": "question_stated_as_fact",
+    "anchor_turn": null,
+    "reanchored": null
+   }
+  },
+  {
+   "page": 3,
+   "number": 13,
+   "cited_turn": 28,
+   "text": "說明輕量版移除離線模式，並限制三個帳號",
+   "context": [],
+   "quote": "輕量版我們拿掉離線模式 還有限制三個帳號",
+   "scorer_category": "correct",
+   "cited_speaker": "S3",
+   "hybrid_decision": "kept_paraphrase",
+   "reference_v1b_v2_v3": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 28,
+    "reanchored": false
+   },
+   "reference_v1b_v2_v3_fragment_quote_guard": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 28,
+    "reanchored": false
+   }
+  },
+  {
+   "page": 3,
+   "number": 14,
+   "cited_turn": 29,
+   "text": "認為移除離線模式對工程有益，因為離線同步是P0最大問題",
+   "context": [],
+   "quote": "拿掉離線模式的話 工程上其實是好事 因為離線同步就是我們P0最大宗",
+   "scorer_category": "unmatched",
+   "cited_speaker": "S2",
+   "hybrid_decision": "kept_paraphrase",
+   "reference_v1b_v2_v3": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 29,
+    "reanchored": false
+   },
+   "reference_v1b_v2_v3_fragment_quote_guard": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 29,
+    "reanchored": false
+   }
+  },
+  {
+   "page": 3,
+   "number": 15,
+   "cited_turn": 30,
+   "text": "擔心標準版和輕量版之間差異過大，讓客戶有被拆開銷售的感覺",
+   "context": [],
+   "quote": "我不想讓客戶有一種被我們拆開賣的感覺",
+   "scorer_category": "unmatched",
+   "cited_speaker": "S1",
+   "hybrid_decision": "dropped:question_stated_as_fact",
+   "reference_v1b_v2_v3": {
+    "status": "dropped",
+    "code": "question_stated_as_fact",
+    "anchor_turn": null,
+    "reanchored": null
+   },
+   "reference_v1b_v2_v3_fragment_quote_guard": {
+    "status": "dropped",
+    "code": "question_stated_as_fact",
+    "anchor_turn": null,
+    "reanchored": null
+   }
+  },
+  {
+   "page": 3,
+   "number": 16,
+   "cited_turn": 33,
+   "text": "指出對手最低方案月費為1990，且不包含客服電話",
+   "context": [],
+   "quote": "豆芽菜他們最低的方案是月費1990 也沒有客服電話",
+   "scorer_category": "unmatched",
+   "cited_speaker": "S3",
+   "hybrid_decision": "kept_paraphrase",
+   "reference_v1b_v2_v3": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 33,
+    "reanchored": false
+   },
+   "reference_v1b_v2_v3_fragment_quote_guard": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 33,
+    "reanchored": false
+   }
+  },
+  {
+   "page": 3,
+   "number": 17,
+   "cited_turn": 35,
+   "text": "強調自身有電話回覆服務，這是對手無法提供的",
+   "context": [],
+   "quote": "因為我們有人會回電話啊 這個他們做不到 客戶吃過虧就知道了",
+   "scorer_category": "hallucinated",
+   "cited_speaker": "S3",
+   "hybrid_decision": "dropped:unsupported,quote_wording:pronoun",
+   "reference_v1b_v2_v3": {
+    "status": "dropped",
+    "code": "unsupported",
+    "anchor_turn": null,
+    "reanchored": null
+   },
+   "reference_v1b_v2_v3_fragment_quote_guard": {
+    "status": "dropped",
+    "code": "unsupported",
+    "anchor_turn": null,
+    "reanchored": null
+   }
+  },
+  {
+   "page": 3,
+   "number": 18,
+   "cited_turn": 36,
+   "text": "要求阿凱本月完成方案頁，並希望下個月上線",
+   "context": [],
+   "quote": "年約85折 阿凱你這個月可以把方案頁做出來嗎",
+   "scorer_category": "unmatched",
+   "cited_speaker": "S1",
+   "hybrid_decision": "dropped:question_stated_as_fact",
+   "reference_v1b_v2_v3": {
+    "status": "dropped",
+    "code": "question_stated_as_fact",
+    "anchor_turn": null,
+    "reanchored": null
+   },
+   "reference_v1b_v2_v3_fragment_quote_guard": {
+    "status": "dropped",
+    "code": "question_stated_as_fact",
+    "anchor_turn": null,
+    "reanchored": null
+   }
+  },
+  {
+   "page": 3,
+   "number": 19,
+   "cited_turn": 37,
+   "text": "說明方案頁製作只需兩天，但計費邏輯需修改以支援兩種方案",
+   "context": [],
+   "quote": "方案頁簡單2天就好 不過計費邏輯要改 要支援兩種方案",
+   "scorer_category": "unmatched",
+   "cited_speaker": "S2",
+   "hybrid_decision": "kept_paraphrase",
+   "reference_v1b_v2_v3": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 37,
+    "reanchored": false
+   },
+   "reference_v1b_v2_v3_fragment_quote_guard": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 37,
+    "reanchored": false
+   }
+  },
+  {
+   "page": 3,
+   "number": 20,
+   "cited_turn": 38,
+   "text": "報告老街茶行要求退租，月費6800，原因是店員操作不熟練",
+   "context": [],
+   "quote": "老街茶行說他們要退租 月費6800 理由是店員學不會",
+   "scorer_category": "correct",
+   "cited_speaker": "S3",
+   "hybrid_decision": "kept_paraphrase",
+   "reference_v1b_v2_v3": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 38,
+    "reanchored": false
+   },
+   "reference_v1b_v2_v3_fragment_quote_guard": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 38,
+    "reanchored": false
+   }
+  },
+  {
+   "page": 3,
+   "number": 21,
+   "cited_turn": 39,
+   "text": "指示小安明天親自前去，不要只用電話處理老街茶行退租事宜",
+   "context": [],
+   "quote": "小安你明天去一趟 不要只用電話 要當面去道歉",
+   "scorer_category": "correct",
+   "cited_speaker": "S1",
+   "hybrid_decision": "dropped:other:文字裡有逐字稿用來稱呼人的名字或稱謂「小安」；不要寫進去",
+   "reference_v1b_v2_v3": {
+    "status": "dropped",
+    "code": "other:文字裡有逐字稿用來稱呼人的名字或稱謂「小安」；不要寫進去",
+    "anchor_turn": null,
+    "reanchored": null
+   },
+   "reference_v1b_v2_v3_fragment_quote_guard": {
+    "status": "dropped",
+    "code": "other:文字裡有逐字稿用來稱呼人的名字或稱謂「小安」；不要寫進去",
+    "anchor_turn": null,
+    "reanchored": null
+   }
+  },
+  {
+   "page": 3,
+   "number": 22,
+   "cited_turn": 40,
+   "text": "計畫帶輕量版DM過去，嘗試說服對方降級而非退租",
+   "context": [],
+   "quote": "順便帶輕量版的DM過去 看他們要不要降級不要退租 能留住一個是一個",
+   "scorer_category": "unmatched",
+   "cited_speaker": "S3",
+   "hybrid_decision": "kept_paraphrase",
+   "hand_adjudication": [
+    {
+     "truth": "real_error",
+     "kind": "pronoun_leak",
+     "note": "text says 對方 (the customer); attribution right (S3 T40)"
+    }
+   ],
+   "reference_v1b_v2_v3": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 40,
+    "reanchored": false
+   },
+   "reference_v1b_v2_v3_fragment_quote_guard": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 40,
+    "reanchored": false
+   }
+  },
+  {
+   "page": 3,
+   "number": 23,
+   "cited_turn": 41,
+   "text": "建議製作教學影片，認為比持續到現場指導更有效",
+   "context": [],
+   "quote": "我覺得比一直跑現場有效",
+   "scorer_category": "unmatched",
+   "cited_speaker": "S1",
+   "hybrid_decision": "dropped:question_stated_as_fact",
+   "reference_v1b_v2_v3": {
+    "status": "dropped",
+    "code": "question_stated_as_fact",
+    "anchor_turn": null,
+    "reanchored": null
+   },
+   "reference_v1b_v2_v3_fragment_quote_guard": {
+    "status": "dropped",
+    "code": "question_stated_as_fact",
+    "anchor_turn": null,
+    "reanchored": null
+   }
+  },
+  {
+   "page": 3,
+   "number": 24,
+   "cited_turn": 42,
+   "text": "提出錄製五支三分鐘教學影片，放在App內，預計自己兩天可完成",
+   "context": [],
+   "quote": "我想錄五支三分鐘的教學影片 放在app裡面 我自己錄 兩天可以做完",
+   "scorer_category": "unmatched",
+   "cited_speaker": "S3",
+   "hybrid_decision": "kept_paraphrase",
+   "reference_v1b_v2_v3": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 42,
+    "reanchored": false
+   },
+   "reference_v1b_v2_v3_fragment_quote_guard": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 42,
+    "reanchored": false
+   }
+  },
+  {
+   "page": 3,
+   "number": 25,
+   "cited_turn": 51,
+   "text": "提醒目前月支出為62萬，剩餘資金僅夠7個月，必須在九月前籌到資金",
+   "context": [],
+   "quote": "目前一個月62萬 runway只剩7個月 所以我們一定要在九月前拿到錢",
+   "scorer_category": "unmatched",
+   "cited_speaker": "S1",
+   "hybrid_decision": "kept_paraphrase",
+   "reference_v1b_v2_v3": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 51,
+    "reanchored": false
+   },
+   "reference_v1b_v2_v3_fragment_quote_guard": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 51,
+    "reanchored": false
+   }
+  },
+  {
+   "page": 3,
+   "number": 26,
+   "cited_turn": 53,
+   "text": "計算外包後，月支出增加18萬至80萬，使資金剩餘僅夠5個多月",
+   "context": [],
+   "quote": "會多18萬 就是變成80萬 那runway就只剩5個月出頭",
+   "scorer_category": "hallucinated",
+   "cited_speaker": "S1",
+   "hybrid_decision": "rescued_quote",
+   "reference_v1b_v2_v3": {
+    "status": "dropped",
+    "code": "unsupported",
+    "anchor_turn": null,
+    "reanchored": null
+   },
+   "reference_v1b_v2_v3_fragment_quote_guard": {
+    "status": "dropped",
+    "code": "unsupported",
+    "anchor_turn": null,
+    "reanchored": null
+   }
+  },
+  {
+   "page": 3,
+   "number": 27,
+   "cited_turn": 57,
+   "text": "提到鯨落創投願意投資2000萬，估值1.2億，認為數字合理",
+   "context": [],
+   "quote": "他們願意投2000萬 估值1.2億 這個數字我覺得很合理",
+   "scorer_category": "correct",
+   "cited_speaker": "S1",
+   "hybrid_decision": "kept_paraphrase",
+   "reference_v1b_v2_v3": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 57,
+    "reanchored": false
+   },
+   "reference_v1b_v2_v3_fragment_quote_guard": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 57,
+    "reanchored": false
+   }
+  },
+  {
+   "page": 3,
+   "number": 28,
+   "cited_turn": 59,
+   "text": "說明1.2億為pre-money，計算後稀釋比例約為14.3%",
+   "context": [],
+   "quote": "1.2億是pre-money 所以是2000萬除以1.4億 稀釋大概14.3%",
+   "scorer_category": "correct",
+   "cited_speaker": "S1",
+   "hybrid_decision": "kept_paraphrase",
+   "reference_v1b_v2_v3": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 59,
+    "reanchored": false
+   },
+   "reference_v1b_v2_v3_fragment_quote_guard": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 59,
+    "reanchored": false
+   }
+  },
+  {
+   "page": 3,
+   "number": 29,
+   "cited_turn": 62,
+   "text": "要求小安整理好MRR和churn數據，並在週二提交",
+   "context": [],
+   "quote": "小安你把MRR跟churn整理好 週二給我",
+   "scorer_category": "unmatched",
+   "cited_speaker": "S1",
+   "hybrid_decision": "dropped:other:文字裡有逐字稿用來稱呼人的名字或稱謂「小安」；不要寫進去",
+   "reference_v1b_v2_v3": {
+    "status": "dropped",
+    "code": "other:文字裡有逐字稿用來稱呼人的名字或稱謂「小安」；不要寫進去",
+    "anchor_turn": null,
+    "reanchored": null
+   },
+   "reference_v1b_v2_v3_fragment_quote_guard": {
+    "status": "dropped",
+    "code": "other:文字裡有逐字稿用來稱呼人的名字或稱謂「小安」；不要寫進去",
+    "anchor_turn": null,
+    "reanchored": null
+   }
+  },
+  {
+   "page": 3,
+   "number": 30,
+   "cited_turn": 63,
+   "text": "報告本月churn為2.3%，上個月為1.8%，認為目前範圍可接受",
+   "context": [],
+   "quote": "churn這個月是百分之二點三 上個月是1.8%",
+   "scorer_category": "unmatched",
+   "cited_speaker": "S3",
+   "hybrid_decision": "kept_paraphrase",
+   "reference_v1b_v2_v3": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 63,
+    "reanchored": false
+   },
+   "reference_v1b_v2_v3_fragment_quote_guard": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 63,
+    "reanchored": false
+   }
+  },
+  {
+   "page": 3,
+   "number": 31,
+   "cited_turn": 64,
+   "text": "要求檢查Pitch Deck中的技術架構頁面是否有錯誤",
+   "context": [],
+   "quote": "技術架構那一頁阿凱你幫我看一下有沒有講錯",
+   "scorer_category": "unmatched",
+   "cited_speaker": "S1",
+   "hybrid_decision": "kept_paraphrase",
+   "reference_v1b_v2_v3": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 64,
+    "reanchored": false
+   },
+   "reference_v1b_v2_v3_fragment_quote_guard": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 64,
+    "reanchored": false
+   }
+  },
+  {
+   "page": 3,
+   "number": 32,
+   "cited_turn": 65,
+   "text": "認為仍需補一位資深後端，雖然可外包前端，但後端核心不能外包",
+   "context": [],
+   "quote": "我還是覺得要補一個資深後端 外包前端我可以接受 但是後端的核心不能外包",
+   "scorer_category": "unmatched",
+   "cited_speaker": "S2",
+   "hybrid_decision": "kept_paraphrase",
+   "reference_v1b_v2_v3": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 65,
+    "reanchored": false
+   },
+   "reference_v1b_v2_v3_fragment_quote_guard": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 65,
+    "reanchored": false
+   }
+  },
+  {
+   "page": 3,
+   "number": 33,
+   "cited_turn": 67,
+   "text": "提供市場價區間為11萬到13萬，並介紹一位可於15號前給答覆的人選",
+   "context": [],
+   "quote": "市場價大概11萬到13萬 我認識一個人 他願意15號之前給答覆",
+   "scorer_category": "correct",
+   "cited_speaker": "S2",
+   "hybrid_decision": "kept_paraphrase",
+   "reference_v1b_v2_v3": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 67,
+    "reanchored": false
+   },
+   "reference_v1b_v2_v3_fragment_quote_guard": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 67,
+    "reanchored": false
+   }
+  },
+  {
+   "page": 3,
+   "number": 34,
+   "cited_turn": 69,
+   "text": "指出該人曾與團隊合作過離線同步，正好解決了目前最大的痛點",
+   "context": [],
+   "quote": "他以前跟我同一個團隊 做過離線同步 這個正好是我們最痛的",
+   "scorer_category": "unmatched",
+   "cited_speaker": "S2",
+   "hybrid_decision": "dropped:unsupported,quote_wording:pronoun",
+   "reference_v1b_v2_v3": {
+    "status": "dropped",
+    "code": "unsupported",
+    "anchor_turn": null,
+    "reanchored": null
+   },
+   "reference_v1b_v2_v3_fragment_quote_guard": {
+    "status": "dropped",
+    "code": "unsupported",
+    "anchor_turn": null,
+    "reanchored": null
+   }
+  },
+  {
+   "page": 3,
+   "number": 35,
+   "cited_turn": 71,
+   "text": "排定山羌版於三月二十八號上線，前一天會在staging進行完整回歸",
+   "context": [],
+   "quote": "山羌版我排三月二十八號上線 前一天會在staging跑完整回歸",
+   "scorer_category": "correct",
+   "cited_speaker": "S2",
+   "hybrid_decision": "kept_paraphrase",
+   "reference_v1b_v2_v3": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 71,
+    "reanchored": false
+   },
+   "reference_v1b_v2_v3_fragment_quote_guard": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 71,
+    "reanchored": false
+   }
+  },
+  {
+   "page": 3,
+   "number": 36,
+   "cited_turn": 78,
+   "text": "提醒小安需在禮拜三前詢問會計發票，明天下午拜訪老街茶行，並週二提交MRR和churn",
+   "context": [],
+   "quote": "小安 你的是禮拜三前問會計發票 明天下午去老街茶行 週二把MRR跟churn給我",
+   "scorer_category": "unmatched",
+   "cited_speaker": "S1",
+   "hybrid_decision": "dropped:other:文字裡有逐字稿用來稱呼人的名字或稱謂「小安」；不要寫進去",
+   "reference_v1b_v2_v3": {
+    "status": "dropped",
+    "code": "other:文字裡有逐字稿用來稱呼人的名字或稱謂「小安」；不要寫進去",
+    "anchor_turn": null,
+    "reanchored": null
+   },
+   "reference_v1b_v2_v3_fragment_quote_guard": {
+    "status": "dropped",
+    "code": "other:文字裡有逐字稿用來稱呼人的名字或稱謂「小安」；不要寫進去",
+    "anchor_turn": null,
+    "reanchored": null
+   }
+  },
+  {
+   "page": 3,
+   "number": 37,
+   "cited_turn": 82,
+   "text": "建議將sprint 15的review排在兩週後的禮拜四，為山羌版上線提供緩衝時間",
+   "context": [],
+   "quote": "我說sprint 15的review排兩週後的禮拜四 就是3月27號 這樣山羌版上線前有一天緩衝",
+   "scorer_category": "unmatched",
+   "cited_speaker": "S2",
+   "hybrid_decision": "kept_paraphrase",
+   "reference_v1b_v2_v3": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 82,
+    "reanchored": false
+   },
+   "reference_v1b_v2_v3_fragment_quote_guard": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 82,
+    "reanchored": false
+   }
+  },
+  {
+   "page": 3,
+   "number": 38,
+   "cited_turn": 84,
+   "text": "報告大碗公麵館希望在五月前增加開設3間分店",
+   "context": [],
+   "quote": "大碗公麵館他們要加開3間店 希望5月前上線",
+   "scorer_category": "unmatched",
+   "cited_speaker": "S3",
+   "hybrid_decision": "kept_paraphrase",
+   "reference_v1b_v2_v3": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 84,
+    "reanchored": false
+   },
+   "reference_v1b_v2_v3_fragment_quote_guard": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 84,
+    "reanchored": false
+   }
+  },
+  {
+   "page": 3,
+   "number": 39,
+   "cited_turn": 86,
+   "text": "確認訂購了6個便當，總價570，包含4個雞腿和2個排骨",
+   "context": [],
+   "quote": "一共6個 一個95 總共570 雞腿的有4個 排骨的有2個",
+   "scorer_category": "unmatched",
+   "cited_speaker": "S3",
+   "hybrid_decision": "dropped:question_stated_as_fact",
+   "reference_v1b_v2_v3": {
+    "status": "dropped",
+    "code": "question_stated_as_fact",
+    "anchor_turn": null,
+    "reanchored": null
+   },
+   "reference_v1b_v2_v3_fragment_quote_guard": {
+    "status": "dropped",
+    "code": "question_stated_as_fact",
+    "anchor_turn": null,
+    "reanchored": null
+   }
+  }
+ ]
+}

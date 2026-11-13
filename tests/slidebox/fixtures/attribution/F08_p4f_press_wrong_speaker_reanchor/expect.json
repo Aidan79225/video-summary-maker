@@ -1,0 +1,381 @@
+{
+ "fixture": "F08_p4f_press_wrong_speaker_reanchor",
+ "about": "points of call.json",
+ "points": [
+  {
+   "page": 1,
+   "number": 1,
+   "cited_turn": 0,
+   "text": "說明14、15號十一所國小使用同一批次冷凍雞腿肉",
+   "context": [],
+   "quote": "10月14號跟15號這兩天，我們市內有十一所國小的午餐，用到同一個批次的冷凍雞腿肉",
+   "scorer_category": "correct",
+   "cited_speaker": "S1",
+   "hybrid_decision": "kept_paraphrase",
+   "reference_v1b_v2_v3": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 0,
+    "reanchored": false
+   },
+   "reference_v1b_v2_v3_fragment_quote_guard": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 0,
+    "reanchored": false
+   }
+  },
+  {
+   "page": 1,
+   "number": 2,
+   "cited_turn": 0,
+   "text": "指出藥物殘留0.18ppm，超標一點八倍",
+   "context": [],
+   "quote": "動物用藥殘留0.18ppm，我們的標準是零點一以下，所以是超標了一點八倍",
+   "scorer_category": "unmatched",
+   "cited_speaker": "S1",
+   "hybrid_decision": "kept_paraphrase",
+   "reference_v1b_v2_v3": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 0,
+    "reanchored": false
+   },
+   "reference_v1b_v2_v3_fragment_quote_guard": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 0,
+    "reanchored": false
+   }
+  },
+  {
+   "page": 1,
+   "number": 3,
+   "cited_turn": 0,
+   "text": "統計六千三百二十位學生食用，十七位通報不適",
+   "context": [],
+   "quote": "吃到這個批次的學生是六千三百二十位，家長主動通報身體不舒服的有十七位",
+   "scorer_category": "correct",
+   "cited_speaker": "S1",
+   "hybrid_decision": "dropped:anchor_conflict",
+   "hand_adjudication": [
+    {
+     "truth": "real_error",
+     "kind": "reanchor_to_echo",
+     "note": "the 6320 students / 17 reports are the spokesman's own statement (S1 T0, the quote lies there); the committed validators re-anchor the point to T2 (S2, a reporter who repeats the figures in a question) and keep it: WRONG SPEAKER. The quote guard with anchor agreement drops it (anchor_conflict)."
+    }
+   ],
+   "reference_v1b_v2_v3": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 2,
+    "reanchored": true
+   },
+   "reference_v1b_v2_v3_fragment_quote_guard": {
+    "status": "dropped",
+    "code": "anchor_conflict",
+    "anchor_turn": null,
+    "reanchored": null
+   }
+  },
+  {
+   "page": 1,
+   "number": 4,
+   "cited_turn": 0,
+   "text": "澄清無人住院，網路傳言不實",
+   "context": [],
+   "quote": "沒有人住院，這個我要先講清楚，網路上有人傳有學生住院，沒有這件事",
+   "scorer_category": "unmatched",
+   "cited_speaker": "S1",
+   "hybrid_decision": "kept_paraphrase",
+   "reference_v1b_v2_v3": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 0,
+    "reanchored": false
+   },
+   "reference_v1b_v2_v3_fragment_quote_guard": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 0,
+    "reanchored": false
+   }
+  },
+  {
+   "page": 2,
+   "number": 1,
+   "cited_turn": 8,
+   "text": "說明該批次僅於14、15號供餐，後續改用別批次",
+   "context": [],
+   "quote": "不是六天都在吃，這個批次只有14號跟15號這兩天有供，十六號以後用的是別的批次",
+   "scorer_category": "unmatched",
+   "cited_speaker": "S2",
+   "hybrid_decision": "rescued_quote",
+   "reference_v1b_v2_v3": {
+    "status": "dropped",
+    "code": "unsupported",
+    "anchor_turn": null,
+    "reanchored": null
+   },
+   "reference_v1b_v2_v3_fragment_quote_guard": {
+    "status": "dropped",
+    "code": "unsupported",
+    "anchor_turn": null,
+    "reanchored": null
+   }
+  },
+  {
+   "page": 2,
+   "number": 2,
+   "cited_turn": 8,
+   "text": "宣布下月起改為每週抽驗並實施現場快篩",
+   "context": [],
+   "quote": "我們決定從下個月開始，抽驗改成每週一次，再加上現場快篩，快篩三十分鐘就有結果",
+   "scorer_category": "unmatched",
+   "cited_speaker": "S2",
+   "hybrid_decision": "kept_paraphrase",
+   "reference_v1b_v2_v3": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 9,
+    "reanchored": true
+   },
+   "reference_v1b_v2_v3_fragment_quote_guard": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 9,
+    "reanchored": true
+   }
+  },
+  {
+   "page": 2,
+   "number": 3,
+   "cited_turn": 11,
+   "text": "解釋因中央廚房恐有交叉污染故全面停供",
+   "context": [],
+   "quote": "同一個中央廚房，我們沒有辦法保證其他學校的食材不會跟這個批次交叉使用，所以先全面停供是比較保守的做法",
+   "scorer_category": "unmatched",
+   "cited_speaker": "S1",
+   "hybrid_decision": "kept_paraphrase",
+   "reference_v1b_v2_v3": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 11,
+    "reanchored": false
+   },
+   "reference_v1b_v2_v3_fragment_quote_guard": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 11,
+    "reanchored": false
+   }
+  },
+  {
+   "page": 2,
+   "number": 4,
+   "cited_turn": 15,
+   "text": "說明停供約十天，需複驗合格並通過稽核才恢復",
+   "context": [],
+   "quote": "大概十個上課日，複驗結果預計十一月五號出來，要合格，而且要有符合 HACCP 的改善計畫，我們到現場稽核過才會讓他們恢復",
+   "scorer_category": "unmatched",
+   "cited_speaker": "S1",
+   "hybrid_decision": "kept_paraphrase",
+   "reference_v1b_v2_v3": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 15,
+    "reanchored": false
+   },
+   "reference_v1b_v2_v3_fragment_quote_guard": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 15,
+    "reanchored": false
+   }
+  },
+  {
+   "page": 3,
+   "number": 1,
+   "cited_turn": 19,
+   "text": "說明差額三百四十萬由教育局預備金先行墊付",
+   "context": [],
+   "quote": "備援的便當一餐比原本貴二十一元，停供預計十個上課日，全部算下來大概三百四十萬，這筆錢我們先動用教育局的預備金墊",
+   "scorer_category": "correct",
+   "cited_speaker": "S1",
+   "hybrid_decision": "kept_paraphrase",
+   "reference_v1b_v2_v3": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 19,
+    "reanchored": false
+   },
+   "reference_v1b_v2_v3_fragment_quote_guard": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 19,
+    "reanchored": false
+   }
+  },
+  {
+   "page": 3,
+   "number": 2,
+   "cited_turn": 21,
+   "text": "強調差額應由業者負擔，並說明保證金與訴訟機制",
+   "context": [],
+   "quote": "因為是業者的食材不合格，所以這個差額應該由他們負擔。契約有六百萬的履約保證金...不夠的部分才走訴訟",
+   "scorer_category": "unmatched",
+   "cited_speaker": "S1",
+   "hybrid_decision": "dropped:bad_quote",
+   "reference_v1b_v2_v3": {
+    "status": "dropped",
+    "code": "unsupported",
+    "anchor_turn": null,
+    "reanchored": null
+   },
+   "reference_v1b_v2_v3_fragment_quote_guard": {
+    "status": "dropped",
+    "code": "bad_quote",
+    "anchor_turn": null,
+    "reanchored": null
+   }
+  },
+  {
+   "page": 3,
+   "number": 3,
+   "cited_turn": 45,
+   "text": "釐清簽收溫度合格不代表無藥物殘留，不能怪罪營養師",
+   "context": [],
+   "quote": "營養師簽收的時候根本沒有量雞肉的溫度...而且簽收溫度合格不代表藥物殘留合格，藥物殘留肉眼看不出來，溫度計也量不出來",
+   "scorer_category": "unmatched",
+   "cited_speaker": "S1",
+   "hybrid_decision": "kept_paraphrase",
+   "reference_v1b_v2_v3": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 45,
+    "reanchored": false
+   },
+   "reference_v1b_v2_v3_fragment_quote_guard": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 45,
+    "reanchored": false
+   }
+  },
+  {
+   "page": 3,
+   "number": 4,
+   "cited_turn": 53,
+   "text": "澄清其他六十四所學校本月檢驗皆合格並將公布",
+   "context": [],
+   "quote": "全市九十六所學校，扣掉這家業者的三十二所，其他六十四所學校的抽驗結果，這個月都是合格的，報告今天下午就會放到教育局網站",
+   "scorer_category": "correct",
+   "cited_speaker": "S1",
+   "hybrid_decision": "kept_paraphrase",
+   "reference_v1b_v2_v3": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 53,
+    "reanchored": false
+   },
+   "reference_v1b_v2_v3_fragment_quote_guard": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 53,
+    "reanchored": false
+   }
+  },
+  {
+   "page": 4,
+   "number": 1,
+   "cited_turn": 41,
+   "text": "規範備援便當需有三樣青菜且熱量不低於六百五十卡",
+   "context": [],
+   "quote": "我們已經要求每餐至少三樣青菜，熱量不得低於六百五十大卡，稽查員到現場抽看，不合格的當場退回",
+   "scorer_category": "unmatched",
+   "cited_speaker": "S1",
+   "hybrid_decision": "kept_paraphrase",
+   "reference_v1b_v2_v3": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 41,
+    "reanchored": false
+   },
+   "reference_v1b_v2_v3_fragment_quote_guard": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 41,
+    "reanchored": false
+   }
+  },
+  {
+   "page": 4,
+   "number": 2,
+   "cited_turn": 43,
+   "text": "承諾本月內對其他業者進行補稽核",
+   "context": [],
+   "quote": "其他業者我們這個月內全部補稽核",
+   "scorer_category": "unmatched",
+   "cited_speaker": "S1",
+   "hybrid_decision": "kept_paraphrase",
+   "reference_v1b_v2_v3": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 43,
+    "reanchored": false
+   },
+   "reference_v1b_v2_v3_fragment_quote_guard": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 43,
+    "reanchored": false
+   }
+  },
+  {
+   "page": 4,
+   "number": 3,
+   "cited_turn": 59,
+   "text": "承諾公開供應商名單並讓家長代表進廚房稽核",
+   "context": [],
+   "quote": "供應商名單我們下週三前公開...每所學校兩位家長代表，先從受影響的十一所學校開始",
+   "scorer_category": "unmatched",
+   "cited_speaker": "S1",
+   "hybrid_decision": "kept_paraphrase",
+   "reference_v1b_v2_v3": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 59,
+    "reanchored": false
+   },
+   "reference_v1b_v2_v3_fragment_quote_guard": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 59,
+    "reanchored": false
+   }
+  },
+  {
+   "page": 4,
+   "number": 4,
+   "cited_turn": 63,
+   "text": "宣布每日派稽查員到場並設立專線處理家長問題",
+   "context": [],
+   "quote": "所有受影響的學校，從今天開始每天都有教育局的稽查員到場。孩子的午餐是我們共同的責任，我們不會讓這件事不了了之",
+   "scorer_category": "unmatched",
+   "cited_speaker": "S1",
+   "hybrid_decision": "kept_paraphrase",
+   "reference_v1b_v2_v3": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 63,
+    "reanchored": false
+   },
+   "reference_v1b_v2_v3_fragment_quote_guard": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 63,
+    "reanchored": false
+   }
+  }
+ ]
+}

@@ -1,0 +1,381 @@
+{
+ "fixture": "F06_p4f_panel_percent_to_minutes",
+ "about": "points of call.json",
+ "points": [
+  {
+   "page": 1,
+   "number": 1,
+   "cited_turn": 1,
+   "text": "說明三種方案中，延伸線加公車接駁在2040年總旅行時間最少",
+   "context": [],
+   "quote": "第一個是什麼都不做，第二個是只做公車專用道，第三個是延伸線加公車接駁，到2040年的總旅行時間，第三個方案最少",
+   "scorer_category": "unmatched",
+   "cited_speaker": "S2",
+   "hybrid_decision": "kept_paraphrase",
+   "reference_v1b_v2_v3": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 1,
+    "reanchored": false
+   },
+   "reference_v1b_v2_v3_fragment_quote_guard": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 1,
+    "reanchored": false
+   }
+  },
+  {
+   "page": 1,
+   "number": 2,
+   "cited_turn": 1,
+   "text": "指出捷運延伸線預估總經費九百四十億，但每日可載十八萬人次",
+   "context": [],
+   "quote": "預估總經費九百四十億，平均一公里七十四點六億，這個錢很大，我知道。可是通車之後每天可以載十八萬人次",
+   "scorer_category": "correct",
+   "cited_speaker": "S2",
+   "hybrid_decision": "kept_paraphrase",
+   "reference_v1b_v2_v3": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 1,
+    "reanchored": false
+   },
+   "reference_v1b_v2_v3_fragment_quote_guard": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 1,
+    "reanchored": false
+   }
+  },
+  {
+   "page": 1,
+   "number": 3,
+   "cited_turn": 3,
+   "text": "說明專用道造價三十二億、九個月完工，時速可提至二十二公里",
+   "context": [],
+   "quote": "造價三十二億，九個月就可以完工，一個小時單向可以載一萬二千人次。現在北岸的公車平均時速只有十一公里",
+   "scorer_category": "correct",
+   "cited_speaker": "S3",
+   "hybrid_decision": "kept_paraphrase",
+   "reference_v1b_v2_v3": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 3,
+    "reanchored": false
+   },
+   "reference_v1b_v2_v3_fragment_quote_guard": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 3,
+    "reanchored": false
+   }
+  },
+  {
+   "page": 1,
+   "number": 4,
+   "cited_turn": 5,
+   "text": "指出市府債務比率39.2%，剩餘空間僅零點八個百分點",
+   "context": [],
+   "quote": "河灣市政府的債務比率現在是39.2%，法定上限是40%，也就是說只剩零點八個百分點的空間",
+   "scorer_category": "correct",
+   "cited_speaker": "S4",
+   "hybrid_decision": "kept_paraphrase",
+   "reference_v1b_v2_v3": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 5,
+    "reanchored": false
+   },
+   "reference_v1b_v2_v3_fragment_quote_guard": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 5,
+    "reanchored": false
+   }
+  },
+  {
+   "page": 2,
+   "number": 1,
+   "cited_turn": 7,
+   "text": "說明整條線需八十四個月，主張前期以公車支撐、後期捷運接手",
+   "context": [],
+   "quote": "從規劃、環評、用地到施工，整條線要八十四個月，這是事實，所以我主張的是兩段式，前面先用公車撐著，後面捷運接手",
+   "scorer_category": "correct",
+   "cited_speaker": "S2",
+   "hybrid_decision": "kept_paraphrase",
+   "reference_v1b_v2_v3": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 7,
+    "reanchored": false
+   },
+   "reference_v1b_v2_v3_fragment_quote_guard": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 7,
+    "reanchored": false
+   }
+  },
+  {
+   "page": 2,
+   "number": 2,
+   "cited_turn": 8,
+   "text": "反對未計入用地取得時間，指出用地拖延可能需三年",
+   "context": [],
+   "quote": "卞教授等一下，八十四個月，你這個八十四個月還沒有算用地取得，用地一拖就是三年——",
+   "scorer_category": "unmatched",
+   "cited_speaker": "S3",
+   "hybrid_decision": "dropped:unsupported,quote_wording:role+name",
+   "reference_v1b_v2_v3": {
+    "status": "dropped",
+    "code": "unsupported",
+    "anchor_turn": null,
+    "reanchored": null
+   },
+   "reference_v1b_v2_v3_fragment_quote_guard": {
+    "status": "dropped",
+    "code": "unsupported",
+    "anchor_turn": null,
+    "reanchored": null
+   }
+  },
+  {
+   "page": 2,
+   "number": 3,
+   "cited_turn": 12,
+   "text": "同意專用道先行，但強調其運量無法取代捷運的十八萬人次",
+   "context": [],
+   "quote": "我不否認，專用道可以先做，老褚講的九個月我也同意，這一點我從頭到尾沒有反對過，但是專用道載不了十八萬人次，這個就是差別",
+   "scorer_category": "correct",
+   "cited_speaker": "S2",
+   "hybrid_decision": "kept_paraphrase",
+   "reference_v1b_v2_v3": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 12,
+    "reanchored": false
+   },
+   "reference_v1b_v2_v3_fragment_quote_guard": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 12,
+    "reanchored": false
+   }
+  },
+  {
+   "page": 2,
+   "number": 4,
+   "cited_turn": 16,
+   "text": "指出捷運營運需長期補貼，資金可能來自學校或社福預算",
+   "context": [],
+   "quote": "建的時候大家都很開心，剪綵的時候大家都來拍照，營運的時候才發現每年要補貼二十八億，那個二十八億是從哪裡來的？是從學校的預算、社福的預算裡面擠出來的",
+   "scorer_category": "unmatched",
+   "cited_speaker": "S4",
+   "hybrid_decision": "kept_paraphrase",
+   "reference_v1b_v2_v3": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 16,
+    "reanchored": false
+   },
+   "reference_v1b_v2_v3_fragment_quote_guard": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 16,
+    "reanchored": false
+   }
+  },
+  {
+   "page": 3,
+   "number": 1,
+   "cited_turn": 23,
+   "text": "主張專用道搭配智慧號誌，成本六億兩千萬，可縮短十二分鐘車程",
+   "context": [],
+   "quote": "專用道加智慧號誌是我覺得最划算的組合。智慧號誌我們評估一百八十個路口，總共六億兩千萬，旅行時間可以減少百分之十二",
+   "scorer_category": "unmatched",
+   "cited_speaker": "S4",
+   "hybrid_decision": "dropped:other:數字「十二分鐘」在被引用的那段話裡是百分比",
+   "hand_adjudication": [
+    {
+     "truth": "real_error",
+     "kind": "unit_drift",
+     "note": "turn says 旅行時間可以減少百分之十二; the text says 可縮短十二分鐘車程 (percent became minutes). Attribution right (S4 T23). Kept by the committed check and V1, dropped by V1b."
+    }
+   ],
+   "reference_v1b_v2_v3": {
+    "status": "dropped",
+    "code": "other:數字「十二分鐘」在被引用的那段話裡是百分比",
+    "anchor_turn": null,
+    "reanchored": null
+   },
+   "reference_v1b_v2_v3_fragment_quote_guard": {
+    "status": "dropped",
+    "code": "other:數字「十二分鐘」在被引用的那段話裡是百分比",
+    "anchor_turn": null,
+    "reanchored": null
+   }
+  },
+  {
+   "page": 3,
+   "number": 2,
+   "cited_turn": 23,
+   "text": "建議調漲停車費至每小時六十元，年增收入三億五千萬用於補貼公車",
+   "context": [],
+   "quote": "如果再配合停車費調整，路邊停車費從每小時四十元調到六十元，一年可以增加三億五千萬的收入，這些錢可以拿回來補貼公車",
+   "scorer_category": "unmatched",
+   "cited_speaker": "S4",
+   "hybrid_decision": "kept_paraphrase",
+   "reference_v1b_v2_v3": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 23,
+    "reanchored": false
+   },
+   "reference_v1b_v2_v3_fragment_quote_guard": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 23,
+    "reanchored": false
+   }
+  },
+  {
+   "page": 3,
+   "number": 3,
+   "cited_turn": 24,
+   "text": "反對在無替代運具下單調漲停車費，恐遭居民反彈",
+   "context": [],
+   "quote": "停車費調漲這個我只反對一半，因為，那個，北岸現在沒有替代的運具，你在沒有替代的情況下漲價，居民只會覺得被懲罰",
+   "scorer_category": "unmatched",
+   "cited_speaker": "S2",
+   "hybrid_decision": "kept_paraphrase",
+   "reference_v1b_v2_v3": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 24,
+    "reanchored": false
+   },
+   "reference_v1b_v2_v3_fragment_quote_guard": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 24,
+    "reanchored": false
+   }
+  },
+  {
+   "page": 3,
+   "number": 4,
+   "cited_turn": 25,
+   "text": "提出試辦三年方案，以平均時速達十六公里為KPI指標",
+   "context": [],
+   "quote": "試辦三年，訂一個很清楚的指標，北岸到市中心的平均時速從現在提高到十六公里，達到就繼續，沒達到就停，這個叫 KPI",
+   "scorer_category": "correct",
+   "cited_speaker": "S4",
+   "hybrid_decision": "kept_paraphrase",
+   "reference_v1b_v2_v3": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 25,
+    "reanchored": false
+   },
+   "reference_v1b_v2_v3_fragment_quote_guard": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 25,
+    "reanchored": false
+   }
+  },
+  {
+   "page": 4,
+   "number": 1,
+   "cited_turn": 26,
+   "text": "要求將北岸大橋兩側約四千個停車格改為專用道，無需中央核定",
+   "context": [],
+   "quote": "第一，路權要給我們，要劃設專用道就要把北岸大橋兩邊大概四千個路邊停車格拿掉，這個市府不需要中央核定，公告就可以做",
+   "scorer_category": "unmatched",
+   "cited_speaker": "S3",
+   "hybrid_decision": "kept_paraphrase",
+   "reference_v1b_v2_v3": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 26,
+    "reanchored": false
+   },
+   "reference_v1b_v2_v3_fragment_quote_guard": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 26,
+    "reanchored": false
+   }
+  },
+  {
+   "page": 4,
+   "number": 2,
+   "cited_turn": 27,
+   "text": "質疑直接移除四千停車格將引發商家陳情與商圈抗爭",
+   "context": [],
+   "quote": "四千個停車格？老褚，你知道這些停車格後面是多少商家嗎？你要談的是整個商圈，不是公告一下就可以，商家會到議會去陳情",
+   "scorer_category": "unmatched",
+   "cited_speaker": "S2",
+   "hybrid_decision": "kept_paraphrase",
+   "reference_v1b_v2_v3": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 27,
+    "reanchored": false
+   },
+   "reference_v1b_v2_v3_fragment_quote_guard": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 27,
+    "reanchored": false
+   }
+  },
+  {
+   "page": 4,
+   "number": 3,
+   "cited_turn": 38,
+   "text": "提供三處共十二公頃閒置公有地作為公車場站，無需徵收費用",
+   "context": [],
+   "quote": "市府在北岸其實有三處公有地，面積合計十二公頃，目前都是閒置的，拿來做公車場站，不用花錢徵收，也不會影響到商圈",
+   "scorer_category": "unmatched",
+   "cited_speaker": "S4",
+   "hybrid_decision": "kept_paraphrase",
+   "reference_v1b_v2_v3": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 38,
+    "reanchored": false
+   },
+   "reference_v1b_v2_v3_fragment_quote_guard": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 38,
+    "reanchored": false
+   }
+  },
+  {
+   "page": 4,
+   "number": 4,
+   "cited_turn": 30,
+   "text": "確認短期共識為專用道加號誌，今年即可啟動無需等待",
+   "context": [],
+   "quote": "有，短期就是專用道加號誌，這個我跟衛博士有共識，而且今年就可以開始做，不用等明年，只要市府肯公告，我們的車隨時可以上路",
+   "scorer_category": "unmatched",
+   "cited_speaker": "S3",
+   "hybrid_decision": "kept_paraphrase",
+   "reference_v1b_v2_v3": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 30,
+    "reanchored": false
+   },
+   "reference_v1b_v2_v3_fragment_quote_guard": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 30,
+    "reanchored": false
+   }
+  }
+ ]
+}

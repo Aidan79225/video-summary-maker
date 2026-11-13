@@ -1,0 +1,574 @@
+{
+ "fixture": "F09_p4f_monologue_percent_to_cheng",
+ "about": "points of call.json",
+ "points": [
+  {
+   "page": 1,
+   "number": 1,
+   "cited_turn": 44,
+   "text": "說明日照中心排隊人數四百三十位，平均要等七個月",
+   "context": [],
+   "quote": "日間照顧中心現在有十四處，可是排隊等的人還有四百三十位",
+   "scorer_category": "correct",
+   "cited_speaker": "S1",
+   "hybrid_decision": "kept_paraphrase",
+   "reference_v1b_v2_v3": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 44,
+    "reanchored": false
+   },
+   "reference_v1b_v2_v3_fragment_quote_guard": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 44,
+    "reanchored": false
+   }
+  },
+  {
+   "page": 1,
+   "number": 2,
+   "cited_turn": 45,
+   "text": "指出照顧服務員缺額二百一十位，月薪僅三萬九",
+   "context": [],
+   "quote": "照顧服務員全鎮缺兩百一十位，一個月的薪水大概三萬九",
+   "scorer_category": "unmatched",
+   "cited_speaker": "S1",
+   "hybrid_decision": "kept_paraphrase",
+   "reference_v1b_v2_v3": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 45,
+    "reanchored": false
+   },
+   "reference_v1b_v2_v3_fragment_quote_guard": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 45,
+    "reanchored": false
+   }
+  },
+  {
+   "page": 1,
+   "number": 3,
+   "cited_turn": 44,
+   "text": "說明延長服務至晚上七點，家屬反應良好",
+   "context": [],
+   "quote": "我們也試過，把日照中心的服務時間延到晚上七點，讓下班的家屬可以來接，反應很好",
+   "scorer_category": "unmatched",
+   "cited_speaker": "S1",
+   "hybrid_decision": "kept_paraphrase",
+   "reference_v1b_v2_v3": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 44,
+    "reanchored": false
+   },
+   "reference_v1b_v2_v3_fragment_quote_guard": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 44,
+    "reanchored": false
+   }
+  },
+  {
+   "page": 1,
+   "number": 4,
+   "cited_turn": 49,
+   "text": "指出獨居長輩一千零六十位，由里長與志工每週訪視",
+   "context": [],
+   "quote": "獨居長輩全鎮有一千零六十位，里長跟志工每週去訪視一次",
+   "scorer_category": "correct",
+   "cited_speaker": "S1",
+   "hybrid_decision": "kept_paraphrase",
+   "reference_v1b_v2_v3": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 49,
+    "reanchored": false
+   },
+   "reference_v1b_v2_v3_fragment_quote_guard": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 49,
+    "reanchored": false
+   }
+  },
+  {
+   "page": 2,
+   "number": 1,
+   "cited_turn": 47,
+   "text": "說明社區據點目標每里一處，目前僅二十三個里有設置",
+   "context": [],
+   "quote": "第二個是社區據點，每個里至少要有一處，全鎮四十一個里，現在只有二十三個里有",
+   "scorer_category": "unmatched",
+   "cited_speaker": "S1",
+   "hybrid_decision": "kept_paraphrase",
+   "reference_v1b_v2_v3": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 47,
+    "reanchored": false
+   },
+   "reference_v1b_v2_v3_fragment_quote_guard": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 47,
+    "reanchored": false
+   }
+  },
+  {
+   "page": 2,
+   "number": 2,
+   "cited_turn": 48,
+   "text": "說明據點補助八十六萬含專職人員，需具備基本照護與溝通能力",
+   "context": [],
+   "quote": "一個據點每年的補助是86萬，包含一位專職人員，這個人要會量血壓，也要會陪人講話",
+   "scorer_category": "unmatched",
+   "cited_speaker": "S1",
+   "hybrid_decision": "rescued_quote",
+   "reference_v1b_v2_v3": {
+    "status": "dropped",
+    "code": "unsupported",
+    "anchor_turn": null,
+    "reanchored": null
+   },
+   "reference_v1b_v2_v3_fragment_quote_guard": {
+    "status": "dropped",
+    "code": "unsupported",
+    "anchor_turn": null,
+    "reanchored": null
+   }
+  },
+  {
+   "page": 2,
+   "number": 3,
+   "cited_turn": 49,
+   "text": "說明嘗試安裝感應器，十二小時無動靜即通知家屬",
+   "context": [],
+   "quote": "所以我們也在試一個比較簡單的辦法，就是在家裡裝一個感應器，十二個小時沒有動靜就通知家屬",
+   "scorer_category": "unmatched",
+   "cited_speaker": "S1",
+   "hybrid_decision": "kept_paraphrase",
+   "reference_v1b_v2_v3": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 49,
+    "reanchored": false
+   },
+   "reference_v1b_v2_v3_fragment_quote_guard": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 49,
+    "reanchored": false
+   }
+  },
+  {
+   "page": 2,
+   "number": 4,
+   "cited_turn": 50,
+   "text": "指出去年一百九十人因跌倒送醫，三十七人失去行走能力",
+   "context": [],
+   "quote": "去年因為跌倒送醫的有一百九十位，其中三十七位後來就沒有再自己走路了",
+   "scorer_category": "unmatched",
+   "cited_speaker": "S1",
+   "hybrid_decision": "kept_paraphrase",
+   "reference_v1b_v2_v3": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 50,
+    "reanchored": false
+   },
+   "reference_v1b_v2_v3_fragment_quote_guard": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 50,
+    "reanchored": false
+   }
+  },
+  {
+   "page": 3,
+   "number": 1,
+   "cited_turn": 51,
+   "text": "說明失智症估計一千一百人，僅四成確診，六百多家庭未確診",
+   "context": [],
+   "quote": "我們估計全鎮有一千一百人，但是有確診的只有四成，也就是說，有六百多個家庭，根本不知道怎麼辦",
+   "scorer_category": "unmatched",
+   "cited_speaker": "S1",
+   "hybrid_decision": "kept_paraphrase",
+   "reference_v1b_v2_v3": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 51,
+    "reanchored": false
+   },
+   "reference_v1b_v2_v3_fragment_quote_guard": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 51,
+    "reanchored": false
+   }
+  },
+  {
+   "page": 3,
+   "number": 2,
+   "cited_turn": 52,
+   "text": "指出九百二十戶聘外籍看護，每月僅有一天假期",
+   "context": [],
+   "quote": "家裡有聘外籍看護的有九百二十戶，這些家庭其實也很辛苦，因為看護一個月只有一天假",
+   "scorer_category": "unmatched",
+   "cited_speaker": "S1",
+   "hybrid_decision": "kept_paraphrase",
+   "reference_v1b_v2_v3": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 52,
+    "reanchored": false
+   },
+   "reference_v1b_v2_v3_fragment_quote_guard": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 52,
+    "reanchored": false
+   }
+  },
+  {
+   "page": 3,
+   "number": 3,
+   "cited_turn": 52,
+   "text": "說明提供喘息服務，讓看護休假、家人休息",
+   "context": [],
+   "quote": "我們想辦法做喘息服務，讓看護可以放假，讓家人也可以睡一個好覺",
+   "scorer_category": "unmatched",
+   "cited_speaker": "S1",
+   "hybrid_decision": "kept_paraphrase",
+   "reference_v1b_v2_v3": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 52,
+    "reanchored": false
+   },
+   "reference_v1b_v2_v3_fragment_quote_guard": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 52,
+    "reanchored": false
+   }
+  },
+  {
+   "page": 3,
+   "number": 4,
+   "cited_turn": 51,
+   "text": "說明於各據點提供免費量表，十五分鐘即可完成篩檢",
+   "context": [],
+   "quote": "我們今年開始，在每個據點都放一份簡單的量表，免費，十五分鐘就可以做完",
+   "scorer_category": "unmatched",
+   "cited_speaker": "S1",
+   "hybrid_decision": "kept_paraphrase",
+   "reference_v1b_v2_v3": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 51,
+    "reanchored": false
+   },
+   "reference_v1b_v2_v3_fragment_quote_guard": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 51,
+    "reanchored": false
+   }
+  },
+  {
+   "page": 4,
+   "number": 1,
+   "cited_turn": 57,
+   "text": "說明去年遷入三百至四十歲居民八百七十人，為十年來首次人口淨增",
+   "context": [],
+   "quote": "葉嶺鎮去年遷入的三十到四十歲居民有八百七十人，這是十年來第一次人口淨增加",
+   "scorer_category": "unmatched",
+   "cited_speaker": "S1",
+   "hybrid_decision": "dropped:number_mismatch",
+   "reference_v1b_v2_v3": {
+    "status": "dropped",
+    "code": "number_mismatch",
+    "anchor_turn": null,
+    "reanchored": null
+   },
+   "reference_v1b_v2_v3_fragment_quote_guard": {
+    "status": "dropped",
+    "code": "number_mismatch",
+    "anchor_turn": null,
+    "reanchored": null
+   }
+  },
+  {
+   "page": 4,
+   "number": 2,
+   "cited_turn": 58,
+   "text": "說明將穀倉改建為葉嶺工坊，設四十個座位並提供一 Gbps 網路",
+   "context": [],
+   "quote": "所以我們把舊的穀倉改成共享辦公室，叫做葉嶺工坊，現在有四十個座位，網路是1Gbps",
+   "scorer_category": "correct",
+   "cited_speaker": "S1",
+   "hybrid_decision": "kept_paraphrase",
+   "reference_v1b_v2_v3": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 58,
+    "reanchored": false
+   },
+   "reference_v1b_v2_v3_fragment_quote_guard": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 58,
+    "reanchored": false
+   }
+  },
+  {
+   "page": 4,
+   "number": 3,
+   "cited_turn": 59,
+   "text": "說明通勤時間由五十分鐘縮短至十分鐘，每日節省約一個半小時",
+   "context": [],
+   "quote": "單程通勤時間，從以前平均五十分鐘，變成十分鐘。一天省下來差不多一個半小時",
+   "scorer_category": "correct",
+   "cited_speaker": "S1",
+   "hybrid_decision": "kept_paraphrase",
+   "reference_v1b_v2_v3": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 59,
+    "reanchored": false
+   },
+   "reference_v1b_v2_v3_fragment_quote_guard": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 59,
+    "reanchored": false
+   }
+  },
+  {
+   "page": 4,
+   "number": 4,
+   "cited_turn": 61,
+   "text": "指出共享辦公室使用率僅五十五成，因居家較舒適",
+   "context": [],
+   "quote": "共享辦公室現在的使用率只有55%，因為很多人覺得在家比較舒服",
+   "scorer_category": "unmatched",
+   "cited_speaker": "S1",
+   "hybrid_decision": "dropped:number_mismatch",
+   "hand_adjudication": [
+    {
+     "truth": "real_error",
+     "kind": "unit_drift",
+     "note": "turn says 使用率只有55%; the text writes 五十五成 (= 550%). Attribution right (S1 T61). Kept by V1 (value 55 == 55); dropped by the committed check (literal) and by V1b."
+    }
+   ],
+   "reference_v1b_v2_v3": {
+    "status": "dropped",
+    "code": "number_mismatch",
+    "anchor_turn": null,
+    "reanchored": null
+   },
+   "reference_v1b_v2_v3_fragment_quote_guard": {
+    "status": "dropped",
+    "code": "number_mismatch",
+    "anchor_turn": null,
+    "reanchored": null
+   }
+  },
+  {
+   "page": 5,
+   "number": 1,
+   "cited_turn": 66,
+   "text": "說明目前僅一條光纖，去年曾斷線十九小時",
+   "context": [],
+   "quote": "對外網路的備緣，我們只有一條光先。去年斷過兩次，其中一次是怪手挖斷的，停了十九個小時",
+   "scorer_category": "unmatched",
+   "cited_speaker": "S1",
+   "hybrid_decision": "kept_paraphrase",
+   "reference_v1b_v2_v3": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 66,
+    "reanchored": false
+   },
+   "reference_v1b_v2_v3_fragment_quote_guard": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 66,
+    "reanchored": false
+   }
+  },
+  {
+   "page": 5,
+   "number": 2,
+   "cited_turn": 68,
+   "text": "說明今年將增設第二條光纖，預算一千一百萬，目前涵蓋率九十一成",
+   "context": [],
+   "quote": "所以今年我們要補第二條，走另一個方向，預算是1100萬。另外光纖到府的涵蓋率現在是百分之九十一",
+   "scorer_category": "unmatched",
+   "cited_speaker": "S1",
+   "hybrid_decision": "dropped:number_mismatch",
+   "hand_adjudication": [
+    {
+     "truth": "real_error",
+     "kind": "unit_drift",
+     "note": "turn says 涵蓋率現在是百分之九十一; the text writes 九十一成. Attribution right (S1 T68). Kept by V1, dropped by V1b."
+    }
+   ],
+   "reference_v1b_v2_v3": {
+    "status": "dropped",
+    "code": "number_mismatch",
+    "anchor_turn": null,
+    "reanchored": null
+   },
+   "reference_v1b_v2_v3_fragment_quote_guard": {
+    "status": "dropped",
+    "code": "number_mismatch",
+    "anchor_turn": null,
+    "reanchored": null
+   }
+  },
+  {
+   "page": 5,
+   "number": 3,
+   "cited_turn": 70,
+   "text": "說明現有六條路線，其中三條每小時僅一班",
+   "context": [],
+   "quote": "我們鎮上現在有六條公車路線，其中三條，是平均一個小時才一班",
+   "scorer_category": "unmatched",
+   "cited_speaker": "S1",
+   "hybrid_decision": "kept_paraphrase",
+   "reference_v1b_v2_v3": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 70,
+    "reanchored": false
+   },
+   "reference_v1b_v2_v3_fragment_quote_guard": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 70,
+    "reanchored": false
+   }
+  },
+  {
+   "page": 5,
+   "number": 4,
+   "cited_turn": 73,
+   "text": "說明試辦預約接駁服務，收費三十元，長者免費",
+   "context": [],
+   "quote": "我們去年試辦了一個需求反應式的接駁，就是你打電話預約，小巴士來接你。一次收30元，老人家免費",
+   "scorer_category": "unmatched",
+   "cited_speaker": "S1",
+   "hybrid_decision": "kept_paraphrase",
+   "reference_v1b_v2_v3": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 73,
+    "reanchored": false
+   },
+   "reference_v1b_v2_v3_fragment_quote_guard": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 73,
+    "reanchored": false
+   }
+  },
+  {
+   "page": 6,
+   "number": 1,
+   "cited_turn": 54,
+   "text": "提出時間銀行構想，由六十五至七十歲健康長輩陪伴八十歲以上長者",
+   "context": [],
+   "quote": "我最近還在想一個比較大膽的點子，就是讓六十五歲到七十歲，身體比較健康的長輩，去陪八十歲以上的",
+   "scorer_category": "correct",
+   "cited_speaker": "S1",
+   "hybrid_decision": null,
+   "reference_v1b_v2_v3": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 54,
+    "reanchored": false
+   },
+   "reference_v1b_v2_v3_fragment_quote_guard": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 54,
+    "reanchored": false
+   }
+  },
+  {
+   "page": 6,
+   "number": 2,
+   "cited_turn": 56,
+   "text": "說明時間銀行時數可轉給家人，但上限為每年一百二十小時",
+   "context": [
+    55
+   ],
+   "quote": "可以，但是我們設了上限，一年最多一百二十小時，不然就變成買賣了",
+   "scorer_category": "correct",
+   "cited_speaker": "S1",
+   "hybrid_decision": null,
+   "reference_v1b_v2_v3": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 56,
+    "reanchored": false
+   },
+   "reference_v1b_v2_v3_fragment_quote_guard": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 56,
+    "reanchored": false
+   }
+  },
+  {
+   "page": 6,
+   "number": 3,
+   "cited_turn": 82,
+   "text": "設定目標於明年夏前使五條路線改為每小時兩班",
+   "context": [],
+   "quote": "我們還有一個小目標，就是明年夏天以前，讓六條路線裡面最少五條，變成一個小時兩班",
+   "scorer_category": "unmatched",
+   "cited_speaker": "S1",
+   "hybrid_decision": null,
+   "reference_v1b_v2_v3": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 82,
+    "reanchored": false
+   },
+   "reference_v1b_v2_v3_fragment_quote_guard": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 82,
+    "reanchored": false
+   }
+  },
+  {
+   "page": 6,
+   "number": 4,
+   "cited_turn": 84,
+   "text": "總結水、午餐、長照、遠距工作與公車共計明年預算七億三千萬",
+   "context": [],
+   "quote": "這五件事加起來，明年的預算是七億三千萬，占鎮庫總預算的百分之四十一",
+   "scorer_category": "correct",
+   "cited_speaker": "S1",
+   "hybrid_decision": null,
+   "reference_v1b_v2_v3": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 84,
+    "reanchored": false
+   },
+   "reference_v1b_v2_v3_fragment_quote_guard": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 84,
+    "reanchored": false
+   }
+  }
+ ]
+}
