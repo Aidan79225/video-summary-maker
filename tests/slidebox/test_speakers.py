@@ -166,7 +166,8 @@ def test_a_boundary_the_diarizer_placed_too_late_does_not_hand_words_to_the_wron
     assert [w.text for w in fixture.words][4:7] == ["我", "覺", "得"]
     assert labels[:4] == ["S1"] * 4
     assert labels[4:7] == ["S0"] * 3          # 不確定的字不給任何人
-    assert labels[7:] == ["S2"] * (len(labels) - 7)
+    assert labels[7] == "S0"                  # 換人點（6.7 秒）切過「很」（6.6–6.8 秒）：它也說不準
+    assert labels[8:] == ["S2"] * (len(labels) - 8)
 
 
 def test_a_boundary_the_diarizer_placed_too_early_does_not_hand_words_to_the_wrong_speaker():
@@ -195,6 +196,50 @@ def test_a_pause_shorter_than_the_threshold_is_not_a_natural_boundary():
     labels = labels_of(fixture)
 
     assert labels.count("S0") == 2
+
+
+def test_a_word_the_diarizer_change_point_cuts_through_is_undecided():
+    # B 的一字句「好。」（1.0–1.4 秒），diarizer 把換人點放在 1.25 秒：字的中點落在 A，
+    # 但另一位的區段蓋到這個字 0.15 秒，這個字是誰的說不準（審查用模擬量過：沒有這條，
+    # 換人點在自然邊界上就完全信任，沒有任何時間上的餘裕）
+    words = [Word(0.0, 1.0, "我同意。", 0), Word(1.0, 1.4, "好。", 0), Word(1.5, 2.5, "那我們開始。", 1)]
+    turns = normalize_turns([SpeakerTurn(0.0, 1.25, "A"), SpeakerTurn(1.25, 3.0, "B")])
+
+    assert [label for _, label in assign_speakers(words, turns)] == ["S1", "S0", "S2"]
+
+
+def test_a_change_point_between_two_words_costs_nothing():
+    words = [Word(0.0, 1.0, "我同意。", 0), Word(1.0, 2.0, "那我們開始。", 1)]
+    turns = normalize_turns([SpeakerTurn(0.0, 1.0, "A"), SpeakerTurn(1.0, 3.0, "B")])
+
+    assert [label for _, label in assign_speakers(words, turns)] == ["S1", "S2"]
+
+
+def test_a_change_point_a_few_hundredths_inside_a_word_is_within_the_tolerance():
+    # 語音辨識與 diarizer 的時間都以幾十毫秒為單位：差一兩格不算換人點切過這個字
+    words = [Word(0.0, 1.0, "我同意。", 0), Word(1.0, 2.0, "那我們開始。", 1)]
+    inside_a_little = normalize_turns([SpeakerTurn(0.0, 0.97, "A"), SpeakerTurn(0.97, 3.0, "B")])
+    inside_a_lot = normalize_turns([SpeakerTurn(0.0, 0.8, "A"), SpeakerTurn(0.8, 3.0, "B")])
+
+    assert [label for _, label in assign_speakers(words, inside_a_little)] == ["S1", "S2"]
+    # 換人點在 0.8 秒：「我同意。」的中點（0.5）仍是 A，但 B 蓋到它 0.2 秒
+    assert [label for _, label in assign_speakers(words, inside_a_lot)] == ["S0", "S2"]
+
+
+def test_a_word_reaching_into_the_gap_before_the_next_speaker_is_undecided_too():
+    # A 在 1.2 秒結束、B 在 1.3 秒開始，中間 0.1 秒沒有區段；「好。」（0.9–1.4）的中點在 A，
+    # 但 B 蓋到它 0.1 秒
+    words = [Word(0.0, 0.9, "我同意。", 0), Word(0.9, 1.4, "好。", 0), Word(1.5, 2.5, "那我們開始。", 1)]
+    turns = normalize_turns([SpeakerTurn(0.0, 1.2, "A"), SpeakerTurn(1.3, 3.0, "B")])
+
+    assert [label for _, label in assign_speakers(words, turns)] == ["S1", "S0", "S2"]
+
+
+def test_a_speaker_overlapping_only_the_same_speakers_other_turn_is_not_a_change_point():
+    words = [Word(0.0, 1.0, "我同意。", 0), Word(1.0, 2.0, "這個方案很好。", 0)]
+    turns = normalize_turns([SpeakerTurn(0.0, 1.5, "A"), SpeakerTurn(0.8, 3.0, "A")])
+
+    assert [label for _, label in assign_speakers(words, turns)] == ["S1", "S1"]
 
 
 def test_words_covered_by_two_speakers_are_undecided():
@@ -364,6 +409,11 @@ def test_a_word_is_never_given_to_a_speaker_the_diarizer_does_not_support(seed):
     for i, (word, label) in enumerate(out):
         if label == "S0":
             continue
+        # 別的說話者的區段不能蓋到這個字超過容許的時間（換人點切過這個字就說不準）
+        for turn in turns:
+            if turn.speaker != label:
+                overlap = min(turn.end, word.end) - max(turn.start, word.start)
+                assert overlap <= speakers.STRADDLE_TOLERANCE_SECONDS + 1e-6, (word.text, label, turn)
         cover = covering(turns, word)
         if cover:
             assert label in cover, f"字 {word.text!r}（{word.start}）被歸給 {label}，區段只支持 {cover}"

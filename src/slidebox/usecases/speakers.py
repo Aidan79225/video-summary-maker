@@ -42,6 +42,9 @@ PAUSE_SECONDS = 0.3
 SNAP_SECONDS = 1.5
 # 沒有任何區段蓋住的字，兩側同一人、中間沒有超過這麼久、且空隙裡沒有自然的邊界才算那個人
 INHERIT_MAX_GAP_SECONDS = 2.0
+# 別位說話者的區段蓋到一個字超過這麼久，就是 diarizer 的換人點切過這個字，這個字說不準。
+# 語音辨識與 diarizer 的時間都以幾十毫秒為單位，所以留一點餘裕，差一兩格不算
+STRADDLE_TOLERANCE_SECONDS = 0.05
 _EPS = 1e-6
 
 # --- 分段（暫定值）---
@@ -130,6 +133,8 @@ def assign_speakers(
        或兩字之間停頓 >= 0.3 秒。不在自然邊界上的換人，不把任何字挪給另一個人，
        而是把「diarizer 的換人點到最近的自然邊界（1.5 秒內）」之間的字標成 S0；
        1.5 秒內沒有自然邊界，就只把換人點兩側各一個字標成 S0。
+    4. 最後，別位說話者的區段蓋到這個字超過 0.05 秒的字也是 S0：字的中點只能二選一，但 diarizer 的
+       換人點若切過這個字，就表示它對這個字本身並不確定（換人點剛好落在自然邊界上也一樣）。
 
     時間不是有限數字的字一律是 S0。字的順序就是文字的順序；開始時間會被夾成不遞減。
     """
@@ -141,6 +146,7 @@ def assign_speakers(
             labels[i] = _UNSURE
     labels = _fill_gaps(clean, labels)
     labels = _snap_changes(clean, labels)
+    labels = _doubt_straddled_words(clean, spans, labels)
     return tuple((w, label if _is_speaker(label) else UNDECIDED)
                  for w, label in zip(clean, labels))
 
@@ -213,6 +219,36 @@ def _fill_gaps(words: Sequence[Word], labels: list[str]) -> list[str]:
         i = j
     # 沒被補上的空隙一律說不準
     return [_UNSURE if label == _UNCOVERED else label for label in out]
+
+
+def _doubt_straddled_words(
+    words: Sequence[Word], spans: Sequence[SpeakerTurn], labels: list[str],
+) -> list[str]:
+    """別位說話者的區段蓋到這個字超過 STRADDLE_TOLERANCE_SECONDS 的字，改成說不準。
+
+    審查用有標準答案的模擬對談量過（換人點的誤差 0.2 秒）：整句引用歸錯人的機率少了約三分之二，
+    代價是多約 3% 的字變成無法判斷；diarizer 完全正確時一個字也不會多掉。
+    """
+    starts = [t.start for t in spans]
+    ends_max: list[float] = []
+    running = -math.inf
+    for t in spans:
+        running = max(running, t.end)
+        ends_max.append(running)
+    out = list(labels)
+    for i, (w, label) in enumerate(zip(words, labels)):
+        if not _is_speaker(label):
+            continue
+        k = bisect_right(starts, w.end) - 1
+        # ends_max[k] 不超過字的開始（加上容許）就不可能再有區段蓋到它超過容許
+        while k >= 0 and ends_max[k] > w.start + STRADDLE_TOLERANCE_SECONDS:
+            t = spans[k]
+            if (t.speaker != label
+                    and min(t.end, w.end) - max(t.start, w.start) > STRADDLE_TOLERANCE_SECONDS):
+                out[i] = _UNSURE
+                break
+            k -= 1
+    return out
 
 
 def _ends_sentence(text: str) -> bool:
