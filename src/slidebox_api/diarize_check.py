@@ -22,11 +22,13 @@ from __future__ import annotations
 import argparse
 import math
 import os
+import re
 import shutil
 import subprocess
 import sys
 import tempfile
 import time
+import unicodedata
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from urllib.parse import urlparse
@@ -82,6 +84,52 @@ _WARNING_TEXT = {
     WARN_MANY_MINOR: "有四個以上只出現一下的聲音",
     WARN_SINGLE_FOUND: "自動判斷只找到 1 位主要發言者（可能把不同的人併成一個）",
 }
+
+
+# --- 外面來的文字：標題、網址、逐字稿、別人的錯誤訊息，印到終端機之前一律先清過 ---
+
+# 終端機的控制序列：ESC 開頭的（CSI、OSC、DCS…）與 8 位元的 CSI／OSC。要整段拿掉，不是只拿掉 ESC 字元：
+# 否則參數變成看得到的亂碼，OSC 的內容（例如改視窗標題的字串）留在畫面上。
+# 沒有結尾的序列也整段拿掉（一直吃到字串結束），不給它「等下一行來接」的機會。
+_TERMINAL_SEQUENCE = re.compile(
+    r"\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)?"           # OSC：到 BEL 或 ST 為止
+    r"|\x1b[PX^_][^\x1b]*(?:\x1b\\)?"               # DCS／SOS／PM／APC：到 ST 為止
+    r"|\x1b\[[0-?]*[ -/]*[@-~]?"                    # CSI
+    r"|\x1b[ -/]*[0-~]?"                            # 其他 ESC 序列（ESC c、ESC ( B…）
+    r"|\x9b[0-?]*[ -/]*[@-~]?"                      # 8 位元的 CSI
+    r"|\x9d[^\x07\x9c]*(?:\x07|\x9c)?"              # 8 位元的 OSC
+)
+# 雙向文字的控制字元：可以把畫面上的字重新排序，讓人看到和實際不同的內容
+_BIDI_CONTROLS = frozenset(chr(code) for code in (0x061C, 0x200E, 0x200F, *range(0x202A, 0x202F), *range(0x2066, 0x206A)))
+
+
+def _strip_controls(text: str) -> str:
+    """拿掉控制序列、雙向控制字元與其他控制字元（BEL、退格、DEL、C1…），不留空白；
+    Tab、換行、行／段分隔符當成空白（標題不能自己多開一行來偽造報告）。"""
+    text = _TERMINAL_SEQUENCE.sub("", text)
+    out = []
+    for c in text:
+        category = unicodedata.category(c)
+        if c in _BIDI_CONTROLS:
+            continue
+        if category in ("Zl", "Zp") or (category == "Cc" and c.isspace()):
+            out.append(" ")
+        elif category != "Cc":
+            out.append(c)
+    return "".join(out)
+
+
+def plain(text: object) -> str:
+    """可以安全印在報告同一行裡的文字：控制序列與控制字元拿掉，換行與連續空白壓成一個空白。"""
+    return " ".join(_strip_controls(str(text)).split())
+
+
+def _sweep(report: str) -> str:
+    """整份報告印出前的最後一道：一行一行清，換行是報告自己的版面、留著。
+
+    一行一行清是刻意的：沒有結尾的序列（OSC 一路吃到 BEL）只會吃到這一行的結尾，不會把後面的報告也吃掉。
+    """
+    return "\n".join(_strip_controls(line) for line in report.split("\n"))
 
 
 class AudioCutFailed(Exception):
@@ -242,6 +290,7 @@ class _Progress:
         self._last_time: float | None = None
 
     def __call__(self, fraction: float | None, status: str) -> None:
+        status = plain(status)
         moment = self._now()
         if status == self._last_status:
             return
@@ -316,7 +365,7 @@ def _scope(options: Options, clip: AudioClip, parts: Parts, workdir: str, err, s
 
 
 def _short(text: str, limit: int = TEXT_CHARS) -> str:
-    text = " ".join(text.split())
+    text = plain(text)
     return text if len(text) <= limit else text[:limit] + "…"
 
 
@@ -336,7 +385,7 @@ class _Where:
 
     def __init__(self, url: str, video_id: str, offset: float):
         on_youtube = (urlparse(url).hostname or "").lower() in _YOUTUBE_HOSTS
-        self._link = f"https://www.youtube.com/watch?v={video_id}" if on_youtube and video_id else ""
+        self._link = f"https://www.youtube.com/watch?v={plain(video_id)}" if on_youtube and video_id else ""
         self._offset = offset
 
     def at(self, seconds: float) -> str:
@@ -401,7 +450,8 @@ def _describe(options: Options, parts: Parts, heard: Heard, timings: dict[str, f
               total_seconds: float) -> tuple[str, int]:
     """把聽到的結果整理成給人看的報告，並決定結束碼。"""
     clip, where = heard.clip, _Where(options.url, heard.clip.video_id, heard.offset)
-    lines = ["=== 說話者區分檢查 ===", f"來源：{options.url}", f"影片：{clip.title}（{clip.video_id}）"]
+    # 標題、網址這些外面來的文字，一律先過 plain()：上傳者可以在標題裡放終端機的控制序列
+    lines = ["=== 說話者區分檢查 ===", f"來源：{plain(options.url)}", f"影片：{plain(clip.title)}（{plain(clip.video_id)}）"]
     if heard.offset or heard.length != clip.duration:
         lines.append(f"範圍：{clock(heard.offset)}–{clock(heard.offset + heard.length)}（{heard.length:.0f} 秒）")
     else:
@@ -409,7 +459,7 @@ def _describe(options: Options, parts: Parts, heard: Heard, timings: dict[str, f
     device = getattr(parts.diarizer, "device", "")
     lines.append(f"說話者區分：{parts.diarizer.engine} {parts.diarizer.version}（{parts.diarizer.model}"
                  + (f"，{device}" if device else "") + "）")
-    lines.append(f"語音辨識：{parts.whisper_model or '預設模型'}（語言 {heard.language}）")
+    lines.append(f"語音辨識：{plain(parts.whisper_model) or '預設模型'}（語言 {plain(heard.language)}）")
     lines.append(f"指定人數：{options.speakers if options.speakers else '自動判斷'}")
     voice_lines, voices = _voice_lines(heard.diarized, where)
     lines += ["", f"--- 說話者區分器找到 {voices} 個聲音 ---", *voice_lines]
@@ -460,7 +510,7 @@ def run(options: Options, parts: Parts, out, err, base_dir: str | None = None) -
     began = parts.clock()
     usable, reason = parts.diarizer.available()
     if not usable:                                       # 不行就在下載任何東西之前停下來
-        print(f"說話者區分目前無法使用：{reason or '沒有說明'}", file=err)
+        print(f"說話者區分目前無法使用：{plain(reason) or '沒有說明'}", file=err)
         return EXIT_FAILED
     timings: dict[str, float] = {}
     try:
@@ -469,13 +519,13 @@ def run(options: Options, parts: Parts, out, err, base_dir: str | None = None) -
         print("已中斷。", file=err)
         return EXIT_INTERRUPTED
     except NoSubtitlesAvailable as e:                    # 音訊 gateway 下載失敗時丟的就是這個
-        print(f"下載音訊失敗：{e}", file=err)
+        print(f"下載音訊失敗：{plain(e)}", file=err)     # yt-dlp 的錯誤常整段貼著頁面上的文字
         return EXIT_FAILED
     except (DiarizationUnavailable, SpeechRecognitionFailed, AudioCutFailed, BadRange) as e:
-        print(str(e), file=err)
+        print(plain(e), file=err)
         return EXIT_FAILED
     report, code = _describe(options, parts, heard, timings, parts.clock() - began)
-    print(report, file=out)
+    print(_sweep(report), file=out)                      # 最後一道：除了報告自己的換行，沒有任何控制字元
     return code
 
 

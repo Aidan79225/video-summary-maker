@@ -676,3 +676,164 @@ def test_run_as_a_module_with_bad_arguments_exits_with_2_and_tells_why():
     result = _module()
     assert result.returncode == 2
     assert "--sample" in result.stderr
+
+
+# --- 外面來的文字（標題、網址、逐字稿、錯誤訊息）不能對終端機下指令 ---
+
+ESCAPES = "\x1b[2K\x1b[1A  ALL OK: 0 problems\x1b]0;pwned\x07"
+# 報告裡一個控制字元都不該有；換行是報告自己的版面
+FORBIDDEN = [chr(c) for c in (*range(0, 10), *range(11, 32), 127, *range(0x80, 0xA0))]
+
+
+def assert_inert(text: str) -> None:
+    found = [repr(c) for c in FORBIDDEN if c in text]
+    assert not found, f"報告裡還有控制字元 {found}"
+    assert "\N{RIGHT-TO-LEFT OVERRIDE}" not in text and "pwned" not in text
+
+
+def test_a_title_with_terminal_escape_sequences_cannot_rewrite_the_report(tmp_path):
+    """攔的 bug：影片標題由上傳者決定，原樣印出去。裡面的 ESC／OSC 序列可以清掉前面已經印出的
+    報告行、改終端機的標題——而這個工具的用途正是「先聽過再相信」，不能讓它的輸出被別人改寫。"""
+    clip = replace(CLIP, title="Interview" + ESCAPES)
+
+    code, out, err, _ = check_run([URL], tmp_path, audio=Audio(clip=clip))
+
+    assert code == check.EXIT_OK
+    assert_inert(out + err)
+    assert "影片：Interview" in out and "（abcdefghijk）" in out        # 看得出是哪支影片
+    assert "[2K" not in out and "[1A" not in out                      # 序列整段拿掉，不是只拿掉 ESC 字元
+
+
+def test_a_title_cannot_forge_extra_report_lines_with_line_breaks(tmp_path):
+    clip = replace(CLIP, title="真的標題\n\n  狀態：FORGED\r\n=== 說話者區分檢查 ===")
+    _, out, _, _ = check_run([URL], tmp_path, audio=Audio(clip=clip))
+    lines = out.splitlines()
+    title_line = next(line for line in lines if line.startswith("影片："))
+    assert "真的標題" in title_line and "（abcdefghijk）" in title_line     # 整個標題在同一行
+    assert lines.count("=== 說話者區分檢查 ===") == 1                       # 偽造的標頭只會是標題行裡的一段字
+    assert not [line for line in lines if line.startswith("  狀態：FORGED")]
+
+
+def test_bidirectional_overrides_in_a_title_are_removed(tmp_path):
+    clip = replace(CLIP, title="abc\N{RIGHT-TO-LEFT OVERRIDE}def\N{LEFT-TO-RIGHT ISOLATE}ghi\N{POP DIRECTIONAL ISOLATE}")
+    _, out, _, _ = check_run([URL], tmp_path, audio=Audio(clip=clip))
+    assert "abcdefghi" in out and "\N{RIGHT-TO-LEFT OVERRIDE}" not in out and "\N{LEFT-TO-RIGHT ISOLATE}" not in out
+
+
+def test_an_ordinary_title_is_printed_untouched(tmp_path):
+    """對照：中文、全形標點、emoji（含零寬連接符組成的）都照原樣。"""
+    title = "少子化對談｜第 1 集 — 「托育」😀 👨\N{ZERO WIDTH JOINER}👩\N{ZERO WIDTH JOINER}👧"
+    _, out, _, _ = check_run([URL], tmp_path, audio=Audio(clip=replace(CLIP, title=title)))
+    assert f"影片：{title}（abcdefghijk）" in out
+
+
+def test_c1_control_characters_are_removed_too(tmp_path):
+    """8 位元的 CSI（U+009B）與 OSC（U+009D）有些終端機也認得。"""
+    clip = replace(CLIP, title="a\x9b31mb\x9d0;pwned\x9cc")
+    _, out, _, _ = check_run([URL], tmp_path, audio=Audio(clip=clip))
+    assert_inert(out)
+    assert "影片：abc（" in out
+
+
+def test_a_malformed_or_unfinished_sequence_is_removed_as_well(tmp_path):
+    clip = replace(CLIP, title="x\x1b[31;1" + "\x1b" + "我y\x1b]0;never-terminated")
+    _, out, _, _ = check_run([URL], tmp_path, audio=Audio(clip=clip))
+    assert_inert(out)
+    assert "影片：x我y（" in out
+
+
+def test_transcribed_text_with_control_characters_is_cleaned_before_it_is_printed(tmp_path):
+    words = list(FIXTURE.words)
+    words[0] = replace(words[0], text="\x1b[31m" + words[0].text + "\x07")
+    _, out, _, _ = check_run([URL], tmp_path, words=FakeWordTranscriber(words=words))
+    assert_inert(out)
+    assert "今天我們來談少子化" in out
+
+
+def test_the_address_typed_on_the_command_line_is_cleaned_too(tmp_path):
+    dirty = URL + "&x=\x1b]0;pwned\x07"
+    _, out, _, _ = check_run([dirty], tmp_path)
+    assert_inert(out)
+    assert "來源：" + URL in out
+
+
+def test_error_text_from_a_download_or_a_model_is_cleaned_before_it_reaches_the_terminal(tmp_path):
+    """yt-dlp 的錯誤常常整段貼著頁面上的文字（標題、上傳者的說明）。"""
+    audio = Audio(error=NoSubtitlesAvailable("影片無法使用：\x1b]0;pwned\x07Video unavailable\x1b[2J"))
+    code, out, err, _ = check_run([URL], tmp_path, audio=audio)
+    assert code == check.EXIT_FAILED
+    assert_inert(out + err)
+    assert "Video unavailable" in err
+
+    code, out, err, _ = check_run([URL], tmp_path, diarizer=FakeDiarizer(error=DiarizationUnavailable("壞了\x1b[2J")))
+    assert code == check.EXIT_FAILED and "壞了" in err
+    assert_inert(out + err)
+
+
+def test_progress_lines_are_cleaned_too(tmp_path):
+    class Chatty(FakeDiarizer):
+        def diarize(self, audio_path, duration, speaker_count, progress, is_cancelled):
+            progress(0.1, "區分說話者…\x1b[2J（比對聲紋）\x07")
+            return super().diarize(audio_path, duration, speaker_count, progress, is_cancelled)
+
+    _, out, err, _ = check_run([URL], tmp_path, diarizer=Chatty())
+    assert_inert(out + err)
+    assert "區分說話者…" in err
+
+
+@pytest.mark.parametrize("raw,expected", [
+    ("plain text", "plain text"),
+    ("a\x1b[31mred\x1b[0mb", "aredb"),                          # CSI（顏色）
+    ("a\x1b[2Kb\x1b[1Ac", "abc"),                               # CSI（清行、游標上移）
+    ("a\x1b]0;title\x07b", "ab"),                               # OSC，BEL 結尾
+    ("a\x1b]0;title\x1b\x5cb", "ab"),                             # OSC，ST（ESC \）結尾
+    ("a\x1bPsome dcs payload\x1b\x5cb", "ab"),                    # DCS
+    ("a\x1bcb", "ab"),                                          # ESC c（重設終端機）
+    ("a\x1b(Bb", "ab"),                                         # ESC ( B（選字元集）
+    ("a\x9b2Jb", "ab"),                                         # 8 位元 CSI
+    ("a\x9d0;x\x9cb", "ab"),                                    # 8 位元 OSC
+    ("a\x00b\x07c\x08d\x7fe", "abcde"),                         # NUL、BEL、退格、DEL：不留空白
+    ("a\tb\nc\r\nd", "a b c d"),                                # Tab 與換行當成空白、壓成一個
+    ("a\N{LINE SEPARATOR}b\N{PARAGRAPH SEPARATOR}c", "a b c"),
+    ("a\N{RIGHT-TO-LEFT OVERRIDE}b\N{ARABIC LETTER MARK}c", "abc"),
+    ("  many    spaces  ", "many spaces"),
+    ("少子化對談｜「托育」😀", "少子化對談｜「托育」😀"),
+])
+def test_plain_text_for_the_terminal(raw, expected):
+    assert check.plain(raw) == expected
+
+
+def test_plain_leaves_non_text_input_printable():
+    assert check.plain(ValueError("壞了\x1b[2J")) == "壞了"
+    assert check.plain(None) == "None"
+
+
+def test_the_whole_report_is_swept_one_last_time_even_for_fields_nobody_thought_of(tmp_path):
+    """第二層：欄位各自清過，但報告印出前還有最後一道。這裡的引擎名稱沒有人特別處理，
+    只靠最後一道擋；拿掉它，這個測試就會失敗。"""
+    class Odd(FakeDiarizer):
+        engine = "fake\x1b[2Jengine\x07"
+
+    _, out, err, _ = check_run([URL], tmp_path, diarizer=Odd())
+    assert_inert(out + err)
+    assert "fakeengine 1.0" in out
+    lines = out.splitlines()
+    assert lines[0] == "=== 說話者區分檢查 ===" and len(lines) > 10          # 換行是報告自己的版面，要留著
+
+
+def test_an_unfinished_sequence_in_one_field_cannot_swallow_the_rest_of_the_report(tmp_path):
+    """攔的 bug：整份報告一次清，沒有結尾的 OSC 序列一路吃到下一個 BEL——後面的報告全部消失，
+    而這個工具的輸出正是要拿來核對的。最後一道要一行一行清。"""
+    class Odd(FakeDiarizer):
+        engine = "fake\x1b]0;never-terminated"
+
+    _, out, _, _ = check_run([URL], tmp_path, diarizer=Odd())
+    assert_inert(out)
+    assert "語音辨識：whisper-a（語言 zh）" in out and "--- 品質 ---" in out and "--- 耗時與記憶體 ---" in out
+
+
+def test_the_length_limit_counts_what_the_reader_sees_not_the_control_sequences():
+    """攔的 bug：先截短再清，標題或逐字稿裡的顏色碼佔掉字數，看得到的字變少。"""
+    shown = check._short("\x1b[31m" * 10 + "字" * 70, limit=60)
+    assert shown == "字" * 60 + "…"
+    assert check._short("\x1b[31m字\x1b[0m") == "字"
