@@ -382,14 +382,17 @@ python manage.py ingest_ivod --source ntpc --date 2026-09-17 --days 400 --discov
 # 先預檢：只讀影片資料、印出會登記什麼，不寫資料庫、不呼叫 GPU
 sudo docker exec ly-news-api python manage.py add_video 'https://www.youtube.com/watch?v=jNQXAC9IVRw' --dry-run
 
-# 加入（這支影片只有一個人在講話，所以加 --speakers 1，見下面）
+# 加入：預設就是多人影片，用聲音區分說話的人（GPU 主機要先更新好，見下面的 --speakers 與多人影片一段）
+sudo docker exec ly-news-api python manage.py add_video 'https://www.youtube.com/watch?v=jNQXAC9IVRw'
+
+# 確定整支影片從頭到尾只有一個人在講話時：加 --speakers 1，跳過區分（沿用單人寫法，全部寫成同一位「講者」）
 sudo docker exec ly-news-api python manage.py add_video 'https://www.youtube.com/watch?v=jNQXAC9IVRw' --speakers 1
 ```
 
 長影片建議在背景執行，斷線不影響；輸出寫進 `/data/add-video.log`（`DATA_DIR` 那個磁碟）。之後再跑一次同樣的指令，會接回 GPU 上已經做完的工作，不會重做：
 
 ```bash
-sudo docker exec -d ly-news-api sh -c "python manage.py add_video 'https://www.youtube.com/watch?v=jNQXAC9IVRw' --speakers 1 >> /data/add-video.log 2>&1"
+sudo docker exec -d ly-news-api sh -c "python manage.py add_video 'https://www.youtube.com/watch?v=jNQXAC9IVRw' >> /data/add-video.log 2>&1"
 sudo docker exec ly-news-api tail -f /data/add-video.log
 ```
 
@@ -407,7 +410,7 @@ sudo docker exec ly-news-api python manage.py remove_video yt-jNQXAC9IVRw --forc
 
 | 旗標 | 說明 |
 |---|---|
-| `--speakers 1` | 聲明「這支影片只有一個人在講話」。**沒有它，指令拒絕登記與送出**：現在的摘要流程會把全部的話寫成同一個「講者」說的，多人對談、訪談、連線的影片會把話安到錯的人頭上，指令無法事先知道一支影片有幾個人講話。用聲音區分說話的人的功能還在做，完成之前，有多個人講話的影片先不要加。`--dry-run` 與「已經發佈」的結果不受影響 |
+| `--speakers N` | 提示影片有幾個人在講話。**不加＝預設的多人模式**：GPU 用聲音區分說話的人，人數自動判斷，每個重點都安到說這句話的人頭上；`--speakers N`（2～20）告訴區分的程式有幾個人。`--speakers 1` 是例外：聲明整支影片只有一個人，跳過區分、沿用單人寫法（全部寫成同一位「講者」）；標題或頻道名稱像訪談、對談卻加了它會警告。GPU 沒有更新、沒設 Hugging Face token、或模型載不起來時，預設的多人模式在登記之前就停下來說明原因，**不會悄悄退回單人寫法**。接回還沒收的舊 GPU 工作時模式不會被悄悄換掉：舊工作是單人的、這次卻沒加 `--speakers 1` 會拒絕 |
 | `--dry-run` | 只做預檢並印出會登記的資料，不寫資料庫、不呼叫 GPU |
 | `--rerun` | 重做已經發佈的影片；重做期間影片留在網站上，失敗也不會下架 |
 | `--force` | 允許剛結束、YouTube 還在轉檔的直播（沒有字幕、下載很慢，常常失敗） |
@@ -418,6 +421,20 @@ sudo docker exec ly-news-api python manage.py remove_video yt-jNQXAC9IVRw --forc
 | `--max-minutes N` | 長度上限（分鐘），預設 180；加大時也要調大 `GPU_JOB_TIMEOUT_SECONDS` |
 | `--min-slides N` / `--max-slides N` | 覆寫頁數範圍（1～50）。預設依長度算：最少 ⌈分鐘÷6⌉（夾在 3～8）、最多 ⌈分鐘÷2⌉（夾在 6～50）；GPU 的預設 8～15 頁會讓短影片失敗 |
 | `--title` / `--speaker` / `--date YYYY-MM-DD` | 覆寫讀到的標題、講者（頻道名稱）、日期；只能搭配一個網址。`--speaker` 讓改過名的頻道新舊影片維持同一個名字；處理完成後登記的標題不會被 GPU 的標題換掉 |
+
+**多人影片的說話者**：成品用中性標籤（「發言者 A」「發言者 B」，短暫出現的聲音是「其他聲音 1」，沒把握的是「無法判斷」），程式不猜真人姓名，也不把話安給「看起來像」的人。聽過、確定是誰之後，用 `label_video` 取名字；改了馬上生效，不必重跑 GPU（`--rerun` 重做之後說話者編號可能重排，名字不保留）：
+
+```bash
+# 印對照表：每位說話者附幾句話與可以跳到那一秒的連結
+sudo docker exec ly-news-api python manage.py label_video 'https://www.youtube.com/watch?v=jNQXAC9IVRw'
+# 取名字、角色；S3 和 S1 其實是同一個人時併起來；取消
+sudo docker exec ly-news-api python manage.py label_video yt-jNQXAC9IVRw --name S1=某某 --role S1=主持人 --merge S3=S1
+sudo docker exec ly-news-api python manage.py label_video yt-jNQXAC9IVRw --clear S1
+# 抽查：抽 6 個重點，印誰說的、依據是哪句話、連結（每位說話者至少抽 2 個；同一個 --seed 抽到同一批）
+sudo docker exec ly-news-api python manage.py label_video yt-jNQXAC9IVRw --audit 6 --seed 7
+```
+
+部署順序（**先更新 GPU 主機，再更新 Pi**）、資料庫備份與遷移 0015、契約與嚴格檢查見 [`services/news/README.md`](services/news/README.md) 的「多人影片：誰說了什麼」；GPU 這一側的設定、映像與 `diarize_check` 見本文件〈1. 摘要 API〉的「多人說話者模式」；設計與決策（#19 起）見 [`docs/superpowers/specs/2026-10-31-youtube-videos-design.md`](docs/superpowers/specs/2026-10-31-youtube-videos-design.md) 的第二部分。在相信任何多人文章之前，先照那裡的驗收做一次真實影片的抽查。
 
 - **接受的網址**：`watch?v=`（帶任何其他參數）、`youtu.be/`、`shorts/`、`live/`、`embed/`、舊的 `/v/` 與 `/e/`、沒有協定的寫法、單獨的 11 碼 id（開頭是 `-` 也行）。一律換成 `https://www.youtube.com/watch?v=<id>` 存起來，所以同一支影片怎麼貼都是同一篇。**拒絕並說明**：只有清單的網址、頻道頁（頻道的 `/live` 每次指向不同影片，請貼影片自己的網址）、搜尋、`/clip/`（網址裡沒有影片 id）、`v=` 不是剛好 11 碼。
 - **預檢**（寫進資料庫之前，影片資料用標準函式庫讀 oEmbed 與影片頁）：不存在或不能播、直播中或尚未首播、Shorts → 拒絕（沒有旗標可以蓋過）；不公開、音樂類別、超過長度上限、剛結束的直播 → 拒絕，訊息會寫出要加哪個旗標。**檢查不了也是拒絕**：影片頁讀不到，讀到了卻沒解出播放器回應（`playabilityStatus`），或解出來了、影片也能播，卻缺了 `isUnlisted`／`isShortsEligible`（真實的頁面，能播放的每一頁都有；缺哪個，那一項檢查就是「不知道」，訊息點名缺的欄位），不公開、直播、Shorts、音樂與長度就是「不知道」而不是「沒問題」，所以拒絕，要明確加 `--allow-unverified`（oEmbed 與影片頁都讀不到時，要自己給 `--title`、`--speaker`、`--date` 三個**再加** `--allow-unverified`）。日期是影片（或直播開始）當下的**台北時間**日期，讀不到就用今天並警告。標題與頻道名稱是上傳者寫的，控制字元與雙向覆寫字元（ESC 序列、換行、U+202E 之類）會先清掉再印、再存；ZWJ 與 ZWNJ 留著（表情符號的組合、波斯文與印地文需要它們）。
