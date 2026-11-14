@@ -51,10 +51,11 @@ class ArticleAdmin(admin.ModelAdmin):
     search_fields = ("ivod_id", "speaker", "title", "transcript_text", "error")
     # 失敗原因與 GPU 工作編號是給人看的診斷資訊，不該在 admin 裡被改掉。
     # speaker_count（影片的說話者模式：空＝自動區分、1＝單人、2 以上＝固定人數）也唯讀：它決定 GPU 工作怎麼送、
-    # 結果怎麼驗，要改用 add_video --rerun --speakers。說話者清單（speakers、diarization）整個不放進表單，
-    # 名字與併法只能用 label_video 改
-    readonly_fields = ("error", "gpu_job_id", "attempts", "speaker_count", "created_at", "updated_at",
-                       "published_at")
+    # 結果怎麼驗，要改用 add_video --rerun --speakers。range_start／range_end（只處理影片的哪一段，單位秒、原影片的
+    # 時間；空＝整支影片）同理：GPU 工作怎麼送、結果怎麼核對都靠它，要改用 add_video --rerun --start/--end。
+    # 說話者清單（speakers、diarization）整個不放進表單，名字與併法只能用 label_video 改
+    readonly_fields = ("error", "gpu_job_id", "attempts", "speaker_count", "range_start", "range_end",
+                       "created_at", "updated_at", "published_at")
     # 多人影片的逐字稿（每一行開頭是 [[Sn]]）與摘要卡（多人影片一律沒有，有的話就是沒說話者的口吻）鎖成唯讀，
     # 理由同 SlideInline：誰說的不只在 points 裡。標題、頻道、狀態這些欄位照常改得動
     locked_when_diarized = ("transcript_text", "brief")
@@ -68,7 +69,7 @@ class ArticleAdmin(admin.ModelAdmin):
         (None, {"fields": ("source", "ivod_id", "slug", "title", "speaker", "party", "membership",
                            "meeting", "session", "date", "duration_seconds", "ivod_url")}),
         ("處理狀態", {"fields": ("status", "attempts", "error", "gpu_job_id", "speaker_count",
-                                 "created_at", "updated_at", "published_at")}),
+                                 "range_start", "range_end", "created_at", "updated_at", "published_at")}),
         ("內容", {"classes": ("collapse",),
                   "fields": ("source_note", "brief", "transcript_text")}),
     )

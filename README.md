@@ -587,6 +587,9 @@ sudo docker exec ly-news-api python manage.py add_video 'https://www.youtube.com
 
 # 確定整支影片從頭到尾只有一個人在講話時：加 --speakers 1，跳過區分（沿用單人寫法，全部寫成同一位「講者」）
 sudo docker exec ly-news-api python manage.py add_video 'https://www.youtube.com/watch?v=jNQXAC9IVRw' --speakers 1
+
+# 影片前後有不相干的訪談、或聲音多到超過 12 個的發佈上限：只處理要的那一段（多人模式；時間是原影片的時間）
+sudo docker exec ly-news-api python manage.py add_video 'https://www.youtube.com/watch?v=jNQXAC9IVRw' --start 10:00 --end 58:00
 ```
 
 長影片建議在背景執行，斷線不影響；輸出寫進 `/data/add-video.log`（`DATA_DIR` 那個磁碟）。之後再跑一次同樣的指令，會接回 GPU 上已經做完的工作，不會重做：
@@ -611,6 +614,7 @@ sudo docker exec ly-news-api python manage.py remove_video yt-jNQXAC9IVRw --forc
 | 旗標 | 說明 |
 |---|---|
 | `--speakers N` | 提示影片有幾個人在講話。**不加＝預設的多人模式**：GPU 用聲音區分說話的人，人數自動判斷，每個重點都安到說這句話的人頭上；`--speakers N`（2～20）告訴區分的程式有幾個人。`--speakers 1` 是例外：聲明整支影片只有一個人，跳過區分、沿用單人寫法（全部寫成同一位「講者」）；標題或頻道名稱像訪談、對談卻加了它會警告。GPU 沒有更新、沒設 Hugging Face token、或模型載不起來時，預設的多人模式在登記之前就停下來說明原因，**不會悄悄退回單人寫法**。接回還沒收的舊 GPU 工作時模式不會被悄悄換掉：舊工作是單人的、這次卻沒加 `--speakers 1` 會拒絕 |
+| `--start` / `--end` | 只處理影片的一段：從哪裡開始、到哪裡為止。寫法是秒數（`600`）、分:秒（`10:00`）或時:分:秒（`1:02:03`），**只收整數秒**，而且一律是**原影片的時間**：網站上的逐字稿、`&t=` 連結與截圖也是原影片的時間。只給 `--end` ＝ 從頭開始；只給 `--start` ＝ 一直到影片結尾（`--start 0` 就是整支影片）；範圍至少 5 秒，終點超過影片長度就處理到結尾。**只能用在多人模式、只能搭配一個網址**（`--speakers 1` 或好幾個網址加這兩個旗標會拒絕，不會悄悄忽略）。區間外的聲音不會被聲音區分聽到，所以不佔 12 個聲音的上限，`--speakers N` 的 N 也是範圍內的人數。`--max-minutes` 與頁數照範圍的長度算。**GPU 主機要先更新到認得範圍的版本**（`/capabilities` 的 `video_range`）：舊版會悄悄處理整支影片，所以沒回報就在登記之前停下來。換範圍要加 `--rerun`；接回 GPU 上還在跑的工作時範圍必須跟它送出時的一樣（不一樣會拒絕並說明怎麼辦） |
 | `--dry-run` | 只做預檢並印出會登記的資料，不寫資料庫、不呼叫 GPU |
 | `--rerun` | 重做已經發佈的影片；重做期間影片留在網站上，失敗也不會下架 |
 | `--force` | 允許剛結束、YouTube 還在轉檔的直播（沒有字幕、下載很慢，常常失敗） |

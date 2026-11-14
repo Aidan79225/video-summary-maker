@@ -20,7 +20,7 @@ from articles.models import Article, ArticleStatus, Slide
 from articles.tests.speaker_support import publish_diarized
 
 VIDEO = "jNQXAC9IVRw"
-HIDDEN_FROM_THE_FORM = ("speakers", "diarization", "speaker_count")
+HIDDEN_FROM_THE_FORM = ("speakers", "diarization", "speaker_count", "range_start", "range_end")
 # 讀取時會被換成名字的文字：改掉一個記號就是換掉那句話的主人
 LOCKED_ARTICLE_FIELDS = ("transcript_text", "brief")
 LOCKED_SLIDE_FIELDS = ("title", "bullets", "detail")
@@ -159,6 +159,18 @@ class SpeakerAdminTests(TestCase):
         self.assertIn("speaker_count", response.context["adminform"].model_admin.readonly_fields)
         self.assertNotContains(response, 'id="id_speaker_count"')
 
+    def test_the_processing_range_is_shown_but_read_only(self):
+        """只處理影片的哪一段決定 GPU 工作怎麼送、結果怎麼核對：看得到，但改要用 add_video --rerun --start/--end。"""
+        Article.objects.filter(pk=self.article.pk).update(range_start=600, range_end=1500)
+        response = self.client.get(self.url)
+        for name in ("range_start", "range_end"):
+            with self.subTest(field=name):
+                self.assertContains(response, name)
+                self.assertIn(name, response.context["adminform"].model_admin.readonly_fields)
+                self.assertNotContains(response, f'id="id_{name}"')
+        self.assertContains(response, "600")
+        self.assertContains(response, "1500")
+
     def test_saving_the_untouched_form_changes_nothing_about_the_speakers(self):
         before = Article.objects.get(pk=self.article.pk)
         points = [s.points for s in before.slides.order_by("index")]
@@ -180,6 +192,8 @@ class SpeakerAdminTests(TestCase):
             "speakers": '[{"id": "S1", "name": "偷改的名字", "label": "x", "kind": "participant"}]',
             "diarization": '{"status": "ok"}',
             "speaker_count": "7",
+            "range_start": "5",
+            "range_end": "9",
             "slides-0-points": '[{"speaker": "S2", "start": 0, "text": "偷改的重點"}]',
             "title": "只有標題是改得動的",
         }
@@ -187,7 +201,8 @@ class SpeakerAdminTests(TestCase):
         self.assertEqual(response.status_code, 302)
         after = Article.objects.get(pk=self.article.pk)
         self.assertEqual(after.title, "只有標題是改得動的")           # 表單是通的：改得動的欄位照常存
-        self.assertEqual((after.speakers, after.diarization, after.speaker_count),
-                         (before.speakers, before.diarization, before.speaker_count))
+        self.assertEqual((after.speakers, after.diarization, after.speaker_count, after.range_start, after.range_end),
+                         (before.speakers, before.diarization, before.speaker_count, before.range_start,
+                          before.range_end))
         self.assertEqual([s.points for s in after.slides.order_by("index")], points)
         self.assertNotIn("偷改", str(list(Slide.objects.values())) + str(Article.objects.values()))
