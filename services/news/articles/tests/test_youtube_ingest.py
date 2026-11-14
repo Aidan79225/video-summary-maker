@@ -61,10 +61,11 @@ class RecordingClient:
         self._known_jobs.pop(job_id, None)
 
     def submit(self, url, detailed=True, min_slides=None, max_slides=None, speech_hint=None,
-               speaker_mode=None, speaker_count=None):
+               speaker_mode=None, speaker_count=None, range_start=None, range_end=None):
         self.submits.append({"url": url, "detailed": detailed, "min_slides": min_slides,
                              "max_slides": max_slides, "speech_hint": speech_hint,
-                             "speaker_mode": speaker_mode, "speaker_count": speaker_count})
+                             "speaker_mode": speaker_mode, "speaker_count": speaker_count,
+                             "range_start": range_start, "range_end": range_end})
         if isinstance(self._error, GpuApiError):
             raise self._error
         return f"job-{len(self.submits)}"

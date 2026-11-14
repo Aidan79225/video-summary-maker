@@ -32,6 +32,7 @@ from urllib.parse import parse_qs, quote, urljoin, urlsplit
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from .ivod_source import SourceUnavailable
+from .video_range import VideoRange, clock, fit_problem, range_length
 
 # Article.ivod_id 的前綴：yt-<11 碼影片 id>
 ID_PREFIX = "yt-"
@@ -829,6 +830,9 @@ class PreflightOptions:
     # 影片頁沒讀到、或讀到了卻沒解出播放器回應：不公開、直播、Shorts、音樂與長度都檢查不了。
     # 預設拒絕；這個旗標是操作者說「那些檢查我自己負責」
     allow_unverified: bool = False
+    # 只處理影片的一段（add_video --start/--end）：None＝整支影片。--max-minutes 比的是這一段的長度，
+    # 起點要在影片裡、夾進影片之後至少要有 MIN_RANGE_SECONDS 秒
+    video_range: VideoRange | None = None
 
 
 def _unverified_because(meta: VideoMeta) -> str:
@@ -882,11 +886,22 @@ def preflight(meta: VideoMeta, options: PreflightOptions) -> list[str]:
     if meta.category and meta.category.strip().lower() in _MUSIC and not options.allow_music:
         raise VideoRefused("這支影片的類別是「音樂」：整首歌詞會被當成逐字稿公開在網站上。確定要的話，加上 --allow-music",
                            "--allow-music")
-    minutes = meta.duration_seconds / 60
-    if meta.duration_seconds > options.max_minutes * 60:
+    chosen = options.video_range
+    problem = fit_problem(meta.duration_seconds, chosen)
+    if problem:
+        raise VideoRefused(problem)
+    # 要處理的那一段有多長（0＝不知道）；沒有範圍就是整支影片。--max-minutes 與頁數都以它為準
+    length = range_length(meta.duration_seconds, chosen)
+    checked = length if chosen is not None and length else meta.duration_seconds
+    if checked > options.max_minutes * 60:
+        if chosen is None:
+            what = f"影片長 {checked / 60:.0f} 分鐘"
+        else:
+            what = (f"要處理的範圍 {chosen.describe()} 長 {checked / 60:.0f} 分鐘"
+                    f"（整支影片 {meta.duration_seconds / 60:.0f} 分鐘）")
         raise VideoRefused(
-            f"影片長 {minutes:.0f} 分鐘，超過上限 {options.max_minutes} 分鐘。要處理的話，加上 "
-            f"--max-minutes {-(-meta.duration_seconds // 60)}；影片越長，GPU_JOB_TIMEOUT_SECONDS（兩個容器都要）也要跟著調大",
+            f"{what}，超過上限 {options.max_minutes} 分鐘。要處理的話，加上 "
+            f"--max-minutes {-(-checked // 60)}；影片越長，GPU_JOB_TIMEOUT_SECONDS（兩個容器都要）也要跟著調大",
             "--max-minutes")
     unverified = _unverified_because(meta)
     missing = _missing_flags(meta)
@@ -906,6 +921,14 @@ def preflight(meta: VideoMeta, options: PreflightOptions) -> list[str]:
             f"{'那些檢查' if len(missing) > 1 else '那項檢查'}就由你自己負責（只給 --title、--speaker、--date 不能代替它）",
             "--allow-unverified")
     warnings: list[str] = []
+    if chosen is not None and chosen.end is not None and meta.duration_seconds and chosen.end >= meta.duration_seconds:
+        # 不拒絕：GPU 會把終點夾到影片結尾。說清楚，免得操作者以為 --end 還在影片之內
+        if chosen.start == 0:
+            warnings.append(f"--end（{clock(chosen.end)}）已經到了影片結尾（{clock(meta.duration_seconds)}）："
+                            "這個範圍就是整支影片，不需要 --start／--end")
+        else:
+            warnings.append(f"--end（{clock(chosen.end)}）超過影片的長度（{clock(meta.duration_seconds)}），"
+                            "會處理到影片結尾為止")
     if meta.is_post_live:
         if not options.force:
             raise VideoRefused("這支直播剛結束，YouTube 還在轉檔：沒有字幕、下載很慢，常常失敗。建議幾小時後再加；"
@@ -921,7 +944,14 @@ def preflight(meta: VideoMeta, options: PreflightOptions) -> list[str]:
             warnings.append(f"影片頁的播放器回應裡沒有 {names}，所以沒辦法確認這支影片{unchecked}；"
                             "摘要和逐字稿會公開在網站上，請自己確認過")
         if not meta.duration_seconds:
-            warnings.append("影片頁沒有給長度，沒辦法檢查 --max-minutes，頁數範圍也交給 GPU 的預設")
+            if chosen is None:
+                warnings.append("影片頁沒有給長度，沒辦法檢查 --max-minutes，頁數範圍也交給 GPU 的預設")
+            elif chosen.end is not None:
+                warnings.append("影片頁沒有給長度，沒辦法確認範圍有沒有落在影片裡（GPU 下載之後才會檢查）；"
+                                "--max-minutes 與頁數範圍只能照範圍自己的長度算")
+            else:
+                warnings.append("影片頁沒有給長度，沒辦法確認範圍有沒有落在影片裡（GPU 下載之後才會檢查），"
+                                "也沒辦法檢查 --max-minutes，頁數範圍交給 GPU 的預設")
     return warnings
 
 

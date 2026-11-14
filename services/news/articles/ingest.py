@@ -29,6 +29,7 @@ from .models import COUNCIL_SOURCES, Article, ArticleSource, ArticleStatus, Slid
 from .profiles import attach_session
 from .speaker_result import (SlideResult, check_single_result, check_speaker_result, clean_diarization,  # noqa: F401
                              clean_points, clean_speakers, requested_speaker_count, with_pi_fields)
+from .video_range import RangeInvalid, VideoRange, range_length, range_of
 from .youtube_source import (canonical_url, clean_speaker, clean_text, is_video_id, ivod_id_for, placeholder_title,
                              slide_range, video_id_from_ivod_id)
 
@@ -203,7 +204,8 @@ def _upsert(clip: IvodClip, day: date) -> tuple[Article, bool]:
 
 
 def register_video(video_id: str, *, title: str, speaker: str, day: date,
-                   duration_seconds: int = 0, speaker_count: int | None = None) -> tuple[Article, bool]:
+                   duration_seconds: int = 0, speaker_count: int | None = None,
+                   video_range: VideoRange | None = None) -> tuple[Article, bool]:
     """登記一支手動加入的 YouTube 影片（add_video）。回傳 (文章, 這次是不是新建的)。
 
     跟 _upsert 刻意分開：影片不是議會的片段。來源明確寫成 youtube；`meeting` 一律留空——非空的
@@ -216,9 +218,15 @@ def register_video(video_id: str, *, title: str, speaker: str, day: date,
 
     speaker_count：None＝預設的多人模式、人數由 GPU 自動判斷；1＝操作者聲明這支影片只有一個人（跳過
     區分）；2 以上＝指定人數。已經存在的影片不改（要改人數用 add_video --rerun --speakers N）。
+
+    video_range：只處理影片的一段（原影片的整數秒；見 video_range.py）。None＝整支影片。範圍只有多人模式
+    有意義：單人（speaker_count == 1）加上範圍丟 ValueError，不悄悄收下——送出時範圍會被丟掉、處理整支影片。
+    已經存在的影片同樣不改（要改範圍用 add_video --rerun --start/--end）。duration_seconds 仍是整支影片的長度。
     """
     if not is_video_id(video_id):
         raise ValueError(f"不是 11 碼的影片 id：{video_id[:40]!r}")
+    if video_range is not None and speaker_count == 1:
+        raise ValueError("處理範圍只有多人模式可以指定（--speakers 1 跳過說話者區分，沒有範圍這回事）")
     ivod_id = ivod_id_for(video_id)
     return Article.objects.get_or_create(
         ivod_id=ivod_id,
@@ -234,6 +242,8 @@ def register_video(video_id: str, *, title: str, speaker: str, day: date,
             "source": ArticleSource.YOUTUBE,
             "status": ArticleStatus.PENDING,
             "speaker_count": speaker_count,
+            "range_start": None if video_range is None else video_range.start,
+            "range_end": None if video_range is None else video_range.end,
         },
     )
 
@@ -518,14 +528,24 @@ def _resume_or_submit(article: Article, client: GpuApiClient, timeout: float,
         return resumable
 
     if article.source == ArticleSource.YOUTUBE:
-        # GPU 預設要 8～15 頁：19 秒的影片只產得出 3 頁，會因「少於下限」失敗。依長度算
-        low, high = slides if slides is not None else slide_range(article.duration_seconds)
+        video_range = _stored_range(article)
+        # GPU 預設要 8～15 頁：19 秒的影片只產得出 3 頁，會因「少於下限」失敗。依長度算；
+        # 只處理一段的話依那一段的長度（一小時影片裡的十分鐘，頁數該跟十分鐘的影片一樣）
+        low, high = (slides if slides is not None
+                     else slide_range(range_length(article.duration_seconds, video_range)))
         if wants_diarization(article):
-            # 預設：多人區分。人數只有指定 2 位以上才送，沒指定就是 None（GPU 自動判斷）
+            # 預設：多人區分。人數只有指定 2 位以上才送，沒指定就是 None（GPU 自動判斷）。
+            # 範圍只有記著的時候才傳：沒有範圍的影片，呼叫的形狀跟加範圍之前一模一樣
+            range_arguments = ({} if video_range is None
+                               else {"range_start": video_range.start, "range_end": video_range.end})
             job_id = client.submit(article.ivod_url, detailed=True, min_slides=low, max_slides=high,
                                    speech_hint=speech_hint_for(article), speaker_mode=SpeakerMode.DIARIZE,
-                                   speaker_count=requested_speaker_count(article))
+                                   speaker_count=requested_speaker_count(article), **range_arguments)
         else:
+            if video_range is not None:
+                # 單人的請求沒有範圍這個概念：悄悄丟掉的話，操作者要的一段會變成整支影片
+                raise JobFailed(f"這支影片是單人模式（--speakers 1），資料列上卻記著處理範圍 {video_range.describe()}："
+                                "範圍只有多人模式能用，沒有送出。要處理一段請用 add_video --rerun 不加 --speakers 1")
             # --speakers 1：跟第一部分一模一樣的單人請求，不帶任何說話者的鍵
             job_id = client.submit(article.ivod_url, detailed=True, min_slides=low, max_slides=high,
                                    speech_hint=speech_hint_for(article))
@@ -537,6 +557,15 @@ def _resume_or_submit(article: Article, client: GpuApiClient, timeout: float,
         raise _deleted(article)
     logger.info("文章 %s 已送出，工作 %s", article.ivod_id, job_id)
     return job_id
+
+
+def _stored_range(article: Article) -> VideoRange | None:
+    """資料列上記著的處理範圍；沒有是 None。記著的不合理（沒有人會寫出這樣的資料列）就讓這一支影片失敗：
+    不猜，猜錯的範圍會送去 GPU、處理到不是操作者要的那一段。"""
+    try:
+        return range_of(article)
+    except RangeInvalid as e:
+        raise JobFailed(f"這支影片記著的處理範圍不合理，沒有送出：{e}") from e
 
 
 def wants_diarization(article: Article) -> bool:

@@ -111,11 +111,89 @@ class SubmitBodyTests(SimpleTestCase):
                 self.assertEqual(transport.calls, [])
 
 
+class SubmitRangeTests(SimpleTestCase):
+    """多人工作可以只處理影片的一段：range_start（一定帶）、range_end（有才帶），都是原影片的整數秒。"""
+
+    def _body(self, **kwargs):
+        client, transport, _ = _client([{"id": "j1"}])
+        client.submit("https://x", min_slides=3, max_slides=6, speech_hint="頻道。標題",
+                      speaker_mode=SpeakerMode.DIARIZE, speaker_count=None, **kwargs)
+        return transport.calls[0]["body"]
+
+    def test_a_range_goes_out_after_the_speaker_keys(self):
+        body = self._body(range_start=600, range_end=3480)
+        self.assertEqual(list(body), ["url", "detailed", "min_slides", "max_slides", "speech_hint",
+                                      "speaker_mode", "speaker_count", "range_start", "range_end"])
+        self.assertEqual((body["range_start"], body["range_end"]), (600, 3480))
+
+    def test_an_open_end_is_left_out_not_sent_as_null(self):
+        """省略終點＝一直到影片結尾；GPU 那邊沒有 range_end 這個鍵與 null 是同一個意思，但 Pi 只送有值的鍵。"""
+        body = self._body(range_start=600)
+        self.assertEqual(body["range_start"], 600)
+        self.assertNotIn("range_end", body)
+
+    def test_a_start_of_zero_is_still_sent(self):
+        """從頭開始、只截到某處（--end 58:00）：range_start 是 0，不能因為「0 是假值」而不見了。"""
+        body = self._body(range_start=0, range_end=1800)
+        self.assertEqual((body["range_start"], body["range_end"]), (0, 1800))
+
+    def test_an_end_alone_starts_at_zero(self):
+        body = self._body(range_end=1800)
+        self.assertEqual((body["range_start"], body["range_end"]), (0, 1800))
+
+    def test_without_a_range_the_body_is_exactly_the_contract_example(self):
+        request = CONTRACT["request"]
+        client, transport, _ = _client([{"id": "j1"}])
+        client.submit(request["url"], detailed=request["detailed"], min_slides=request["min_slides"],
+                      max_slides=request["max_slides"], speech_hint=request["speech_hint"],
+                      speaker_mode=SpeakerMode.DIARIZE, speaker_count=request["speaker_count"],
+                      range_start=None, range_end=None)
+        self.assertEqual(transport.calls[0]["body"], request)
+        self.assertEqual(list(transport.calls[0]["body"]), list(request))
+        self.assertNotIn("range_start", request)
+
+    def test_other_kinds_of_request_never_carry_a_range_key(self):
+        client, transport, _ = _client([{"id": "j1"}, {"id": "j2"}, {"id": "j3"}])
+        client.submit("https://ivod.ly.gov.tw/Play/Clip/1M/900001", detailed=True, speech_hint="立法院")
+        client.submit("https://x", min_slides=3, max_slides=6, speech_hint="頻道。標題")
+        client.submit_topic("一段文字", [{"key": "a", "label": "甲", "description": "乙"}])
+        for call in transport.calls:
+            self.assertFalse({"range_start", "range_end"} & set(call["body"]))
+
+    def test_a_range_without_the_multi_speaker_mode_is_refused_not_dropped(self):
+        """單人與議會的請求沒有範圍這個概念：悄悄丟掉的話，操作者要的一段會變成整支影片。"""
+        for kwargs in ({}, {"speaker_mode": SpeakerMode.SINGLE}, {"speaker_mode": None}):
+            for rng in ({"range_start": 600}, {"range_end": 1800}, {"range_start": 0, "range_end": 1800}):
+                with self.subTest(kwargs=kwargs, range=rng):
+                    client, transport, _ = _client([{"id": "j1"}])
+                    with self.assertRaises(ValueError) as caught:
+                        client.submit("https://x", **kwargs, **rng)
+                    self.assertIn("多人", str(caught.exception))
+                    self.assertEqual(transport.calls, [])
+
+    def test_a_bad_range_never_reaches_the_wire(self):
+        for rng in ({"range_start": -1}, {"range_start": True}, {"range_start": "600"}, {"range_start": 6.5},
+                    {"range_start": float("nan")}, {"range_start": 90001},
+                    {"range_start": 600, "range_end": 600}, {"range_start": 600, "range_end": 100},
+                    {"range_start": 600, "range_end": 603}, {"range_start": 600, "range_end": "3480"},
+                    {"range_start": 600, "range_end": 3480.5}, {"range_start": 600, "range_end": True},
+                    {"range_start": 600, "range_end": 90001}):
+            with self.subTest(range=rng):
+                client, transport, _ = _client([{"id": "j1"}])
+                with self.assertRaises(ValueError):
+                    client.submit("https://x", speaker_mode=SpeakerMode.DIARIZE, **rng)
+                self.assertEqual(transport.calls, [])
+
+    def test_the_smallest_valid_range_goes_out(self):
+        body = self._body(range_start=600, range_end=605)
+        self.assertEqual((body["range_start"], body["range_end"]), (600, 605))
+
+
 class FakeSignatureTests(SimpleTestCase):
-    def test_the_real_submit_takes_the_two_new_options_last_and_defaults_to_none(self):
+    def test_the_real_submit_takes_the_new_options_last_and_defaults_to_none(self):
         import inspect
 
         parameters = inspect.signature(GpuApiClient.submit).parameters
-        self.assertEqual(list(parameters)[-2:], ["speaker_mode", "speaker_count"])
-        self.assertIsNone(parameters["speaker_mode"].default)
-        self.assertIsNone(parameters["speaker_count"].default)
+        self.assertEqual(list(parameters)[-4:], ["speaker_mode", "speaker_count", "range_start", "range_end"])
+        for name in ("speaker_mode", "speaker_count", "range_start", "range_end"):
+            self.assertIsNone(parameters[name].default, name)

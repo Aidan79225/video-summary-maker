@@ -171,6 +171,12 @@ class Article(models.Model):
     # 2 以上＝指定人數。議會的來源忽略此欄位。migration 0015 對既有的資料列填 1（既有的影片
     # 全都是 --speakers 1 做的）；新登記的影片用模型預設 None，也就是多人模式。
     speaker_count = models.PositiveIntegerField(null=True, blank=True, default=None)
+    # YouTube：只處理影片的一段（add_video --start/--end），都是原影片的整數秒。範圍存在時 range_start 一定有值
+    # （0＝從頭，不是「沒有」），range_end 是 None＝一直到影片結尾；沒有範圍（整支影片、議會的來源）兩個都是 None。
+    # 跟 speaker_count 一樣是「這支影片這次是怎麼送去 GPU 的」：接回 GPU 上還在跑的工作、核對結果的區間都要靠它，
+    # 所以只有 add_video 會改（admin 唯讀）。duration_seconds 仍是整支影片的長度，不是這一段的。
+    range_start = models.PositiveIntegerField(null=True, blank=True, default=None)
+    range_end = models.PositiveIntegerField(null=True, blank=True, default=None)
 
     status = models.CharField(max_length=16, choices=ArticleStatus.choices,
                               default=ArticleStatus.PENDING, db_index=True)

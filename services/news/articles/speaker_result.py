@@ -24,6 +24,8 @@ from typing import NoReturn
 
 from .gpu_client import JobFailed
 from .speakers import PLACEHOLDER, SPEAKER_ID, UNDECIDABLE
+from .video_range import RangeInvalid, VideoRange, range_of
+from .video_range import clock as time_text
 from .youtube_source import UrlRejected, clean_text, parse_video_url, video_id_from_ivod_id
 
 MODE = "diarize"
@@ -56,6 +58,7 @@ UNASSIGNED_WARN_RATIO = 0.25    # 說話時間裡無法判斷是誰說的超過�
 MANY_MINOR = 4              # 其他聲音有這麼多個以上，就警告
 SECONDS_SLACK = 0.05        # 每個人的秒數各自四捨五入到小數一位，加起來最多差這麼多（每人一次，全部說話時間一次）
 TIME_SLACK = 1.0            # 重點的時間跟說話者首末時間比對時留的餘地（GPU 的時間只取到小數一位）
+DURATION_SLACK = 3.0        # 處理範圍的終點跟影片頁給的長度比對時留的餘地：頁面的長度是整數秒、音訊實際長度可能差一點
 
 KINDS = ("participant", "minor")
 STATUSES = ("ok", "warn")
@@ -76,6 +79,11 @@ _BULLET = re.compile(r"\[\[(S[1-9][0-9]{0,2})\]\]：(.+)", re.S)
 
 NOT_UPDATED = ("GPU 主機很可能還沒更新到支援多人區分的版本；請先更新並重啟 GPU 主機，再用 "
                "add_video --rerun 重做")
+RANGE_NOT_UPDATED = ("GPU 主機很可能還沒更新到支援處理範圍（video_range）的版本：舊版會悄悄忽略範圍、處理整支影片；"
+                     "請先更新並重啟 GPU 主機，再用 add_video --rerun 重做")
+# 結果裡有時間落在處理範圍之外的原因：GPU 剪出一段來聽，量到的時間從那一段的開頭算起，存檔前要把範圍的起點加回去
+_FORGOT_START = ("GPU 可能沒有把範圍的起點加回時間，或兩邊的版本沒對上：照這樣發佈，時間連結與截圖會跳到影片的別處，"
+                 "文章不發佈")
 
 
 def _fail(message: str) -> NoReturn:
@@ -164,8 +172,11 @@ def _description(value: object, max_length: int = DESCRIPTION_LENGTH) -> str:
 # --- 白名單清理 ---
 
 
-def clean_speakers(raw: object) -> list[dict]:
-    """GPU 的 speakers → 只留契約裡的鍵。Pi 自己的 name、role、basis、merged_into 由 save_result 另外補。"""
+def clean_speakers(raw: object, window: tuple[float, float | None] | None = None) -> list[dict]:
+    """GPU 的 speakers → 只留契約裡的鍵。Pi 自己的 name、role、basis、merged_into 由 save_result 另外補。
+
+    window 是處理範圍（見 _check_range）：代表的話的時間落在範圍之外的丟掉，跟其他壞掉的代表的話一樣。
+    """
     if not isinstance(raw, list):
         _fail(f"speakers 要是清單，不是 {_show(raw)}")
     if not 1 <= len(raw) <= MAX_SPEAKERS:
@@ -203,7 +214,7 @@ def clean_speakers(raw: object) -> list[dict]:
             "turns": _int(item.get("turns"), f"{where}.turns", low=1),
             "first_seen": first_seen,
             "last_seen": last_seen,
-            "samples": _clean_samples(item.get("samples")),
+            "samples": _clean_samples(item.get("samples"), window),
             "flags": _clean_flags(item.get("flags")),
         })
     return speakers
@@ -215,8 +226,11 @@ def _is_seconds(value: object) -> bool:
     return (math.isfinite(value) if isinstance(value, float) else True) and 0 <= value <= MAX_SECONDS
 
 
-def _clean_samples(raw: object) -> list[dict]:
-    """代表性的話（給 label_video --sheet 讓操作者聽音檔取名用）。壞掉的丟掉，不為它讓工作失敗。"""
+def _clean_samples(raw: object, window: tuple[float, float | None] | None = None) -> list[dict]:
+    """代表性的話（給 label_video --sheet 讓操作者聽音檔取名用）。壞掉的丟掉，不為它讓工作失敗。
+
+    指定了處理範圍的影片：時間不在範圍裡的也算壞掉的（那一句不可能出自被處理的那一段）。
+    """
     samples: list[dict] = []
     for item in raw if isinstance(raw, list) else []:
         if len(samples) >= MAX_SAMPLES:
@@ -225,6 +239,8 @@ def _clean_samples(raw: object) -> list[dict]:
             continue
         start, text = item.get("start"), item.get("text")
         if not _is_seconds(start) or not isinstance(text, str):
+            continue
+        if window is not None and not _inside(window, start):
             continue
         text = clean_text(text)[:SAMPLE_LENGTH]
         if text and not _has_brackets(text):
@@ -293,7 +309,7 @@ def clean_diarization(raw: object) -> dict:
         # 有警告卻說 ok：網站的警示條看狀態，不看警告清單。沒辦法翻成人話的警告（Pi 不認得的新代碼）也不能就此消失
         status = "warn"
     fingerprint = raw.get("fingerprint")
-    return {
+    cleaned = {
         "engine": _description(raw.get("engine")),
         "version": _description(raw.get("version")),
         "model": _description(raw.get("model")),
@@ -309,6 +325,17 @@ def clean_diarization(raw: object) -> dict:
         "proposed_points": _int(raw.get("proposed_points"), "diarization.proposed_points"),
         "kept_points": _int(raw.get("kept_points"), "diarization.kept_points"),
     }
+    # 只處理了影片的一段才有的兩個鍵（原影片的秒數）：要一起出現、終點在起點之後；沒有範圍就一個鍵都不多
+    start, end = raw.get("range_start"), raw.get("range_end")
+    if (start is None) != (end is None):
+        _fail("diarization.range_start 與 range_end 要一起出現或一起沒有（只有一個沒辦法知道處理的是哪一段）")
+    if start is not None:
+        start = _number(start, "diarization.range_start")
+        end = _number(end, "diarization.range_end")
+        if end <= start:
+            _fail(f"diarization.range_end（{end:g}）要比 range_start（{start:g}）晚")
+        cleaned["range_start"], cleaned["range_end"] = start, end
+    return cleaned
 
 
 def with_pi_fields(speakers: list[dict]) -> list[dict]:
@@ -390,15 +417,20 @@ def check_speaker_result(article, payload: object) -> SpeakerResult:
         _fail("requested_speakers 對不上：我們要求的是"
               f"{'自動判斷人數' if expected is None else f'{expected} 位'}，"
               f"結果回的是 {diarization['requested_speakers']}（可能接回了另一種設定的工作）")
+    window = _check_range(article, diarization)
 
-    speakers = clean_speakers(raw_speakers)
+    speakers = clean_speakers(raw_speakers, window)
     participants = {s["id"] for s in speakers if s["kind"] == "participant"}
     if not participants:
         _fail("speakers 裡一位 participant 都沒有")
     diarization = _reconcile(diarization, speakers, expected)
     heard = {s["id"]: (s["first_seen"], s["last_seen"]) for s in speakers}
+    if window is not None:
+        _check_speakers_inside(window, speakers)
 
     transcript_text, transcript = _check_transcript(payload.get("transcript_text"), {s["id"] for s in speakers})
+    if window is not None:
+        _check_transcript_inside(window, transcript)
 
     raw_slides = payload.get("slides")
     if not isinstance(raw_slides, list) or not 1 <= len(raw_slides) <= MAX_SLIDES:
@@ -406,8 +438,78 @@ def check_speaker_result(article, payload: object) -> SpeakerResult:
     turn_speaker: dict[int, str] = {}
     slides: list[SlideResult] = []
     for position, raw in enumerate(raw_slides):
-        slides.append(_check_slide(raw, position, participants, turn_speaker, transcript, heard))
+        slides.append(_check_slide(raw, position, participants, turn_speaker, transcript, heard, window))
     return SpeakerResult(transcript_text, speakers, diarization, slides)
+
+
+# --- 處理範圍 ---
+
+
+def _span(window: tuple[float, float | None]) -> str:
+    """範圍的白話：「10:00–25:00」（秒數捨去小數）。"""
+    start, end = window
+    return VideoRange(int(start), None if end is None else int(end)).describe()
+
+
+def _inside(window: tuple[float, float | None], seconds: float) -> bool:
+    """這個時間在處理的範圍裡嗎？兩端各留 TIME_SLACK 秒的餘地（GPU 的時間只取到小數一位、逐字稿的 mm:ss 捨去小數）。"""
+    start, end = window
+    return start - TIME_SLACK <= seconds and (end is None or seconds <= end + TIME_SLACK)
+
+
+def _check_range(article, diarization: dict) -> tuple[float, float | None] | None:
+    """結果回報的處理範圍要跟我們要求的對得上。回傳這支影片的結果該落在哪一段（起、終），沒有範圍是 None。
+
+    - 沒有要求範圍、結果卻說只處理了一段：接回了另一種設定的工作、或兩邊的版本沒對上——不信任，失敗。
+    - 要求了範圍、結果沒有回報：舊版 GPU 不認得 range_start／range_end，會悄悄處理整支影片，那樣結果裡的人與時間
+      都不是操作者要的那一段，失敗。只有一個例外：從 0 開始、有給終點的範圍（--end 30:00），GPU 發現終點已經到了
+      影片結尾，就是整支影片、不回報範圍——這時結果仍然不能超過終點。
+    - 起點跟要求的差不到 TIME_SLACK 秒；終點不能比要求的晚（GPU 把超過影片結尾的終點夾到結尾，所以可以早）；
+      沒有給終點的，回報的終點不能超過影片的長度（影片頁給的，留 DURATION_SLACK 秒餘地）。
+    """
+    try:
+        asked = range_of(article)
+    except RangeInvalid as e:
+        _fail(f"這支影片記著的處理範圍不合理，沒辦法核對結果：{e}")
+    start, end = diarization.get("range_start"), diarization.get("range_end")
+    if asked is None:
+        if start is not None:
+            _fail(f"結果說只處理了影片的 {_span((start, end))}，但這支影片沒有指定處理範圍（可能接回了另一種設定的工作，"
+                  "或兩邊的版本沒對上；不知道哪一邊才對，為避免時間與說話者對到錯的地方，文章不發佈）")
+        return None
+    if start is None:
+        if asked.start > 0 or asked.end is None:
+            _fail(f"這支影片要求只處理 {asked.describe()}，結果卻沒有回報處理的範圍（diarization.range_start／range_end）："
+                  f"{RANGE_NOT_UPDATED}。文章不發佈")
+        return 0.0, float(asked.end)
+    if abs(start - asked.start) > TIME_SLACK:
+        _fail(f"結果回報的範圍起點（{time_text(int(start))}）跟要求的（{time_text(asked.start)}）不一樣"
+              "（可能接回了另一個範圍的工作）")
+    if asked.end is not None:
+        if end > asked.end + TIME_SLACK:
+            _fail(f"結果回報的範圍終點（{time_text(int(end))}）比要求的（{time_text(asked.end)}）還晚"
+                  "（處理了比要求更多的影片）")
+    else:
+        length = getattr(article, "duration_seconds", 0) or 0
+        if length and end > length + DURATION_SLACK:
+            _fail(f"結果回報的範圍終點（{time_text(int(end))}）超過影片的長度（{time_text(length)}）")
+    return float(start), float(end)
+
+
+def _check_speakers_inside(window: tuple[float, float | None], speakers: list[dict]) -> None:
+    """每位說話者第一次與最後出現的時間都要在處理的範圍裡。"""
+    for speaker in speakers:
+        for what, key in (("第一次出現", "first_seen"), ("最後出現", "last_seen")):
+            if not _inside(window, speaker[key]):
+                _fail(f"{speaker['label']}（{speaker['id']}）{what}的時間 {_clock(int(speaker[key]))} "
+                      f"不在處理的範圍 {_span(window)} 裡（{_FORGOT_START}）")
+
+
+def _check_transcript_inside(window: tuple[float, float | None], transcript: list[_Line]) -> None:
+    """逐字稿每一行的時間都要在處理的範圍裡（那是原影片的時間，不是剪出來那一段的）。"""
+    for number, line in enumerate(transcript, start=1):
+        if not _inside(window, line.seconds):
+            _fail(f"逐字稿第 {number} 行的時間 {_clock(line.seconds)} 不在處理的範圍 {_span(window)} 裡（{_FORGOT_START}）")
 
 
 def _check_video(article, payload: dict) -> None:
@@ -462,7 +564,8 @@ def _check_transcript(raw: object, listed: set[str]) -> tuple[str, list[_Line]]:
 
 
 def _check_slide(raw: object, position: int, participants: set[str], turn_speaker: dict[int, str],
-                 transcript: list[_Line], heard: dict[str, tuple[float, float]]) -> SlideResult:
+                 transcript: list[_Line], heard: dict[str, tuple[float, float]],
+                 window: tuple[float, float | None] | None = None) -> SlideResult:
     where = f"slides[{position}]"
     if not isinstance(raw, dict):
         _fail(f"{where} 要是物件，不是 {_show(raw)}")
@@ -476,7 +579,10 @@ def _check_slide(raw: object, position: int, participants: set[str], turn_speake
         _fail(f"{where}.title 含有 [[ 或 ]]（或長得像的字元）：小標不會被換成名字，記號會原樣漏到網頁上")
     # 不是每個 GPU 版本都會給 timestamp 的類型，但有給就要是能存進資料庫的數字（NaN 會讓整篇存不進去）
     if raw.get("timestamp") is not None:
-        _number(raw.get("timestamp"), f"{where}.timestamp")
+        stamp = _number(raw.get("timestamp"), f"{where}.timestamp")
+        if window is not None and not _inside(window, stamp):
+            # 截圖是在這個時間抽的：不在範圍裡的話，整個範圍想排除的內容（例如前後的採訪）會出現在網站上
+            _fail(f"{where} 的截圖時間 {_clock(int(stamp))} 不在處理的範圍 {_span(window)} 裡（{_FORGOT_START}）")
 
     points = clean_points(raw.get("points"), participants, f"{where}.points")
     for index, point in enumerate(points):

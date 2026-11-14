@@ -15,6 +15,8 @@ import urllib.request
 from collections.abc import Callable
 from enum import StrEnum
 
+from .video_range import MAX_TIME_SECONDS, MIN_RANGE_SECONDS
+
 _SUBMIT_TIMEOUT = 30.0
 _POLL_TIMEOUT = 30.0
 
@@ -102,6 +104,23 @@ def _http(url: str, method: str, api_key: str, body: dict | None,
         return json.loads(resp.read().decode("utf-8"))
 
 
+def _range_body(range_start: int | None, range_end: int | None) -> dict:
+    """處理範圍 → 請求的鍵。數字不合理的在這裡就丟 ValueError：送出去才被 GPU 以 422 拒絕，
+    不如在登記與等待之前就知道（add_video 已經用同一份規則擋過，這是第二道）。"""
+    start = 0 if range_start is None else range_start
+    for name, value in (("range_start", start), ("range_end", range_end)):
+        if value is None:
+            continue
+        if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= MAX_TIME_SECONDS:
+            raise ValueError(f"{name} 只能是 0～{MAX_TIME_SECONDS} 的整數秒：{value!r}")
+    if range_end is not None and range_end - start < MIN_RANGE_SECONDS:
+        raise ValueError(f"處理範圍（{start}～{range_end} 秒）太短：終點要比起點晚至少 {MIN_RANGE_SECONDS} 秒")
+    body: dict = {"range_start": start}
+    if range_end is not None:
+        body["range_end"] = range_end
+    return body
+
+
 class GpuApiClient:
     def __init__(self, base: str, api_key: str = "", transport=_http,
                  sleep: Callable[[float], None] = time.sleep,
@@ -133,8 +152,10 @@ class GpuApiClient:
     def capabilities(self) -> dict:
         """GET /capabilities：GPU 主機能不能做多人說話者區分。
 
-        回 {speaker_diarization: bool, reason: str, speaker_contract: int}。舊版的 GPU 沒有這個端點（404）：
+        回 {speaker_diarization: bool, reason: str, speaker_contract: int, video_range: bool}。舊版的 GPU 沒有這個端點（404）：
         那不是「工作不見了」，是 GPU 還沒更新——換成明確的訊息，呼叫端（add_video）據此在登記之前就擋下。
+        video_range 是 True 才表示 GPU 認得 submit 的 range_start／range_end；舊版（有 /capabilities、沒有這個鍵）
+        會悄悄忽略它們、處理整支影片，所以只要操作者指定了範圍，呼叫端就要確認它剛好是 True。
         """
         try:
             return self._call("/capabilities", "GET", timeout=_POLL_TIMEOUT)
@@ -143,7 +164,15 @@ class GpuApiClient:
 
     def submit(self, url: str, detailed: bool = True, min_slides: int | None = None,
                max_slides: int | None = None, speech_hint: str | None = None,
-               speaker_mode: str | None = None, speaker_count: int | None = None) -> str:
+               speaker_mode: str | None = None, speaker_count: int | None = None,
+               range_start: int | None = None, range_end: int | None = None) -> str:
+        """送一個摘要工作。
+
+        range_start／range_end：只處理影片的一段（原影片的整數秒），只有多人模式（speaker_mode=diarize）可以給。
+        請求裡 range_start 一定帶（只給 range_end 就是從 0 開始）、range_end 有才帶（沒有＝一直到影片結尾）；
+        兩個都沒給就是整支影片，請求跟以前逐位元組一樣。GPU 要有 /capabilities 的 video_range 才認得這兩個鍵——
+        舊版會悄悄忽略它們、處理整支影片，所以呼叫端（add_video）送出之前先問過能力。
+        """
         body: dict = {"url": url, "detailed": detailed}
         if min_slides:
             body["min_slides"] = min_slides
@@ -151,6 +180,7 @@ class GpuApiClient:
             body["max_slides"] = max_slides
         if speech_hint:
             body["speech_hint"] = speech_hint
+        has_range = range_start is not None or range_end is not None
         if speaker_mode == SpeakerMode.DIARIZE:
             # 只有多人的 YouTube 工作才帶這兩個鍵：議會與單人影片的請求逐位元組維持原樣。
             # speaker_count 是 None＝由 GPU 自動判斷人數（契約範例裡就是 null）
@@ -159,6 +189,12 @@ class GpuApiClient:
                 raise ValueError(f"多人模式的 speaker_count 只能是 None 或 2～20：{speaker_count!r}")
             body["speaker_mode"] = SpeakerMode.DIARIZE.value
             body["speaker_count"] = speaker_count
+            if has_range:
+                body.update(_range_body(range_start, range_end))
+        elif has_range:
+            # 單人與議會的請求沒有範圍這個概念：悄悄丟掉的話，操作者要的一段會變成整支影片
+            raise ValueError("處理範圍（range_start、range_end）只有多人模式（speaker_mode=diarize）的工作可以指定："
+                             f"speaker_mode={speaker_mode!r}")
         elif speaker_mode not in (None, SpeakerMode.SINGLE) or speaker_count is not None:
             # 打錯的模式或孤零零的人數不能悄悄變成單人請求：那正是這個功能要防的事
             raise ValueError(f"不認得的說話者設定：speaker_mode={speaker_mode!r}、speaker_count={speaker_count!r}")

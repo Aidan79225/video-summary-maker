@@ -121,6 +121,24 @@ def warning_lines(article: Article) -> list[str]:
     return lines
 
 
+def _is_seconds(value: object) -> bool:
+    return not isinstance(value, bool) and isinstance(value, (int, float)) and math.isfinite(value)
+
+
+def range_lines(diarization: dict) -> list[str]:
+    """GPU 回報它只處理了影片的哪一段（add_video --start/--end）；整支影片的結果沒有這兩個鍵，回空清單。
+
+    操作者聽音檔、取名字的時候要知道這些說話者是從哪一段聽出來的；表裡的時間與連結一律是原影片的時間。
+    壞資料不猜：起點不是有限的數字就當成沒有範圍，終點不是的就說「影片結尾」。
+    """
+    start = diarization.get("range_start")
+    if not _is_seconds(start):
+        return []
+    end = diarization.get("range_end")
+    until = clock(end) if _is_seconds(end) else "影片結尾"
+    return [f"處理範圍：{clock(start)}～{until}（只處理了影片的這一段；表裡的時間與連結都是原影片的）"]
+
+
 def sheet_lines(article: Article) -> list[str]:
     """對照表。只有結構化的說話者才有；沒有就回空清單。"""
     speakers = article.speakers
@@ -143,6 +161,7 @@ def sheet_lines(article: Article) -> list[str]:
             link = f" {watch_link(video_id, sample.get('start'))}" if video_id else ""
             lines.append(f"      「{plain(sample.get('text'))}」{clock(sample.get('start'))}{link}")
     if diarization:
+        lines.extend(range_lines(diarization))
         requested = diarization.get("requested_speakers")
         wanted = f"指定 {whole_seconds(requested)} 位" if requested is not None else "自動判斷人數"
         status = "有警告" if diarization.get("status") == "warn" else "正常"

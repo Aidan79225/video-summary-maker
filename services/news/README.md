@@ -124,7 +124,8 @@ uv run python manage.py add_video 'https://www.youtube.com/watch?v=jNQXAC9IVRw' 
 uv run python manage.py add_video 'https://www.youtube.com/watch?v=jNQXAC9IVRw'              # 預設：自動區分說話的人（多人影片）
 uv run python manage.py add_video 'https://www.youtube.com/watch?v=jNQXAC9IVRw' --speakers 3 # 固定 3 位（連線進來的聲音也算一位；2～20）
 uv run python manage.py add_video 'https://www.youtube.com/watch?v=jNQXAC9IVRw' --speakers 1 # 確定整支影片只有一個人：跳過區分，跟第一部分一樣
-uv run python manage.py add_video 'https://www.youtube.com/watch?v=jNQXAC9IVRw' --rerun      # 重做已發佈的（影片留在站上；說話者模式以這次的指令為準）
+uv run python manage.py add_video 'https://www.youtube.com/watch?v=jNQXAC9IVRw' --start 10:00 --end 58:00  # 只處理影片的一段（多人模式；時間是原影片的時間）
+uv run python manage.py add_video 'https://www.youtube.com/watch?v=jNQXAC9IVRw' --rerun      # 重做已發佈的（影片留在站上；說話者模式與處理範圍以這次的指令為準）
 uv run python manage.py label_video jNQXAC9IVRw                                  # 印說話者對照表（每位附幾句話與可以跳到那一秒的連結）
 uv run python manage.py label_video jNQXAC9IVRw --name S1=黃國昌 --role S1=主持人 --name S2=王小明
 uv run python manage.py label_video jNQXAC9IVRw --merge S3=S1                    # S3 和 S1 其實是同一個人
@@ -155,6 +156,7 @@ uv run python manage.py remove_video yt-jNQXAC9IVRw --force     # 緊急下架�
 | `speakers` | 多人影片：說話者清單（見下一節）；單人模式（`--speakers 1`）與議會是空清單 |
 | `diarization` | 說話者區分結果的摘要（狀態、警告、引擎與模型版本、人數…）；沒有區分過（議會、單人模式）是 `NULL` |
 | `speaker_count` | `NULL`＝自動區分（新登記影片的預設）、`1`＝操作者聲明單人、`2` 以上＝固定人數；議會忽略。唯讀，要改用 `add_video --rerun --speakers` |
+| `range_start`、`range_end` | 只處理影片的哪一段（整數秒、原影片的時間）。兩個都 `NULL`＝整支影片；有範圍時 `range_start` 一定有值（`0` 也是），`range_end` 是 `NULL` 就是一直到影片結尾。記的是**最近一次送去 GPU 的設定**。唯讀，要改用 `add_video --rerun --start/--end`。`duration_seconds` 一直是整支影片的長度 |
 | `Slide.points` | 多人影片每一頁每個重點是誰說的：`{speaker, turn, start, text, evidence}`；其他是空清單 |
 
 ### 多人影片：誰說了什麼
@@ -192,9 +194,32 @@ uv run python manage.py remove_video yt-jNQXAC9IVRw --force     # 緊急下架�
 
 **重跑（`add_video --rerun`）不保留名字與併法**：重跑之後說話者編號可能全部重新排，把舊名字掛到新編號上等於安錯人；指令在重跑之前先印出會丟掉的設定。同一道理，`label_video` 沒有版本檢查，編號是你看到那份對照表時的編號：重跑做完要重新看過對照表再取名字（設定完會印出被改的說話者與一句例子，方便對一下）。
 
-**admin**：`speaker_count` 唯讀；說話者清單（`speakers`）、區分摘要（`diarization`）與每個重點是誰說的（`points`）都不在表單裡，名字與併法只能用 `label_video`。誰說的不只在 `points` 裡：條列、完整敘述與逐字稿裡的 `[[Sn]]` 記號在讀取時被換成名字，改掉一個記號就把那句話安給別人，而且沒有任何檢查。所以已經有說話者清單的影片，每頁的小標、條列、完整敘述，以及整篇的逐字稿與摘要卡（多人影片一律是空的）在 admin 裡都是唯讀的：看得到、改不動，POST 偷帶也不會被存，也不能手動加一頁（每一頁都來自通過驗證的 GPU 結果）；標題、頻道、狀態這些欄位，與每頁的順序、時間、圖照常可以改。單人影片與議會的文章沒有說話者清單，照舊全部可以修。判斷看的是說話者清單，不是 `source`：`source` 在表單裡改得動，不能順便把鎖打開。
+**admin**：`speaker_count`、`range_start`、`range_end` 唯讀；說話者清單（`speakers`）、區分摘要（`diarization`）與每個重點是誰說的（`points`）都不在表單裡，名字與併法只能用 `label_video`。誰說的不只在 `points` 裡：條列、完整敘述與逐字稿裡的 `[[Sn]]` 記號在讀取時被換成名字，改掉一個記號就把那句話安給別人，而且沒有任何檢查。所以已經有說話者清單的影片，每頁的小標、條列、完整敘述，以及整篇的逐字稿與摘要卡（多人影片一律是空的）在 admin 裡都是唯讀的：看得到、改不動，POST 偷帶也不會被存，也不能手動加一頁（每一頁都來自通過驗證的 GPU 結果）；標題、頻道、狀態這些欄位，與每頁的順序、時間、圖照常可以改。單人影片與議會的文章沒有說話者清單，照舊全部可以修。判斷看的是說話者清單，不是 `source`：`source` 在表單裡改得動，不能順便把鎖打開。
 
 **議會的範圍用白名單擋**（`models.COUNCIL_SOURCES`），不用「排除 youtube」，下次再加一個非議會的來源時不會又漏掉：`topics.base_articles()`（分類、抽樣、評估、追問都從它來）與 `followups.is_base()`、`topics` 與 `profiles` 裡逐來源的迴圈、`profiles.parse_session`、人物側寫的「沒有會期」查詢、`ingest.process_pending`／`imageless`／`rerun_ready`、API 沒給 `source` 時的預設範圍。`Membership`、`Session`、`TopicEvaluation` 的 `choices` 也只列議會，管理頁不會出現「YouTube」的任期。影片只由 `add_video` 處理：一支兩小時的影片會占住夜間批次，GPU 離線時還會白白燒掉它的重試次數。
+
+### 只處理影片的一段（`--start`／`--end`）
+
+程式在 `articles/video_range.py`（時間怎麼寫、什麼樣的範圍合理、`fit_problem`）、`add_video.py`、`youtube_source.py`（預檢）、`ingest.py` 與 `speaker_result.py`（送出與結果核對）；GPU 端在 `slidebox_api`。設計與每個決定的理由見 `docs/superpowers/specs/2026-11-14-video-range-design.md`。
+
+用途：辯論影片前後常有不相干的訪談或廣告；整支影片的聲音太多會超過 12 個聲音的發佈上限（上限**沒有**放寬，只處理要的那一段就不會碰到）。
+
+| 指令 | 意思 | `range_start`／`range_end` |
+|---|---|---|
+| 省略兩個（預設） | 整支影片 | `NULL`／`NULL` |
+| `--start 10:00 --end 58:00` | 從 10:00 到 58:00 | `600`／`3480` |
+| `--start 10:00` | 從 10:00 一直到影片結尾 | `600`／`NULL` |
+| `--end 58:00` | 從頭到 58:00 | `0`／`3480` |
+| `--start 0` | 整支影片：不算有範圍（指令印一行說明，不悄悄當成沒寫） | `NULL`／`NULL` |
+
+- **時間怎麼寫**：秒數（`600`）、分:秒（`10:00`）、時:分:秒（`1:02:03`）；**只收整數秒**（範圍存成整數、送出去的也是整數，「10.5」被悄悄截成 10 的話，操作者以為的跟處理的會差半秒）。第一段不封頂（逐字稿會印 `125:30`），冒號之後的每一段要小於 60，最長一天，每一段只收阿拉伯數字。一律是**原影片的時間**。終點要比起點晚，範圍至少 5 秒。
+- **只能多人模式、只能一個網址**：`--speakers 1`（單人，沒有範圍可以指定）或好幾個網址搭配 `--start`／`--end`（連 `--start 0` 也算）一律拒絕，不悄悄忽略。看不懂的時間、不合理的組合都在動任何東西之前就停下來。
+- **先問 GPU 認不認得範圍**：帶範圍的請求，`add_video` 在登記之前先 `GET /capabilities`，要求 `video_range` **剛好是 `true`**（`"true"`、`1` 都不算）。舊版 GPU 不認得 `range_start`／`range_end`，會悄悄處理整支影片，那樣發佈出去的是整支影片的結果，而操作者以為只處理了一段；所以沒回報就停下來、說明要先更新 GPU 主機。沒帶範圍的指令一個字都不變，舊版 GPU 照樣可以用。`speaker_contract` 仍是 `1`，兩邊共用的契約範例檔不變。
+- **預檢**：起點在影片結尾之後拒絕（沒有旗標可以蓋過）；夾進影片之後不到 5 秒拒絕；`--max-minutes` 與頁數範圍照**範圍的長度**算（一支五小時的影片只處理其中一小時，不需要把上限調成五小時），超過上限的訊息會寫出範圍；終點超過影片長度只是警告（GPU 會處理到結尾，終點已經到結尾而起點是 0 的話會說那就是整支影片）；影片頁沒給長度時沒辦法檢查，GPU 下載之後才會失敗。已經登記的影片用登記時記下的長度做同樣的檢查（`video_range.fit_problem`，新影片的預檢共用同一句話）。
+- **時間軸一律是原影片的**：GPU 下載整支影片的聲音、剪出那一段給說話者區分與 Whisper 聽，再把起點加回去；逐字稿的 mm:ss、`&t=` 連結、每個重點的時間、截圖的時間都是原影片的時間。`duration_seconds` 一直是整支影片的長度；`source_note` 會多一句「只處理影片的 mm:ss–mm:ss」，說話者對照表與 `diarization` 也記著處理了哪一段。
+- **結果核對（`check_speaker_result`）不信 GPU 說的**：沒要求範圍、結果卻說只處理了一段（接回了另一種設定的工作）失敗；要求了範圍、結果沒回報範圍失敗（舊版 GPU 悄悄處理整支影片）——唯一的例外是從 0 開始又有給終點的範圍：GPU 發現終點已經到了影片結尾就是整支影片、不回報範圍，這時結果仍然不能超過終點；回報的起點跟要求的差不到 1 秒，終點不能比要求的晚（比較早是 GPU 夾到影片結尾），沒給終點的不能超過影片頁給的長度（留 3 秒）。再**逐一檢查每個時間真的落在範圍裡**（前後各留 1 秒）：每位說話者首末出現的時間、逐字稿每一行、每張截圖的時間——這一關專門擋「GPU 忘了把起點加回去」：那樣的結果每一句話與每個連結都會跳到影片的別處，而且看起來完全正常。說話者的代表句子落在範圍外只丟掉那一句，不讓整支影片失敗。
+- **已經登記的影片**：範圍跟說話者模式一樣，是「這支影片這次怎麼送去 GPU 的」，資料列記的是最近一次的設定。要送新工作時以這次的指令為準（省略＝整支影片），並印「處理範圍：…（之前是：…）」；已發佈的影片要換範圍得加 `--rerun`（沒加就只說明目前的範圍，旗標不一樣時警告）；`--rerun` 失敗而且 GPU 上沒有留下工作時，資料列的範圍（與說話者模式）還原成目前發佈的那一版。**接回 GPU 上還在跑（或已跑完）的工作時，範圍必須跟那個工作送出時的完全一樣**（兩邊都是整支影片也算一樣），不一樣就拒絕、說明要加哪些旗標才收得下，或等它做完再 `--rerun`——省略旗標也算不一樣：不能悄悄把有範圍的工作當成整支影片接回（發佈出來的就不是這次要的那一段）。
+- **這一版沒做的**：一支影片只有一段範圍（同一支影片換一段範圍重做會覆蓋前一次的結果，不支援兩段並存）；12 個聲音的發佈上限沒有放寬。
 
 ### 部署第一版之後（0014）
 
@@ -219,6 +244,19 @@ uv run python manage.py add_video 'https://www.youtube.com/watch?v=jNQXAC9IVRw' 
 
 ```bash
 uv run python manage.py migrate    # 0015：Article.speaker_count（既有的列填 1）、Article.diarization、Slide.points
+uv run python manage.py makemigrations --check --dry-run   # 要乾淨
+```
+
+### 部署處理範圍這一版之後（0016）
+
+**順序：先更新 GPU 主機，再更新 Pi。** 反過來的話，沒帶範圍的指令不受影響；帶範圍的會被能力檢查擋下來（「GPU 主機還不認得處理範圍」），不會悄悄處理整支影片。
+
+1. GPU 主機：更新程式、重啟摘要 API；`GET /capabilities` 要多回 `video_range: true`（`speaker_contract` 仍是 `1`）。
+2. Pi：整個 stack 一起重新部署（`migrate` 在容器啟動時跑）。先備份資料庫檔案：0016 對 `articles_article` 加 `range_start` 與 `range_end`（可為空、沒有預設值；既有的列都是 `NULL`＝整支影片，行為不變），SQLite 加欄位會把這張表重建一次，重建期間寫入會短暫被鎖住。
+3. 驗證：先 `add_video <影片> --start … --end … --dry-run`（不問 GPU，看「處理範圍」與頁數有沒有照範圍的長度算），再真的加一支（例如一支兩個人講話的影片取其中一小段），看對照表開頭的「處理範圍」、用 `label_video <影片> --audit 6` 點連結，確認連結跳到的是**原影片**那一秒、聽到的真的是那個人。這一步是 Pi 這邊沒辦法用假資料代替的：GPU 的下載、剪音訊、說話者區分、Whisper 在真實影片與真實 CUDA 上帶著範圍跑一次，才算驗證過。
+
+```bash
+uv run python manage.py migrate    # 0016：Article.range_start、Article.range_end（既有的列 NULL＝整支影片）
 uv run python manage.py makemigrations --check --dry-run   # 要乾淨
 ```
 
@@ -687,7 +725,8 @@ articles/
 ├─ youtube_source.py adapter：YouTube 的網址解析、oEmbed 與影片頁、預檢、頁數範圍（標準函式庫）
 ├─ gpu_client.py    adapter：GPU 主機上的摘要 API（含 `/capabilities`）
 ├─ speakers.py      [[Sn]] 記號換成名字、併人、給 API 的顯示規則（不碰資料庫）
-├─ speaker_result.py 多人結果的白名單清理與 check_speaker_result（落地前的契約檢查）
+├─ video_range.py   處理範圍（add_video --start/--end）：時間怎麼寫、什麼樣的範圍合理、跟影片長度怎麼對（純規則）
+├─ speaker_result.py 多人結果的白名單清理與 check_speaker_result（落地前的契約檢查，含處理範圍的核對）
 ├─ speaker_labels.py label_video 的規則：名字、角色、併人、清除（全有或全無）
 ├─ speaker_sheet.py 說話者對照表、GPU 警告、重跑會丟掉的設定（add_video 與 label_video 共用）
 ├─ ingest.py        use case：發現 → 處理 → 落地（相依都用注入的）

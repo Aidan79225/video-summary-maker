@@ -74,6 +74,34 @@ class SheetTests(SimpleTestCase):
         text = "\n".join(sheet_lines(stored))
         self.assertIn("區分結果：有警告（指定 3 位", text)
 
+    def test_a_ranged_run_says_which_part_of_the_video_it_covers(self):
+        """只處理了影片的一段：操作者聽音檔、取名字的時候要知道這些人是從哪一段聽出來的；時間與連結是原影片的。"""
+        stored = article()
+        stored.diarization.update(range_start=600.0, range_end=1500.0)
+        text = "\n".join(sheet_lines(stored))
+        self.assertIn("處理範圍：10:00～25:00", text)
+        self.assertIn("原影片的", text)
+        summary = next(line for line in sheet_lines(stored) if line.startswith("區分結果"))
+        self.assertLess(text.index("處理範圍"), text.index(summary))
+
+    def test_a_ranged_run_that_ran_to_the_end_still_says_so(self):
+        stored = article()
+        stored.diarization.update(range_start=600, range_end=None)
+        self.assertIn("處理範圍：10:00～影片結尾", "\n".join(sheet_lines(stored)))
+
+    def test_a_run_over_the_whole_video_says_nothing_about_a_range(self):
+        self.assertNotIn("處理範圍", "\n".join(sheet_lines(article())))
+
+    def test_a_broken_range_is_not_a_crash_and_not_invented(self):
+        for start in ("x", None, True, float("nan"), [1]):
+            with self.subTest(start=start):
+                stored = article()
+                stored.diarization.update(range_start=start, range_end=1500.0)
+                self.assertNotIn("處理範圍", "\n".join(sheet_lines(stored)))
+        stored = article()
+        stored.diarization.update(range_start=600.0, range_end="y")
+        self.assertIn("處理範圍：10:00～影片結尾", "\n".join(sheet_lines(stored)))
+
     def test_every_known_warning_is_said_in_plain_chinese_and_never_as_a_code(self):
         for code, words in WARNING_TEXT.items():
             with self.subTest(code=code):
