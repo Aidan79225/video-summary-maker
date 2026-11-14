@@ -113,6 +113,15 @@ def test_the_safe_mode_switch_only_accepts_1_true_and_yes(tmp_path, clean_env, r
     assert _deck_usecase(serve_api.build_executor(_settings(tmp_path)))._quote_only is expected
 
 
+def test_the_use_case_can_cut_a_range(tmp_path, clean_env):
+    """攔的 bug：區間的欄位一路通到 use case，組裝時卻忘了接上切割器——每個有區間的工作都在
+    「沒有音訊切割器」失敗，而單元測試全部是綠的。"""
+    from slidebox.infrastructure.audio_cutter import FfmpegAudioCutter
+
+    cutter = _deck_usecase(serve_api.build_executor(_settings(tmp_path)))._audio_cutter
+    assert isinstance(cutter, FfmpegAudioCutter)
+
+
 def test_the_capability_probe_is_the_very_diarizer_the_jobs_use(tmp_path, clean_env):
     """攔的 bug：/capabilities 與實際工作各建一個 diarizer——端點說「可以」，工作卻用另一個設定去跑。"""
     executor = serve_api.build_executor(_settings(tmp_path))

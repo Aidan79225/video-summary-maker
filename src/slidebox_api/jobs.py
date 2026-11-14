@@ -72,6 +72,9 @@ class Job:
     # 議會舊工作是 single；YouTube add_video 預設送 diarize。
     speaker_mode: SpeakerMode = SpeakerMode.SINGLE
     speaker_count: int | None = None
+    # 只處理影片的一段區間（原影片的秒數）；兩個都是 None＝整支影片。只有多人模式的摘要工作用得到
+    range_start: float | None = None
+    range_end: float | None = None
     kind: JobKind = JobKind.DECK
     # 只有分類工作用得到：要分類的文字與可選的領域
     text: str = ""
@@ -146,12 +149,13 @@ class JobStore:
                speech_hint: str | None = None, speaker_mode: SpeakerMode = SpeakerMode.SINGLE,
                speaker_count: int | None = None, kind: JobKind = JobKind.DECK,
                text: str = "", labels: Sequence[TopicLabel] = (),
-               followup: FollowUpPair | None = None) -> Job:
+               followup: FollowUpPair | None = None,
+               range_start: float | None = None, range_end: float | None = None) -> Job:
         job = Job(id=uuid.uuid4().hex, url=url, detailed=detailed,
                   min_slides=min_slides, max_slides=max_slides, model=model,
                   speech_hint=speech_hint, speaker_mode=speaker_mode,
-                  speaker_count=speaker_count, kind=kind, text=text,
-                  labels=tuple(labels), followup=followup)
+                  speaker_count=speaker_count, range_start=range_start, range_end=range_end,
+                  kind=kind, text=text, labels=tuple(labels), followup=followup)
         with self._lock:
             self._jobs[job.id] = job
             self._order.append(job.id)

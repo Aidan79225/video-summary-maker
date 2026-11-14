@@ -1,4 +1,5 @@
-"""多人模式的 API 測試共用的東西：契約範例、從範例建回 Deck、契約的不變式檢查。
+"""多人模式的 API 測試共用的東西：契約範例、從範例建回 Deck、契約的不變式檢查，
+以及把一個工作從 HTTP 送到跑完的組裝（kit／submit／finish，use case 是罐頭的）。
 
 契約範例（fixtures/speaker_contract_v1.json）與新聞服務那邊的副本逐位元組相同；
 兩邊各自用它驗證自己的那一半，所以改欄位要兩邊一起改、一起升 speaker_contract 的版本。
@@ -10,19 +11,32 @@ import math
 import os
 import re
 
+from fastapi.testclient import TestClient
+
 from slidebox.domain.entities import (
     Deck,
+    DeckResult,
     DiarizationReport,
     Point,
+    Settings,
     Slide,
     SpeakerInfo,
     SpeakerSample,
 )
+from slidebox_api.app import create_app
+from slidebox_api.jobs import JobStore
+from slidebox_api.runner import JobWorker, SlideboxExecutor
 
 CONTRACT_PATH = os.path.join(os.path.dirname(__file__), "fixtures", "speaker_contract_v1.json")
 SPEAKER_ID = re.compile(r"^S[1-9][0-9]{0,2}$")
 CLOCK_LINE = re.compile(r"^\d+:\d\d \[\[S\d+\]\]：")
 CODE = re.compile(r"\[\[(S\d+)\]\]")
+YOUTUBE = "https://www.youtube.com/watch?v=abcdefghijk"
+IVOD = "https://ivod.ly.gov.tw/Play/Clip/1M/171180"
+# 分類與追問判斷的最小合法請求：拿來測「說話者與區間的欄位只屬於摘要工作」
+TOPIC = {"kind": "topic", "text": "一句話", "labels": [
+    {"key": "a", "label": "甲"}, {"key": "b", "label": "乙"}]}
+FOLLOWUP = {"kind": "followup", "request": "提高補助", "card": "摘要卡", "excerpt": "片段"}
 
 
 def load_contract() -> dict:
@@ -56,6 +70,49 @@ def deck_from_result(result: dict) -> Deck:
         source_url=result["source_url"], video_title=result["title"], slides=slides,
         source_note=result["source_note"], transcript_text=result["transcript_text"], brief=None,
         speaker_mode="diarize", speakers=speakers, diarization=report)
+
+
+class CannedUseCase:
+    """依腳本回一份成品（或丟例外），並記下每次被怎麼叫。"""
+
+    def __init__(self, deck=None, error=None):
+        self._deck = deck if deck is not None else deck_from_result(load_contract()["result"])
+        self._error = error
+        self.calls: list[dict] = []
+
+    def execute(self, url, settings, progress=None, is_cancelled=None, **kwargs):
+        self.calls.append(dict(url=url, **kwargs))
+        if self._error is not None:
+            raise self._error
+        return DeckResult(self._deck, "OUT/x.html")
+
+
+def kit(probe=None, usecase=None, api_key=""):
+    store = JobStore()
+    usecase = usecase or CannedUseCase()
+    worker = JobWorker(store, SlideboxExecutor(usecase, Settings(output_dir="OUT")))
+    app = create_app(store=store, worker=worker, api_key=api_key, model="m", ollama_host="http://h",
+                     probe_ollama=lambda: True, probe_speaker_diarization=probe)
+    return TestClient(app), store, worker, usecase
+
+
+def submit(body, probe=None, usecase=None):
+    """送出一個工作並回傳（回應, store, worker, usecase）；背景執行緒先停掉，由測試決定何時跑。"""
+    client, store, worker, usecase = kit(probe=probe, usecase=usecase)
+    with client:
+        worker.stop()
+        response = client.post("/jobs", json=body)
+    return response, store, worker, usecase
+
+
+def finish(body, usecase=None, probe=lambda: (True, "")):
+    """送出一個工作、跑完它，回傳（工作的檢視, usecase）。"""
+    client, store, worker, usecase = kit(probe=probe, usecase=usecase)
+    with client:
+        worker.stop()
+        job_id = client.post("/jobs", json=body).json()["id"]
+        assert worker.run_once() is True
+        return client.get(f"/jobs/{job_id}").json(), usecase
 
 
 def key_paths(value, prefix: str = "") -> set[str]:

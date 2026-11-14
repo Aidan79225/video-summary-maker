@@ -16,7 +16,7 @@ from urllib.parse import urlparse
 from fastapi import Depends, FastAPI, Header, HTTPException
 from pydantic import BaseModel, Field
 
-from slidebox.domain.entities import FollowUpPair, TopicLabel
+from slidebox.domain.entities import FollowUpPair, TimeRange, TopicLabel
 
 from .jobs import Job, JobKind, JobStore, SpeakerMode
 from .payload import SPEAKER_CONTRACT
@@ -62,6 +62,12 @@ class JobRequest(BaseModel):
     # 舊的議會 client 維持 single；YouTube add_video 明確送 diarize。
     speaker_mode: SpeakerMode = SpeakerMode.SINGLE
     speaker_count: int | None = Field(default=None, ge=1, le=20)
+    # 只處理影片的一段區間（原影片的秒數）：只給起點是一直到結尾，只給終點是從頭開始。
+    # 只有多人模式的摘要工作可以指定；範圍（非負、有限、先後、至少幾秒）全部由 _validate_range 問
+    # TimeRange，不在這裡用 Field 的 ge／gt：pydantic 驗證失敗時會把輸入值原樣放進錯誤內容，
+    # NaN 放不進 JSON，那個 422 就會變成 500，而且也沒有一句看得懂的訊息
+    range_start: float | None = None
+    range_end: float | None = None
     # 以下只有分類工作用得到：要分類的文字與可選的領域
     text: str = Field(default="", max_length=MAX_TOPIC_TEXT)
     labels: list[TopicLabelIn] = Field(default_factory=list)
@@ -102,6 +108,10 @@ class CapabilitiesView(BaseModel):
     reason: str = ""
     # 結果契約的版本：新聞服務只認它懂的版本，不一致就不派多人的工作（寧可拒絕，不猜）
     speaker_contract: int = SPEAKER_CONTRACT
+    # 這個版本看得懂工作請求的 range_start／range_end（只處理影片的一段）。舊版沒有這個欄位，而且它的
+    # 請求模型不擋多出來的欄位：新聞服務要看到 true 才送區間，否則舊版會默默處理整支影片。
+    # 說的是程式的能力，與聲音區分現在能不能用（speaker_diarization）無關，所以每一種回答都是 true
+    video_range: bool = True
 
 
 def _view(job: Job, include_result: bool = True) -> JobView:
@@ -176,7 +186,8 @@ def create_app(
             labels=[TopicLabel(key=item.key, label=item.label,
                                description=item.description)
                     for item in request.labels],
-            followup=_followup_pair(request)))
+            followup=_followup_pair(request),
+            range_start=request.range_start, range_end=request.range_end))
 
     @app.get("/jobs", dependencies=[Depends(require_key)])
     def recent(limit: int = 20) -> list[JobView]:
@@ -220,14 +231,36 @@ def _validate_deck(request: JobRequest) -> None:
         raise HTTPException(status_code=422, detail="single 模式的 speaker_count 只能是 1")
     if request.speaker_mode == SpeakerMode.DIARIZE and request.speaker_count == 1:
         raise HTTPException(status_code=422, detail="diarize 模式的 speaker_count 要省略或至少是 2")
+    _validate_range(request)
+
+
+def _has_range(request: JobRequest) -> bool:
+    return request.range_start is not None or request.range_end is not None
+
+
+def _validate_range(request: JobRequest) -> None:
+    """區間只屬於多人模式。單人（議會）的 pipeline 不切區間：默默處理整支影片的話，送的人會以為
+    只處理了那一段。長度、先後與是不是有限的數字，問 TimeRange（use case 用的是同一個）。"""
+    if not _has_range(request):
+        return
+    if request.speaker_mode != SpeakerMode.DIARIZE:
+        raise HTTPException(
+            status_code=422,
+            detail="range_start 與 range_end 只有多人模式（speaker_mode 為 diarize）可以指定")
+    try:
+        TimeRange(request.range_start or 0.0, request.range_end)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
 
 
 def _reject_speaker_fields(request: JobRequest) -> None:
-    """說話者模式只屬於摘要工作。分類與追問判斷帶了就是送錯地方：默默忽略的話，
-    送的人會以為那個工作是照多人模式做的。"""
-    if request.speaker_mode != SpeakerMode.SINGLE or request.speaker_count is not None:
+    """說話者模式與區間只屬於摘要工作。分類與追問判斷帶了就是送錯地方：默默忽略的話，
+    送的人會以為那個工作是照多人模式、或只處理了那一段做的。"""
+    if request.speaker_mode != SpeakerMode.SINGLE or request.speaker_count is not None \
+            or _has_range(request):
         raise HTTPException(
-            status_code=422, detail="speaker_mode 與 speaker_count 只有摘要工作可以指定")
+            status_code=422,
+            detail="speaker_mode、speaker_count、range_start 與 range_end 只有摘要工作可以指定")
 
 
 def _validate_url(url: str) -> None:
