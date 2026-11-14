@@ -529,6 +529,20 @@ def test_the_sample_run_fails_when_the_count_is_not_what_the_sample_has(tmp_path
     assert "樣本預期 4 個聲音，說話者區分器找到 3 個：與預期不符" in out
 
 
+def test_the_sample_header_does_not_print_what_the_extractor_made_up_from_the_redirect(tmp_path):
+    """攔的 bug：GitHub 把樣本網址轉到一串很長的簽章網址，yt-dlp 的一般解析器拿它當影片 id 與標題，
+    報告第二行就是一大段 sig=…&jwt=… 的亂碼。樣本是固定的，標題與代號寫死。"""
+    junk = "b2b5ab0b-f5ba？sp=r&sig=" + "A" * 300 + "&jwt=" + "e" * 300
+    audio = Audio(clip=AudioClip(path="x", video_id=junk, title=junk, duration=0.0))
+
+    code, out, _, _ = check_run(["--sample"], tmp_path, audio=audio, diarizer=FakeDiarizer(output=four_voices()))
+
+    header = next(line for line in out.splitlines() if line.startswith("影片："))
+    assert code == check.EXIT_OK
+    assert "樣本" in header and "0-four-speakers-zh" in header and len(header) < 60
+    assert "sig=" not in out and "jwt=" not in out
+
+
 def test_links_are_only_made_for_youtube_videos(tmp_path):
     audio = Audio(clip=AudioClip(path="x", video_id="0-four-speakers-zh", title="樣本", duration=55.0))
     _, out, _, _ = check_run(["--sample"], tmp_path, audio=audio)

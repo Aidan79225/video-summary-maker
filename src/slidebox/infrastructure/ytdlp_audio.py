@@ -20,6 +20,16 @@ except Exception:  # 舊版 yt-dlp 沒有此類別時的後備
         pass
 
 
+# 檔名裡 id 最多留幾個位元組。YouTube 的 id 只有 11 個字元，不受影響；但 yt-dlp 的「一般」解析器
+# （直接給媒體檔的網址，例如 diarize_check --sample 的 GitHub release 樣本）拿轉址之後的整串網址當 id，
+# 簽章網址動輒近千字元，超過 Linux 的 255 位元組檔名上限（yt-dlp 還會在後面加 .part），下載直接失敗
+# （Errno 36）。用 B 不用 s：中文一個字三個位元組，80 個「字元」就是 240 位元組。
+# 不用 yt-dlp 的 trim_file_name：它把 id 裡的「.」當成副檔名的開頭，簽章網址裡有很多點，切不到該切的地方。
+# 截斷之後，前 80 個位元組一樣的兩個長網址會得到同一個檔名；音訊放在每次工作各自的暫存資料夾，
+# 而且只有非 YouTube 的長網址才會碰到，所以不另外處理。
+_NAME_ID_BYTES = 80
+
+
 class YtDlpAudioGateway:
     def download_audio(
         self,
@@ -46,7 +56,8 @@ class YtDlpAudioGateway:
             "format": "bestaudio[protocol^=http]/best[protocol^=http]",
             # 檔名帶影片 id：yt-dlp 預設不覆寫既有檔案，固定檔名時上一次中斷
             # 留下的舊檔會被直接拿來用，下一支影片就轉錄到別支影片的聲音。
-            "outtmpl": os.path.join(dest_dir, "%(id)s.%(ext)s"),
+            # id 最多留 _NAME_ID_BYTES 個位元組，原因見該常數。
+            "outtmpl": os.path.join(dest_dir, f"%(id).{_NAME_ID_BYTES}B.%(ext)s"),
             "progress_hooks": [hook],
             "noplaylist": True,
             "quiet": True,

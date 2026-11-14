@@ -71,6 +71,10 @@ from slidebox.usecases.speakers import (
 SAMPLE_URL = ("https://github.com/k2-fsa/sherpa-onnx/releases/download/"
               "speaker-segmentation-models/0-four-speakers-zh.wav")
 SAMPLE_VOICES = 4
+# 樣本的標題與代號寫死：樣本網址被 GitHub 轉到一串很長的簽章網址，yt-dlp 的一般解析器把它當影片 id 與標題，
+# 照印會是一大段 sig=…&jwt=…
+SAMPLE_TITLE = "內建樣本（四人中文對話）"
+SAMPLE_ID = "0-four-speakers-zh"
 
 EXIT_OK = 0
 EXIT_NOT_RELIABLE = 1
@@ -432,8 +436,9 @@ def _describe(options: Options, parts: Parts, heard: Heard, timings: dict[str, f
               total_seconds: float) -> tuple[str, int]:
     """把聽到的結果整理成給人看的報告，並決定結束碼。"""
     clip, where = heard.clip, _Where(options.url, heard.clip.video_id, heard.offset)
+    title, video_id = (SAMPLE_TITLE, SAMPLE_ID) if options.sample else (clip.title, clip.video_id)
     # 標題、網址這些外面來的文字，一律先過 plain()：上傳者可以在標題裡放終端機的控制序列
-    lines = ["=== 說話者區分檢查 ===", f"來源：{plain(options.url)}", f"影片：{plain(clip.title)}（{plain(clip.video_id)}）"]
+    lines = ["=== 說話者區分檢查 ===", f"來源：{plain(options.url)}", f"影片：{plain(title)}（{plain(video_id)}）"]
     if heard.offset or heard.length != clip.duration:
         lines.append(f"範圍：{clock(heard.offset)}–{clock(heard.offset + heard.length)}（{heard.length:.0f} 秒）")
     else:
