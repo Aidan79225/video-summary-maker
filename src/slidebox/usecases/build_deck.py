@@ -12,6 +12,7 @@ import re
 from dataclasses import replace
 
 from ..domain.entities import (
+    AudioClip,
     Brief,
     Deck,
     DeckResult,
@@ -19,6 +20,7 @@ from ..domain.entities import (
     SectionClips,
     Settings,
     Slide,
+    TimeRange,
     Transcript,
     WordTranscript,
 )
@@ -33,6 +35,7 @@ from ..domain.errors import (
     SummarizerUnavailable,
 )
 from ..domain.ports import (
+    AudioCutter,
     AudioGateway,
     BriefWriter,
     CancelCheck,
@@ -75,11 +78,13 @@ from .naming import deck_folder_name
 from .speakers import (
     assign_speakers,
     build_turns,
+    clock,
     diarization_report,
     normalize_turns,
     summarize_speakers,
     transcript_lines,
 )
+from .time_range import effective_range, normalize_range, reported_range, shift_turns, shift_words
 
 # 詳細模式下每頁輸出約略會用掉的字元（150～300 字的敘述加上標題條列，
 # 取上緣）。輸出與提示共用 num_ctx，所以要從預算裡先扣掉。
@@ -127,6 +132,7 @@ class BuildDeckUseCase:
         conversation: ConversationSummarizer | None = None,
         chunk_chars: int = DEFAULT_CHUNK_CHARS,
         quote_only: bool = False,
+        audio_cutter: AudioCutter | None = None,
     ):
         # 做完的貴步驟存起來，停了可以接著做；None 時每次都從頭來（測試多半這樣用）
         self._checkpoints = checkpoints
@@ -136,6 +142,8 @@ class BuildDeckUseCase:
         self._chunk_chars = chunk_chars
         # 安全模式（SLIDEBOX_QUOTE_ONLY）：多人模式留下的每個重點都顯示被核對過的原話
         self._quote_only = quote_only
+        # 只處理影片的一段區間（add_video --start/--end）才用到；沒有區間的工作碰都不碰
+        self._audio_cutter = audio_cutter
         self._audio = audio
         self._transcriber = transcriber
         self._diarizer = diarizer
@@ -156,6 +164,7 @@ class BuildDeckUseCase:
         speech_hint: str | None = None,
         speaker_mode: str = "single",
         speaker_count: int | None = None,
+        time_range: TimeRange | None = None,
     ) -> DeckResult:
         """speech_hint：走語音辨識時給辨識器的專有名詞提示（講者姓名、機關名）；
         有字幕的來源用不到。
@@ -163,15 +172,23 @@ class BuildDeckUseCase:
         speaker_mode："single"（預設，議會與 --speakers 1）走下面這條字幕／語音摘要的路徑，
         行為與多人模式加進來之前完全相同；"diarize" 走 _execute_diarized，不經過下面的單人路徑。
         speaker_count：只有 diarize 用得到——None 是自動判斷人數，否則是固定的人數（2 以上）。
+        time_range：只處理影片的這一段（原影片的秒數；add_video --start/--end）。只有 diarize 用得到：
+        單人路徑吃整支影片的字幕，沒辦法切，所以 single 帶了區間就拒絕，絕不默默忽略。
         """
+        if time_range is not None and not isinstance(time_range, TimeRange):
+            raise ValueError(f"time_range 要是 TimeRange（或不指定），不是 {type(time_range).__name__}")
         if speaker_mode == "diarize":
             return self._execute_diarized(
-                url, settings, progress, is_cancelled, speech_hint, speaker_count)
+                url, settings, progress, is_cancelled, speech_hint, speaker_count, time_range)
         if speaker_mode != "single":
             # 不認得的模式一律拒絕：絕不能默默走下面的單人路徑，那會把多位說話者全寫成「講者」——
             # 寧可失敗，也不能寫錯是誰說的。
             raise DiarizationUnavailable(
                 f"不支援的說話者模式「{speaker_mode}」，只有 single 與 diarize；不會退回單人的寫法，工作中止")
+        if normalize_range(time_range) is not None:
+            raise ValueError(
+                "只處理影片的一段區間只能用在多人模式（speaker_mode=\"diarize\"）：單人模式吃整支影片的字幕，"
+                "沒辦法切；不會默默忽略區間，工作中止")
         cb: ProgressCallback = progress or (lambda frac, status: None)
         cancelled: CancelCheck = is_cancelled or (lambda: False)
 
@@ -245,10 +262,12 @@ class BuildDeckUseCase:
         is_cancelled: CancelCheck | None,
         speech_hint: str | None,
         speaker_count: int | None,
+        time_range: TimeRange | None = None,
     ) -> DeckResult:
         """多人模式（speaker_mode="diarize"）：只靠聲音，不看字幕。
 
-        下載音訊（一次）→ 說話者區分 → 語音辨識（每個字帶時間）→ 把字對到說話者 → 分段 →
+        下載音訊（一次）→（只處理一段區間時：切出那一段）→ 說話者區分 → 語音辨識（每個字帶時間）→
+        把字對到說話者 → 分段 →
         一個窗一個窗地請模型寫「引用第幾段＋沒有主詞的重點」→ 程式逐點檢查、說話者由被引用的
         那一段查出來 → 排成投影片 → 與單人模式共用的收尾（片段、截圖、HTML）。
 
@@ -265,10 +284,15 @@ class BuildDeckUseCase:
 
         if speaker_count is not None and (not isinstance(speaker_count, int) or speaker_count < 2):
             raise ValueError("多人模式的 speaker_count 要不指定（自動判斷人數），或是 2 以上的整數")
+        # 沒給、或只是「從頭到尾」的區間就是沒有區間：指紋與存檔都照整支影片
+        time_range = normalize_range(time_range)
         parts = (self._audio, self._diarizer, self._word_transcriber, self._conversation)
         if any(part is None for part in parts):
             raise DiarizationUnavailable(
                 "多人模式需要音訊下載、說話者區分、語音辨識與對談摘要，這個組裝沒有提供其中一項；工作中止")
+        if time_range is not None and self._audio_cutter is None:
+            # 沒有切割器卻照樣處理整支影片，等於默默忽略區間：在下載任何東西之前就失敗
+            raise DiarizationUnavailable("只處理影片的一段區間需要音訊切割器，這個組裝沒有提供；工作中止")
         # 先問可不可以（便宜，不載入模型）：不行就在下載任何東西之前失敗
         usable, reason = self._diarizer.available()
         if not usable:
@@ -276,11 +300,12 @@ class BuildDeckUseCase:
 
         cb(0.0, "多人模式：說話者由聲音區分…")
         ck = self._checkpoints
-        diarization_fp = diarization_fingerprint(self._diarizer.fingerprint, speaker_count)
+        diarization_fp = diarization_fingerprint(self._diarizer.fingerprint, speaker_count, time_range)
         words_fp = words_fingerprint(settings.whisper_model, speech_hint,
-                                     adapter_fingerprint(self._word_transcriber))
+                                     adapter_fingerprint(self._word_transcriber), time_range)
         diarized, words = self._listen(
-            url, settings, cb, check, cancelled, speech_hint, speaker_count, diarization_fp, words_fp,
+            url, settings, cb, check, cancelled, speech_hint, speaker_count, time_range,
+            diarization_fp, words_fp,
             ck.load_diarization(settings.output_dir, url, diarization_fp) if ck else None,
             ck.load_words(settings.output_dir, url, words_fp) if ck else None)
 
@@ -294,6 +319,10 @@ class BuildDeckUseCase:
             turns, speakers, engine=self._diarizer.engine, version=self._diarizer.version,
             model=self._diarizer.model, fingerprint=self._diarizer.fingerprint,
             requested_speakers=speaker_count, overlap_seconds=diarized.overlap_seconds)
+        # 實際處理的區間（夾在影片長度內）寫進報告。新做的與接著做的都走同一條路，兩邊回報的一定一樣
+        shown = reported_range(time_range, words.duration, words.words)
+        if shown is not None:
+            report = replace(report, range_start=shown.start, range_end=shown.end)
 
         allocations = allocate_slides(
             chunk_turns(turns, speakers, self._chunk_chars), settings.min_slides, settings.max_slides)
@@ -398,6 +427,7 @@ class BuildDeckUseCase:
         cancelled: CancelCheck,
         speech_hint: str | None,
         speaker_count: int | None,
+        time_range: TimeRange | None,
         diarization_fp: str,
         words_fp: str,
         diarized: DiarizerOutput | None,
@@ -408,6 +438,9 @@ class BuildDeckUseCase:
         diarized／words 是上一次存下來的（沒有就是 None）；兩份都有就完全不下載音訊。做完的
         每一份各自立刻存檔：下一步失敗或被取消時，這一份不必再做。音訊在 finally 裡清掉。
         沒偵測到語音是失敗，不存、不發佈。
+
+        只處理一段區間時，兩個模型只聽切出來的那一段，量到的時間在**存檔之前**就加回區間的起點：
+        存下來、往後傳的都是原影片的時間（設計文件 #32）。
         """
         if diarized is not None:
             cb(None, "沿用上次的說話者區分")
@@ -434,25 +467,42 @@ class BuildDeckUseCase:
                 # 音訊 gateway 的失敗訊息是為「沒有字幕之後」寫的；多人模式根本沒找過字幕
                 raise SpeechRecognitionFailed(_speech_reason(e)) from e
             check()
+            heard = self._cut(clip, time_range, audio_dir, cb, check)
             if diarized is None:
-                diarized = self._diarizer.diarize(
-                    clip.path, clip.duration, speaker_count, speech_cb, cancelled)
+                diarized = shift_turns(self._diarizer.diarize(
+                    heard.path, heard.duration, speaker_count, speech_cb, cancelled), heard.offset)
                 if ck:
                     ck.save_diarization(settings.output_dir, url, diarization_fp, diarized)
                 check()
             if words is None:
                 spoken, language = self._word_transcriber.transcribe_words(
-                    clip.path, clip.duration, speech_cb, cancelled, speech_hint)
+                    heard.path, heard.duration, speech_cb, cancelled, speech_hint)
                 if not spoken:
                     raise SpeechRecognitionFailed("沒有偵測到語音，無法區分誰說了什麼")
+                # duration 是整支影片的長度（不是切出來的那一段）：回報區間時要拿它來夾終點
                 words = WordTranscript(video_id=clip.video_id, title=clip.title,
                                        duration=clip.duration, language=language,
-                                       words=tuple(spoken))
+                                       words=shift_words(spoken, heard.offset))
                 if ck:
                     ck.save_words(settings.output_dir, url, words_fp, words)
         finally:
             self._audio.cleanup(audio_dir)
         return diarized, words
+
+    def _cut(self, clip: AudioClip, time_range: TimeRange | None, audio_dir: str,
+             cb: ProgressCallback, check) -> AudioClip:
+        """只處理一段區間時，把下載好的音訊切成那一段；沒有區間（或區間就是整支影片）原樣回傳。
+
+        影片的實際長度要下載之後才知道，所以區間在這裡才夾、才檢查（起點超過影片長度、夾完太短就失敗，
+        在花任何一次模型的時間之前）。切出來的檔放在下載音訊的同一個資料夾，一起被清掉。
+        """
+        wanted = effective_range(time_range, clip.duration)
+        if wanted is None:
+            return clip
+        cb(None, f"切出指定區間（{clock(wanted.start)}–{'結尾' if wanted.end is None else clock(wanted.end)}）…")
+        cut = self._audio_cutter.cut(clip, wanted.start, wanted.end, audio_dir)
+        check()
+        return cut
 
     def _fetch_transcript(
         self,

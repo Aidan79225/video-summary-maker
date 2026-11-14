@@ -15,7 +15,7 @@ import json
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
 
-from ..domain.entities import DiarizationReport, Settings, Slide, SpeakerInfo, Turn
+from ..domain.entities import DiarizationReport, Settings, Slide, SpeakerInfo, TimeRange, Turn
 from ..domain.errors import AttributionUnreliable, SummarizerOutputInvalid
 from ..domain.ports import CancelCheck, ConversationSummarizer, ProgressCallback
 from .code_fingerprint import code_fingerprint, unreadable_marker
@@ -36,6 +36,7 @@ from .speakers import (
     WARN_HIGH_UNASSIGNED,
     WARN_MANY_MINOR,
     WARN_SINGLE_FOUND,
+    clock,
 )
 
 # 模型提出的重點被程式檢查丟掉超過這個比例（整份，或單一窗），這份摘要就不可信（暫定值）
@@ -54,18 +55,32 @@ def stage_fingerprint(*parts) -> str:
     return hashlib.sha256(json.dumps(parts, ensure_ascii=False).encode("utf-8")).hexdigest()[:16]
 
 
-def diarization_fingerprint(diarizer_fingerprint: str, speaker_count: int | None) -> str:
-    """說話者區分：引擎、版本、模型（diarizer 自己的指紋）與指定的人數。"""
-    return stage_fingerprint("diarize", diarizer_fingerprint, speaker_count)
+def _range_part(time_range: TimeRange | None) -> tuple:
+    """指紋裡區間的那一項。**只在有區間時才有**：沒有區間的指紋與加入區間之前逐位元組相同，
+    舊的存檔（一支兩小時影片的聲音區分與辨識）照常沿用。起訖一律轉成浮點數，600 與 600.0 是同一段。"""
+    if time_range is None:
+        return ()
+    end = None if time_range.end is None else float(time_range.end)
+    return (["range", float(time_range.start), end],)
 
 
-def words_fingerprint(whisper_model: str, speech_hint: str | None, adapter: str = "") -> str:
-    """語音辨識：模型與提示，加上辨識器自己報的程式版本（adapter：辨識參數、字的整理的原始碼）。
+def diarization_fingerprint(diarizer_fingerprint: str, speaker_count: int | None,
+                            time_range: TimeRange | None = None) -> str:
+    """說話者區分：引擎、版本、模型（diarizer 自己的指紋）與指定的人數；只處理一段區間時再加上區間
+    （換了區間，聽的是另一段音訊，舊的結果不能冒充）。"""
+    return stage_fingerprint("diarize", diarizer_fingerprint, speaker_count, *_range_part(time_range))
+
+
+def words_fingerprint(whisper_model: str, speech_hint: str | None, adapter: str = "",
+                      time_range: TimeRange | None = None) -> str:
+    """語音辨識：模型與提示，加上辨識器自己報的程式版本（adapter：辨識參數、字的整理的原始碼）；
+    只處理一段區間時再加上區間。
 
     ALIGN_VERSION 也算進來。辨識參數與字的整理改了，adapter 的指紋會自己跟著變，不必靠人記得升版；
     ALIGN_VERSION 留給「原始碼看不出來」的改動（例如換了校正用的資料）。
     """
-    return stage_fingerprint("multi", whisper_model, speech_hint or "", ALIGN_VERSION, adapter)
+    return stage_fingerprint("multi", whisper_model, speech_hint or "", ALIGN_VERSION, adapter,
+                             *_range_part(time_range))
 
 
 # 摘要的結果由這些模組的程式決定：逐點檢查（conversation、quotes、names、numerals）、說話者清單與
@@ -363,7 +378,14 @@ def _warning_text(report: DiarizationReport, code: str) -> str:
     return code
 
 
+def _range_text(report: DiarizationReport) -> list[str]:
+    """只處理影片的一段時，告訴讀的人是哪一段（時間的寫法同逐字稿：分鐘不封頂）。"""
+    if report.range_start is None or report.range_end is None:
+        return []
+    return [f"只處理影片的 {clock(report.range_start)}–{clock(report.range_end)}"]
+
+
 def source_note(report: DiarizationReport) -> str:
-    """寫進成品的來源註記：固定的那一句，加上說話者區分的警告（有的話）。"""
-    warnings = [_warning_text(report, code) for code in report.warnings]
-    return SOURCE_NOTE + ("；" + "；".join(warnings) if warnings else "")
+    """寫進成品的來源註記：固定的那一句，加上只處理哪一段（有區間的話）與說話者區分的警告（有的話）。"""
+    notes = _range_text(report) + [_warning_text(report, code) for code in report.warnings]
+    return SOURCE_NOTE + ("；" + "；".join(notes) if notes else "")

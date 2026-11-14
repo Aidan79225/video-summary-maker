@@ -92,6 +92,10 @@ class DiarizationField(StrEnum):
     OVERLAP_RATIO = "overlap_ratio"
     PROPOSED_POINTS = "proposed_points"
     KEPT_POINTS = "kept_points"
+    # 只有請求帶了區間才有：這次實際處理的區間（原影片的秒數；終點已夾在影片長度內）。
+    # 沒有區間的成品連空的都不帶，所以契約範例與舊的新聞服務完全不受影響
+    RANGE_START = "range_start"
+    RANGE_END = "range_end"
 
 
 def _image_base64(path: str | None) -> str | None:
@@ -147,7 +151,7 @@ def _speaker_payload(speaker: SpeakerInfo) -> dict:
 
 
 def _diarization_payload(report: DiarizationReport) -> dict:
-    return {
+    payload = {
         DiarizationField.ENGINE: report.engine,
         DiarizationField.VERSION: report.version,
         DiarizationField.MODEL: report.model,
@@ -163,6 +167,13 @@ def _diarization_payload(report: DiarizationReport) -> dict:
         DiarizationField.PROPOSED_POINTS: report.proposed_points,
         DiarizationField.KEPT_POINTS: report.kept_points,
     }
+    if report.range_start is not None or report.range_end is not None:
+        # 兩端一起回報（use case 保證）；只有一端的成品新聞服務一定會擋下，不如在這裡就失敗
+        if report.range_start is None or report.range_end is None:
+            raise ValueError("多人模式回報的區間只有一端，不能交出去")
+        payload[DiarizationField.RANGE_START] = report.range_start
+        payload[DiarizationField.RANGE_END] = report.range_end
+    return payload
 
 
 class BriefField(StrEnum):

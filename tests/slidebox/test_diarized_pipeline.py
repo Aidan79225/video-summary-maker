@@ -10,7 +10,7 @@ import dataclasses
 
 import pytest
 
-from slidebox.domain.entities import DiarizationReport, Point, RawPoint, RawSlide, Settings, Turn
+from slidebox.domain.entities import DiarizationReport, Point, RawPoint, RawSlide, Settings, TimeRange, Turn
 from slidebox.domain.errors import AttributionUnreliable, SummarizerOutputInvalid, SummarizerUnavailable
 from slidebox.usecases import code_fingerprint as cf
 from slidebox.usecases import diarized_pipeline as dp
@@ -88,6 +88,31 @@ def test_the_words_fingerprint_follows_model_hint_and_alignment_version(monkeypa
 
 def test_the_words_and_diarization_fingerprints_never_collide_across_stages():
     assert dp.words_fingerprint("x", None) != dp.diarization_fingerprint("x", None)
+
+
+def test_without_a_range_the_listening_fingerprints_are_byte_identical_to_the_ones_made_before_ranges_existed(monkeypatch):
+    """攔的 bug：加了區間之後，沒有區間的舊存檔（與議會、單人以外的所有既有多人存檔）全部對不上，一支兩小時影片的
+    聲音區分與辨識被重做。這裡寫死舊公式：參數不是 None 才多一項。"""
+    assert dp.diarization_fingerprint("engine-1", 3) == dp.stage_fingerprint("diarize", "engine-1", 3)
+    assert dp.diarization_fingerprint("engine-1", None, None) == dp.stage_fingerprint("diarize", "engine-1", None)
+    assert dp.words_fingerprint("whisper-a", "少子化", "code-1") == dp.stage_fingerprint(
+        "multi", "whisper-a", "少子化", dp.ALIGN_VERSION, "code-1")
+    assert dp.words_fingerprint("whisper-a", None, "code-1", None) == dp.words_fingerprint("whisper-a", None, "code-1")
+
+
+def test_the_range_is_part_of_both_listening_fingerprints():
+    a, b = TimeRange(600.0, 1500.0), TimeRange(600.0, 1501.0)
+    for make_fingerprint in (lambda r: dp.diarization_fingerprint("engine-1", 3, r),
+                             lambda r: dp.words_fingerprint("whisper-a", "少子化", "code-1", r)):
+        none, first, second = make_fingerprint(None), make_fingerprint(a), make_fingerprint(b)
+        assert len({none, first, second}) == 3
+        assert make_fingerprint(TimeRange(600.0, 1500.0)) == first
+        assert make_fingerprint(TimeRange(600.0)) != make_fingerprint(TimeRange(end=1500.0))   # 開頭不同就是不同的段
+
+
+def test_a_range_with_an_open_end_and_one_that_ends_somewhere_never_collide():
+    assert dp.diarization_fingerprint("e", None, TimeRange(600.0)) != dp.diarization_fingerprint(
+        "e", None, TimeRange(600.0, 1800.0))
 
 
 SETTINGS = Settings(output_dir="OUT", min_slides=2, max_slides=6, model="qwen-a")
@@ -269,6 +294,25 @@ def test_every_warning_is_spelled_out_in_the_source_note():
         requested_speakers=3, found_speakers=2, minor_speakers=4, unassigned_ratio=0.31))
     assert note == (dp.SOURCE_NOTE + "；指定 3 人，實際找到 2 位主要發言者；約 31% 的說話時間無法判斷是誰在說；"
                     "有 4 個只出現一下的聲音，未納入重點；只找到 1 位主要發言者")
+
+
+def test_the_source_note_says_which_part_of_the_video_was_processed():
+    note = dp.source_note(report(range_start=600.0, range_end=1500.0))
+    assert note == dp.SOURCE_NOTE + "；只處理影片的 10:00–25:00"
+
+
+def test_the_minutes_of_the_range_are_not_capped_at_an_hour():
+    """同逐字稿的寫法（分鐘不封頂）：讀的人拿它對照逐字稿上的時間。"""
+    assert dp.source_note(report(range_start=3725.0, range_end=7530.0)).endswith("只處理影片的 62:05–125:30")
+
+
+def test_the_range_sentence_comes_before_the_warnings():
+    note = dp.source_note(report(range_start=0.0, range_end=900.0, warnings=(WARN_SINGLE_FOUND,)))
+    assert note == dp.SOURCE_NOTE + "；只處理影片的 00:00–15:00；只找到 1 位主要發言者"
+
+
+def test_a_report_without_a_range_has_no_sentence_about_one():
+    assert "只處理" not in dp.source_note(report(warnings=(WARN_SINGLE_FOUND,)))
 
 
 def test_an_unknown_warning_code_is_shown_as_is_rather_than_dropped():

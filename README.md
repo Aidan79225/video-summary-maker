@@ -273,8 +273,8 @@ uv run --group api serve_api.py
 | 端點 | 說明 |
 |---|---|
 | `GET /health` | Ollama 是否連得上、目前忙不忙 |
-| `GET /capabilities` | GPU 能不能做 YouTube 多人說話者區分（`speaker_diarization`，不能時 `reason` 說明原因），以及成品格式的契約版本（`speaker_contract`，目前是 `1`）；和 `/health` 一樣不需要 API key |
-| `POST /jobs` | `{url, detailed, min_slides, max_slides, speaker_mode, speaker_count}` → `202 {id}`（議題分類與追問判斷工作見下；多人說話者模式見〈多人說話者模式〉） |
+| `GET /capabilities` | GPU 能不能做 YouTube 多人說話者區分（`speaker_diarization`，不能時 `reason` 說明原因），以及成品格式的契約版本（`speaker_contract`，目前是 `1`），還有這個版本看不看得懂工作請求裡的 `range_start`／`range_end`（`video_range`，只處理影片的一段；舊版沒有這個欄位，新聞服務沒看到 `true` 就不送區間）；和 `/health` 一樣不需要 API key |
+| `POST /jobs` | `{url, detailed, min_slides, max_slides, speaker_mode, speaker_count, range_start, range_end}` → `202 {id}`（議題分類與追問判斷工作見下；多人說話者模式與區間見〈多人說話者模式〉） |
 | `GET /jobs/{id}` | 進度與結果（`kind` 是工作種類） |
 | `DELETE /jobs/{id}` | 取消 |
 
@@ -416,6 +416,21 @@ curl http://localhost:8800/health   # ollama_reachable 要是 true
 - 缺任何一塊出處（說話者清單、區分報告、某一頁的 `points`）的多人成品，GPU 不會交出去，工作直接失敗
 - 契約版本寫在 `GET /capabilities` 的 `speaker_contract`；範例放在 `tests/slidebox_api/fixtures/speaker_contract_v1.json`，GPU 這邊的測試對著它驗
 
+##### 只處理影片的一段（`range_start`／`range_end`）
+
+辯論影片前後常有不相干的訪問、片頭或廣告：不必整支都收，只處理要的那一段。
+
+```json
+{"url": "https://www.youtube.com/watch?v=……", "speaker_mode": "diarize", "range_start": 600, "range_end": 4200}
+```
+
+- `range_start`、`range_end`：**原影片的秒數**，各自可以省略（只給 `range_start` 是一直到影片結尾，只給 `range_end` 是從頭開始）。只能和 `"speaker_mode": "diarize"` 一起用：單人模式或議題分類、追問判斷工作帶了是 422，不會默默處理整支影片。不是有限的數字、起點是負的、區間不到 5 秒也是 422（回應的 `detail` 會說是哪一個）
+- 收到請求時還不知道影片多長，所以影片長度的檢查在下載之後：`range_end` 超過影片長度就夾在影片結尾；`range_start` 已經超過影片長度（沒有東西可處理）、或夾完不到 5 秒，工作失敗並說明；`range_start` 是 0 又沒有（或超過影片長度的）`range_end`，等於整支影片，當作沒有區間
+- 怎麼處理：還是下載整支影片的音訊，再用 ffmpeg 切成那一段（單聲道 16 kHz 的 WAV），說話者區分與語音辨識**只聽那一段**，所以聲音超過上限（12 個）的影片只要區間內夠少就能收，也比整支快。切完把起點加回每一個時間，所以成品裡的所有時間（重點、`&t=` 連結、截圖、核對點）都是**原影片的秒數**，不是區間內的
+- 成品：`diarization` 多 `range_start`、`range_end`（實際處理的區間，終點已夾在影片長度內），`source_note` 開頭多一句「只處理影片的 mm:ss–mm:ss」。沒有區間的成品完全不帶這兩個鍵，所以契約範例與舊的新聞服務不受影響，`speaker_contract` 不升版
+- 區間只有一段（要兩段就送兩個工作）。區間的邊緣可能切在一句話中間，頭尾那一句不一定完整；`speaker_count` 指的是**區間內**的人數；說話者標籤只在這個區間內有意義，換了區間就不要拿來比對
+- 存檔（`.slidebox_cache/`）的指紋含區間：同一支影片換了區間，說話者區分、語音辨識與整份摘要都會重做；區間沒變就照常接著做。沒有區間的指紋與以前完全相同
+
 #### 一次性的設定
 
 1. 到 Hugging Face 建 token：Settings → Access Tokens → Create new token，類型選 **Read**（唯讀）就夠
@@ -481,7 +496,7 @@ PyTorch 與 pyannote **不在** API 的主環境裡，而是在第二個 Python 
 
 - **映像會大很多，第一次建置要很久**：多人模式讓映像多裝一整個 Python 環境（上面的第二個環境）：PyTorch、pyannote.audio 和它們的 CUDA 13 函式庫，和主環境原有的 CUDA 12 函式庫並存（兩份 cuDNN、兩份 cuBLAS），大小以 GB 計（沒有實測，依你的網路與磁碟而定）。Docker Desktop 的磁碟要留足空間
 - **第一次跑多人工作要下載模型**，存在 `whisper-cache` volume，之後不會再下載。`docker compose down -v` 會把這個 volume 連同已經下載的 Whisper 模型一起刪掉
-- **比字幕模式慢很多**：字幕模式只抓文字；多人模式要下載整支影片的音訊，再跑完整支的聲音區分與語音辨識，時間隨影片長度增加。沒有實測數字——先用 `diarize_check` 在你的機器上量（它會印每個階段的耗時），再決定要收多長的影片
+- **比字幕模式慢很多**：字幕模式只抓文字；多人模式要下載整支影片的音訊，再跑完整支的聲音區分與語音辨識，時間隨影片長度增加（只處理一段的話，音訊還是整支下載，聲音區分與語音辨識只跑那一段）。沒有實測數字——先用 `diarize_check` 在你的機器上量（它會印每個階段的耗時），再決定要收多長的影片
 - **顯示卡記憶體**：Ollama、faster-whisper 和 pyannote 共用同一張卡，用量沒有實測（`diarize_check` 會印說話者區分工作行程的記憶體峰值和 PyTorch 的顯示卡記憶體峰值；Whisper 與 Ollama 的用量要另外看 `nvidia-smi`）。不夠就把 `SLIDEBOX_DIARIZATION_DEVICE` 設成 `cpu`
 - **Pi 那邊要調大 `GPU_JOB_TIMEOUT_SECONDS`**：這是 Pi 等單一支影片的上限（`services/news` 預設 1800 秒，Pi 的 `compose.yaml` 預設 2700 秒），GPU 這一端沒有整支影片的逾時，只有說話者區分的工作行程有一個防卡死的上限（`SLIDEBOX_DIARIZATION_TIMEOUT_SECONDS`，預設 21600 秒，也就是 6 小時，是還沒實測過的保守值）。長的對談影片很容易超過，超過 Pi 就不等了。要在 Pi 的 `api` 與 `scheduler` 兩個容器都調大。調多大看最久的那一階段：說話者區分、語音辨識、整份摘要各自做完才存，哪一階段在途中被切斷，重送時那一階段要整個重做（見下一條），所以每個階段都得在一次等待的時間內做得完
 - 被取消或逾時的工作，已經做完的**階段**會存在 `summary-output` volume 的 `.slidebox_cache/` 底下，**再送同一支影片會從那裡接著做**，成功後清掉。存的有三份：說話者區分、語音辨識（字）、整份對談的摘要，各自在那個階段做完時存。**摘要不是一個窗一個窗存的**：要所有的窗都問完、整份的可靠度檢查也通過，才存一次。所以切斷發生在說話者區分或語音辨識的「途中」，那一階段整個重做；發生在逐窗摘要的途中（或整份的可靠度檢查沒過，`AttributionUnreliable`），已經問完的窗都不留下，重送會從第一個窗重問，說話者區分與語音辨識照樣沿用。要調大逾時，不能只靠重試

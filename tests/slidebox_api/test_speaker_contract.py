@@ -60,8 +60,18 @@ def test_the_request_example_is_a_valid_request():
     assert request.speech_hint == CONTRACT["request"]["speech_hint"]
 
 
+# v1 之後疊上去的能力旗標：舊的新聞服務不認得它、不看它，所以不升 speaker_contract 的版本
+ADDED_CAPABILITIES = {"video_range"}
+
+
+def _says_what_the_example_says(body: dict) -> bool:
+    """範例裡的每一個鍵都在、值一樣；多出來的只能是上面登記過的疊上去的旗標。"""
+    return ({key: body[key] for key in CONTRACT["capabilities"]} == CONTRACT["capabilities"]
+            and set(body) - set(CONTRACT["capabilities"]) == ADDED_CAPABILITIES)
+
+
 def test_the_capabilities_example_is_a_valid_answer():
-    assert CapabilitiesView(**CONTRACT["capabilities"]).model_dump() == CONTRACT["capabilities"]
+    assert _says_what_the_example_says(CapabilitiesView(**CONTRACT["capabilities"]).model_dump())
 
 
 def _client(probe):
@@ -76,7 +86,7 @@ def test_the_capabilities_endpoint_says_exactly_what_the_example_says_for_a_read
     client, _, worker = _client(lambda: (True, ""))
     with client:
         worker.stop()
-        assert client.get("/capabilities").json() == CONTRACT["capabilities"]
+        assert _says_what_the_example_says(client.get("/capabilities").json())
 
 
 def test_the_request_example_is_accepted_over_http_and_reaches_the_job_unchanged():

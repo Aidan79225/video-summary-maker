@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 
 from .domain.entities import Brief, RawSlide, Settings, Slide
 from .domain.ports import CancelCheck, ProgressCallback
+from .infrastructure.audio_cutter import FfmpegAudioCutter
 from .infrastructure.checkpoint_store import JsonCheckpointStore
 from .infrastructure.ffmpeg_frames import FfmpegFrameExtractor
 from .infrastructure.hls_audio import NoSubtitlesGateway
@@ -211,6 +212,8 @@ def build_usecase(
         # 多人模式（speaker_mode="diarize"）：每個字帶時間的語音辨識、對談重點的摘要器、窗的大小、
         # 要不要把每個重點都換成核對過的原話（安全模式）。單人與議會的工作完全不經過這四個。
         word_transcriber=transcriber,
+        # 只處理影片的一段區間（time_range）時，先把下載好的音訊切成那一段，再交給說話者區分與逐字辨識
+        audio_cutter=FfmpegAudioCutter(),
         conversation=CurrentSettingsConversationSummarizer(settings),
         chunk_chars=chunk_chars,
         quote_only=quote_only,

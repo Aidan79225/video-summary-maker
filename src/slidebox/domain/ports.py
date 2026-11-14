@@ -208,6 +208,19 @@ class AudioGateway(Protocol):
         ...
 
 
+class AudioCutter(Protocol):
+    """把下載好的音訊切成影片的一段區間（add_video --start/--end）。"""
+
+    def cut(self, clip: AudioClip, start: float, end: float | None, dest_dir: str) -> AudioClip:
+        """切出 [start, end) 秒（end 是 None＝到結尾），寫在 dest_dir（和下載的音訊同一個暫存資料夾，
+        由 AudioGateway.cleanup 一併清掉）。回傳切出來的音訊：duration 是切出來的**實際**長度、
+        offset 是 start（聲音區分與語音辨識量到的時間要加上它才是原影片的時間）。
+
+        失敗（ffmpeg 出錯、沒有輸出檔、切出來的檔短到不能用）raise AudioCutFailed，訊息給操作者看。
+        """
+        ...
+
+
 class SpeechTranscriber(Protocol):
     def transcribe(
         self,

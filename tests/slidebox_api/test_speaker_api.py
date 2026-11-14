@@ -5,53 +5,25 @@
 from __future__ import annotations
 
 import pytest
-from fastapi.testclient import TestClient
 
-from slidebox.domain.entities import DeckResult, Settings
 from slidebox.domain.errors import AttributionUnreliable, DiarizationUnavailable
-from slidebox_api.app import create_app
-from slidebox_api.jobs import JobStatus, JobStore
-from slidebox_api.runner import JobWorker, SlideboxExecutor
+from slidebox_api.jobs import JobStatus
 
-from .speaker_support import deck_from_result, load_contract
+from .speaker_support import (
+    FOLLOWUP,
+    IVOD,
+    TOPIC,
+    YOUTUBE,
+    CannedUseCase,
+    deck_from_result,
+    finish,
+    kit,
+    load_contract,
+    submit,
+)
 
 CONTRACT = load_contract()
 RESULT = CONTRACT["result"]
-YOUTUBE = "https://www.youtube.com/watch?v=abcdefghijk"
-IVOD = "https://ivod.ly.gov.tw/Play/Clip/1M/171180"
-
-
-class CannedUseCase:
-    """依腳本回一份成品（或丟例外），並記下每次被怎麼叫。"""
-
-    def __init__(self, deck=None, error=None):
-        self._deck = deck if deck is not None else deck_from_result(RESULT)
-        self._error = error
-        self.calls: list[dict] = []
-
-    def execute(self, url, settings, progress=None, is_cancelled=None, **kwargs):
-        self.calls.append(dict(url=url, **kwargs))
-        if self._error is not None:
-            raise self._error
-        return DeckResult(self._deck, "OUT/x.html")
-
-
-def kit(probe=None, usecase=None, api_key=""):
-    store = JobStore()
-    usecase = usecase or CannedUseCase()
-    worker = JobWorker(store, SlideboxExecutor(usecase, Settings(output_dir="OUT")))
-    app = create_app(store=store, worker=worker, api_key=api_key, model="m", ollama_host="http://h",
-                     probe_ollama=lambda: True, probe_speaker_diarization=probe)
-    return TestClient(app), store, worker, usecase
-
-
-def submit(body, probe=None, usecase=None):
-    """送出一個工作並回傳（回應, store, worker, usecase）；背景執行緒先停掉，由測試決定何時跑。"""
-    client, store, worker, usecase = kit(probe=probe, usecase=usecase)
-    with client:
-        worker.stop()
-        response = client.post("/jobs", json=body)
-    return response, store, worker, usecase
 
 
 # --- /capabilities ---
@@ -61,7 +33,7 @@ def test_a_ready_gpu_announces_the_diarization_capability_and_the_contract_versi
     client, *_ = kit(probe=lambda: (True, ""))
     with client:
         assert client.get("/capabilities").json() == {
-            "speaker_diarization": True, "reason": "", "speaker_contract": 1}
+            "speaker_diarization": True, "reason": "", "speaker_contract": 1, "video_range": True}
 
 
 def test_a_gpu_that_cannot_diarize_says_why():
@@ -142,11 +114,6 @@ def test_every_other_combination_is_refused_before_any_job_exists(fields):
     assert store.counts() == (0, 0)
 
 
-TOPIC = {"kind": "topic", "text": "一句話", "labels": [
-    {"key": "a", "label": "甲"}, {"key": "b", "label": "乙"}]}
-FOLLOWUP = {"kind": "followup", "request": "提高補助", "card": "摘要卡", "excerpt": "片段"}
-
-
 @pytest.mark.parametrize("base", [TOPIC, FOLLOWUP], ids=["topic", "followup"])
 @pytest.mark.parametrize("fields", [
     {"speaker_mode": "diarize"},
@@ -169,15 +136,6 @@ def test_the_single_default_stays_acceptable_on_every_kind_of_job(base):
 
 
 # --- 一個多人工作從頭到尾 ---
-
-
-def finish(body, usecase=None, probe=lambda: (True, "")):
-    client, store, worker, usecase = kit(probe=probe, usecase=usecase)
-    with client:
-        worker.stop()
-        job_id = client.post("/jobs", json=body).json()["id"]
-        assert worker.run_once() is True
-        return client.get(f"/jobs/{job_id}").json(), usecase
 
 
 def test_a_diarize_job_delivers_the_contract_result_and_the_use_case_is_told_the_mode():

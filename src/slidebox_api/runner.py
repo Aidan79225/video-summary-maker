@@ -10,7 +10,7 @@ import threading
 from collections.abc import Callable, Mapping
 from dataclasses import replace
 
-from slidebox.domain.entities import Settings
+from slidebox.domain.entities import Settings, TimeRange
 from slidebox.domain.errors import OperationCancelled
 from slidebox.domain.ports import FollowUpJudge, TopicClassifier
 from slidebox.usecases.build_deck import BuildDeckUseCase
@@ -132,6 +132,9 @@ class SlideboxExecutor:
         kwargs = {"speech_hint": job.speech_hint}
         if job.speaker_mode != "single" or job.speaker_count is not None:
             kwargs.update(speaker_mode=job.speaker_mode, speaker_count=job.speaker_count)
+        if job.range_start is not None or job.range_end is not None:
+            # 沒有區間的工作不帶這個參數：議會與舊 client 的呼叫要和沒有這個功能時完全一樣
+            kwargs.update(time_range=TimeRange(job.range_start or 0.0, job.range_end))
         result = self._usecase.execute(job.url, settings, progress, is_cancelled, **kwargs)
         return deck_payload(result.deck, video_id_of(job.url))
 
