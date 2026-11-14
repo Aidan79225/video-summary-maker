@@ -1,0 +1,374 @@
+{
+ "fixture": "F05_p4_qa_restatement_and_rescue",
+ "about": "points of call.json",
+ "points": [
+  {
+   "page": 1,
+   "number": 1,
+   "cited_turn": 2,
+   "text": "指出九月底執行率僅百分之四十一點八",
+   "context": [],
+   "quote": "累計執行數兩百五十九億 執行率百分之四十一點八",
+   "scorer_category": "correct",
+   "cited_speaker": "S1",
+   "hybrid_decision": "kept_paraphrase",
+   "reference_v1b_v2_v3": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 2,
+    "reanchored": false
+   },
+   "reference_v1b_v2_v3_fragment_quote_guard": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 2,
+    "reanchored": false
+   }
+  },
+  {
+   "page": 1,
+   "number": 2,
+   "cited_turn": 2,
+   "text": "對比去年同期執行率為百分之六十八點三",
+   "context": [],
+   "quote": "去年九月底 執行率是百分之六十八點三",
+   "scorer_category": "unmatched",
+   "cited_speaker": "S1",
+   "hybrid_decision": "kept_paraphrase",
+   "reference_v1b_v2_v3": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 4,
+    "reanchored": true
+   },
+   "reference_v1b_v2_v3_fragment_quote_guard": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 4,
+    "reanchored": true
+   }
+  },
+  {
+   "page": 1,
+   "number": 3,
+   "cited_turn": 2,
+   "text": "質疑剩餘目標需每月花費九十億是否可行",
+   "context": [],
+   "quote": "剩下三個月要再花兩百六十八億 平均一個月九十億",
+   "scorer_category": "hallucinated",
+   "cited_speaker": "S1",
+   "hybrid_decision": "rescued_quote",
+   "reference_v1b_v2_v3": {
+    "status": "dropped",
+    "code": "unsupported",
+    "anchor_turn": null,
+    "reanchored": null
+   },
+   "reference_v1b_v2_v3_fragment_quote_guard": {
+    "status": "dropped",
+    "code": "unsupported",
+    "anchor_turn": null,
+    "reanchored": null
+   }
+  },
+  {
+   "page": 1,
+   "number": 4,
+   "cited_turn": 6,
+   "text": "強調保留款仍屬未執行金額，不應混淆",
+   "context": [],
+   "quote": "保留款也是還沒有花出去的錢啊部長",
+   "scorer_category": "unmatched",
+   "cited_speaker": "S1",
+   "hybrid_decision": "dropped:unsupported,quote_wording:role+name",
+   "reference_v1b_v2_v3": {
+    "status": "dropped",
+    "code": "unsupported",
+    "anchor_turn": null,
+    "reanchored": null
+   },
+   "reference_v1b_v2_v3_fragment_quote_guard": {
+    "status": "dropped",
+    "code": "unsupported",
+    "anchor_turn": null,
+    "reanchored": null
+   }
+  },
+  {
+   "page": 2,
+   "number": 1,
+   "cited_turn": 10,
+   "text": "說明抽水站僅完工十一座，十座尚未發包",
+   "context": [],
+   "quote": "這一期規劃三十七座 完工十一座 剩下十座到今天還沒有發包",
+   "scorer_category": "unmatched",
+   "cited_speaker": "S1",
+   "hybrid_decision": "kept_paraphrase",
+   "reference_v1b_v2_v3": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 10,
+    "reanchored": false
+   },
+   "reference_v1b_v2_v3_fragment_quote_guard": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 10,
+    "reanchored": false
+   }
+  },
+  {
+   "page": 2,
+   "number": 2,
+   "cited_turn": 10,
+   "text": "指出第七號站用地僅取得三成且設計未完成",
+   "context": [],
+   "quote": "其中最嚴重的是第七號站 用地到現在只取得三成",
+   "scorer_category": "unmatched",
+   "cited_speaker": "S1",
+   "hybrid_decision": "kept_paraphrase",
+   "reference_v1b_v2_v3": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 10,
+    "reanchored": false
+   },
+   "reference_v1b_v2_v3_fragment_quote_guard": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 10,
+    "reanchored": false
+   }
+  },
+  {
+   "page": 2,
+   "number": 3,
+   "cited_turn": 26,
+   "text": "反映滯洪池延宕十個月仍未完工",
+   "context": [],
+   "quote": "滯洪池上游那一座 原本今年一月就要完工 現在已經十個月",
+   "scorer_category": "unmatched",
+   "cited_speaker": "S1",
+   "hybrid_decision": "dropped:negation_mismatch",
+   "reference_v1b_v2_v3": {
+    "status": "dropped",
+    "code": "negation_mismatch",
+    "anchor_turn": null,
+    "reanchored": null
+   },
+   "reference_v1b_v2_v3_fragment_quote_guard": {
+    "status": "dropped",
+    "code": "negation_mismatch",
+    "anchor_turn": null,
+    "reanchored": null
+   }
+  },
+  {
+   "page": 2,
+   "number": 4,
+   "cited_turn": 27,
+   "text": "解釋滯洪池延宕主因為用地與地主價購問題",
+   "context": [],
+   "quote": "主要是用地 還有三戶地主還在談價購 所以工期展延",
+   "scorer_category": "unmatched",
+   "cited_speaker": "S2",
+   "hybrid_decision": "rescued_quote",
+   "reference_v1b_v2_v3": {
+    "status": "dropped",
+    "code": "unsupported",
+    "anchor_turn": null,
+    "reanchored": null
+   },
+   "reference_v1b_v2_v3_fragment_quote_guard": {
+    "status": "dropped",
+    "code": "unsupported",
+    "anchor_turn": null,
+    "reanchored": null
+   }
+  },
+  {
+   "page": 3,
+   "number": 1,
+   "cited_turn": 28,
+   "text": "揭露實際清淤量僅達目標的百分之三十一點五",
+   "context": [],
+   "quote": "你們今年的清淤目標是二十萬立方公尺 到九月底實際清出來的只有六萬三千立方公尺",
+   "scorer_category": "unmatched",
+   "cited_speaker": "S1",
+   "hybrid_decision": "kept_paraphrase",
+   "reference_v1b_v2_v3": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 28,
+    "reanchored": false
+   },
+   "reference_v1b_v2_v3_fragment_quote_guard": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 28,
+    "reanchored": false
+   }
+  },
+  {
+   "page": 3,
+   "number": 2,
+   "cited_turn": 29,
+   "text": "說明KPI係以標案數量而非實際土方計算",
+   "context": [],
+   "quote": "那個是以標案數量計算的 不是以清出來的土方計算",
+   "scorer_category": "unmatched",
+   "cited_speaker": "S2",
+   "hybrid_decision": "kept_paraphrase",
+   "reference_v1b_v2_v3": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 29,
+    "reanchored": false
+   },
+   "reference_v1b_v2_v3_fragment_quote_guard": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 29,
+    "reanchored": false
+   }
+  },
+  {
+   "page": 3,
+   "number": 3,
+   "cited_turn": 30,
+   "text": "質疑僅憑發包即達標，忽略實際清淤成效",
+   "context": [],
+   "quote": "十個標案發出去就算達成 土方有沒有清根本不重要",
+   "scorer_category": "unmatched",
+   "cited_speaker": "S1",
+   "hybrid_decision": "dropped:unsupported,quote_is_restatement_under_question",
+   "reference_v1b_v2_v3": {
+    "status": "dropped",
+    "code": "unsupported",
+    "anchor_turn": null,
+    "reanchored": null
+   },
+   "reference_v1b_v2_v3_fragment_quote_guard": {
+    "status": "dropped",
+    "code": "unsupported",
+    "anchor_turn": null,
+    "reanchored": null
+   }
+  },
+  {
+   "page": 3,
+   "number": 4,
+   "cited_turn": 32,
+   "text": "要求公開每月實際清淤土方數據供民眾檢視",
+   "context": [],
+   "quote": "本席請你把每個月實際清出來的土方 公開在你們網站上",
+   "scorer_category": "unmatched",
+   "cited_speaker": "S1",
+   "hybrid_decision": "kept_paraphrase",
+   "reference_v1b_v2_v3": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 32,
+    "reanchored": false
+   },
+   "reference_v1b_v2_v3_fragment_quote_guard": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 32,
+    "reanchored": false
+   }
+  },
+  {
+   "page": 4,
+   "number": 1,
+   "cited_turn": 34,
+   "text": "指出施工圖採用五十年標準，低於規劃的一百年要求",
+   "context": [],
+   "quote": "設計標準寫的是五十年重現期 你們自己的規劃報告要求的是一百年",
+   "scorer_category": "unmatched",
+   "cited_speaker": "S1",
+   "hybrid_decision": "kept_paraphrase",
+   "reference_v1b_v2_v3": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 34,
+    "reanchored": false
+   },
+   "reference_v1b_v2_v3_fragment_quote_guard": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 34,
+    "reanchored": false
+   }
+  },
+  {
+   "page": 4,
+   "number": 2,
+   "cited_turn": 34,
+   "text": "質疑以低標準建造堤防的合理性與經費使用",
+   "context": [],
+   "quote": "一百年的水用五十年的標準去蓋 那一百一十五億到底是在蓋什麼",
+   "scorer_category": "unmatched",
+   "cited_speaker": "S1",
+   "hybrid_decision": "rescued_quote",
+   "reference_v1b_v2_v3": {
+    "status": "dropped",
+    "code": "unsupported",
+    "anchor_turn": null,
+    "reanchored": null
+   },
+   "reference_v1b_v2_v3_fragment_quote_guard": {
+    "status": "dropped",
+    "code": "unsupported",
+    "anchor_turn": null,
+    "reanchored": null
+   }
+  },
+  {
+   "page": 4,
+   "number": 3,
+   "cited_turn": 38,
+   "text": "說明下游地層下陷速率為每年三點二公分",
+   "context": [],
+   "quote": "那個區域每年下陷三點二公分 十年就是三十二公分",
+   "scorer_category": "unmatched",
+   "cited_speaker": "S1",
+   "hybrid_decision": "kept_paraphrase",
+   "reference_v1b_v2_v3": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 38,
+    "reanchored": false
+   },
+   "reference_v1b_v2_v3_fragment_quote_guard": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 38,
+    "reanchored": false
+   }
+  },
+  {
+   "page": 4,
+   "number": 4,
+   "cited_turn": 38,
+   "text": "警告加高堤防可能因下陷而失效的問題",
+   "context": [],
+   "quote": "你們這次堤防加高了六十公分 十年以後超過一半就被地層吃掉了",
+   "scorer_category": "unmatched",
+   "cited_speaker": "S1",
+   "hybrid_decision": "kept_paraphrase",
+   "reference_v1b_v2_v3": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 38,
+    "reanchored": false
+   },
+   "reference_v1b_v2_v3_fragment_quote_guard": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 38,
+    "reanchored": false
+   }
+  }
+ ]
+}

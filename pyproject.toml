@@ -26,6 +26,10 @@ whisper-gpu = [
     "nvidia-cublas-cu12 ; sys_platform == 'linux' or sys_platform == 'win32'",
     "nvidia-cudnn-cu12>=9,<10 ; sys_platform == 'linux'",
 ]
+# YouTube 多人影片用的聲音區分；只在 GPU 主機的 API image 安裝。
+diarization = [
+    "pyannote.audio>=4.0.0",
+]
 dev = [
     "httpx>=0.28.1",
     "pytest>=9.1.1",

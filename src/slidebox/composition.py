@@ -2,9 +2,10 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Sequence
 from typing import TYPE_CHECKING
 
-from .domain.entities import Brief, Settings, Slide
+from .domain.entities import Brief, RawSlide, Settings, Slide
 from .domain.ports import CancelCheck, ProgressCallback
 from .infrastructure.checkpoint_store import JsonCheckpointStore
 from .infrastructure.ffmpeg_frames import FfmpegFrameExtractor
@@ -12,6 +13,7 @@ from .infrastructure.hls_audio import NoSubtitlesGateway
 from .infrastructure.html_renderer import HtmlDeckRenderer
 from .infrastructure.ivod_api import IvodClient, IvodSubtitleGateway
 from .infrastructure.ivod_sections import HlsSectionGateway, IvodSectionGateway
+from .infrastructure.ollama_conversation import OllamaConversationSummarizer
 from .infrastructure.ollama_summarizer import (
     OllamaSlideRewriter,
     OllamaBriefWriter,
@@ -25,6 +27,7 @@ from .infrastructure.routing import (
 )
 from .infrastructure.ntpc_api import NtpcClient
 from .infrastructure.ntpc_audio import NtpcAudioGateway
+from .infrastructure.pyannote_diarizer import PyannoteSpeakerDiarizer
 from .infrastructure.settings_repository import JsonSettingsRepository
 from .infrastructure.tccc_api import TcccClient
 from .infrastructure.tccc_audio import TcccAudioGateway
@@ -33,6 +36,7 @@ from .infrastructure.ytdlp_audio import YtDlpAudioGateway
 from .infrastructure.ytdlp_sections import YtDlpSectionGateway
 from .infrastructure.ytdlp_subtitles import YtDlpSubtitleGateway
 from .usecases.build_deck import BuildDeckUseCase
+from .usecases.conversation import DEFAULT_CHUNK_CHARS
 from .usecases.sources import ntpc_clip, tccc_clip
 
 if TYPE_CHECKING:
@@ -115,7 +119,52 @@ class CurrentSettingsSlideRewriter:
             slide, problem, progress, is_cancelled)
 
 
-def build_usecase(settings: Settings) -> BuildDeckUseCase:
+class CurrentSettingsConversationSummarizer:
+    """同 CurrentSettingsSummarizer：每次都用當下的 model／host。
+
+    參數必須與 ConversationSummarizer port 完全一致，理由同上：多人模式的窗一個一個送進來，
+    簽章少一個參數只會在第一個窗炸成 TypeError，而整份語音辨識與說話者區分已經做完了。
+    """
+
+    def __init__(self, settings: Settings, factory=OllamaConversationSummarizer):
+        self._settings = settings
+        self._factory = factory
+
+    @property
+    def fingerprint(self) -> str:
+        """轉給真正的摘要器問：它的程式版本就是這一層的程式版本（ConversationSummarizer.fingerprint）。"""
+        s = self._settings
+        return self._factory(s.ollama_host, s.model, s.num_ctx).fingerprint
+
+    def summarize_window(
+        self,
+        window_text: str,
+        first_turn: int,
+        last_turn: int,
+        citable_turns: Sequence[int],
+        min_slides: int,
+        max_slides: int,
+        hint: str,
+        progress: ProgressCallback,
+        is_cancelled: CancelCheck | None = None,
+    ) -> tuple[RawSlide, ...]:
+        s = self._settings
+        impl = self._factory(s.ollama_host, s.model, s.num_ctx)
+        return impl.summarize_window(window_text, first_turn, last_turn, citable_turns, min_slides,
+                                     max_slides, hint, progress, is_cancelled)
+
+
+def build_diarizer() -> PyannoteSpeakerDiarizer:
+    """建立延遲載入的說話者區分器；沒有 token 時仍可跑議會的單人工作。"""
+    return PyannoteSpeakerDiarizer()
+
+
+def build_usecase(
+    settings: Settings,
+    diarizer: PyannoteSpeakerDiarizer | None = None,
+    chunk_chars: int = DEFAULT_CHUNK_CHARS,
+    quote_only: bool = False,
+) -> BuildDeckUseCase:
     """組好一條完整的 pipeline。
 
     刻意與 UI 分開：這個函式不碰 PySide6，所以無介面的服務（例如每天跑一輪
@@ -133,6 +182,8 @@ def build_usecase(settings: Settings) -> BuildDeckUseCase:
     # 新北市議會同理；差別是音訊走 Wowza 的純音訊串流（wowzaaudioonly），
     # 截圖才用一般的影像串流。
     ntpc_client = NtpcClient()
+    # 單人與多人共用同一個 Whisper 實例：模型約 40 秒才載入完，載兩份是浪費顯示卡記憶體
+    transcriber = FasterWhisperTranscriber(settings.whisper_model)
     return BuildDeckUseCase(
         BySourceSubtitleGateway(
             YtDlpSubtitleGateway(), IvodSubtitleGateway(ivod_client),
@@ -149,13 +200,20 @@ def build_usecase(settings: Settings) -> BuildDeckUseCase:
         # 快取在這個實例裡；改 whisper_model 需重開 app（語言模型與 host 則每次生成時即時讀取）。
         audio=BySourceAudioGateway(YtDlpAudioGateway(), tccc=TcccAudioGateway(tccc_client),
                                    ntpc=NtpcAudioGateway(ntpc_client)),
-        transcriber=FasterWhisperTranscriber(settings.whisper_model),
+        transcriber=transcriber,
+        diarizer=diarizer or build_diarizer(),
         # 詳細模式下多寫一張摘要卡（一句話、關鍵數字、要求與回應）
         brief_writer=CurrentSettingsBriefWriter(settings),
         # 摘要有第一人稱時只把那幾頁送回去改，不整份重產
         rewriter=CurrentSettingsSlideRewriter(settings),
         # 停了可以接著做：逐字稿、摘要、摘要卡存在輸出資料夾的 .slidebox_cache/
         checkpoints=JsonCheckpointStore(),
+        # 多人模式（speaker_mode="diarize"）：每個字帶時間的語音辨識、對談重點的摘要器、窗的大小、
+        # 要不要把每個重點都換成核對過的原話（安全模式）。單人與議會的工作完全不經過這四個。
+        word_transcriber=transcriber,
+        conversation=CurrentSettingsConversationSummarizer(settings),
+        chunk_chars=chunk_chars,
+        quote_only=quote_only,
     )
 
 

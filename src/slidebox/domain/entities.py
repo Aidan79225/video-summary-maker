@@ -28,6 +28,161 @@ class Transcript:
     source_note: str = ""
 
 
+# --- 多人模式（speaker_mode="diarize"）的實體 ---
+#
+# 單人路徑一個字都不碰這些：Cue、Transcript、既有的 Slide 欄位都和 master 相同。
+# 多人模式不走字幕，從語音辨識的「字」開始，經過說話者歸屬、分段（Turn），
+# 再由模型只引用 Turn 的編號寫出重點（Point）。說話者的身分永遠由程式從 diarization
+# 的結果推出來，模型看不到、也決定不了。
+
+
+@dataclass(frozen=True)
+class SpeakerTurn:
+    """diarization 找到的一段聲音與說話者；speaker 是 diarizer 給的原始標籤。"""
+    start: float
+    end: float
+    speaker: str
+
+
+@dataclass(frozen=True)
+class DiarizerOutput:
+    """一次說話者區分的結果。
+
+    turns 是互斥的區段（同一時間只有一人），拿來對齊語音辨識的字；overlap_seconds
+    是同一時間有兩人以上在說話的總秒數，只用來算 overlap_ratio 給人看。
+    """
+    turns: tuple[SpeakerTurn, ...]
+    overlap_seconds: float = 0.0
+
+
+@dataclass(frozen=True)
+class Word:
+    """語音辨識的一個字（Whisper 的 word timestamps）。
+
+    中文多半一個字一個 Word，標點黏在前一個字後面；英文則帶著前導空白。
+    segment 是它所屬的 Whisper 段落編號，只用來辨認「同一段被重複輸出」。
+    """
+    start: float
+    end: float
+    text: str
+    segment: int = 0
+    probability: float = 1.0
+
+
+@dataclass(frozen=True)
+class WordTranscript:
+    """多人模式的語音辨識結果與影片資訊，整份存進存檔（words 階段）。"""
+    video_id: str
+    title: str
+    duration: float
+    language: str
+    words: tuple[Word, ...]
+
+
+@dataclass(frozen=True)
+class Turn:
+    """同一位說話者連續說的一段話。
+
+    speaker 是 "S1".."Sn"（不透明的代號，依第一次出現排序），"S0" 表示無法判斷是誰。
+    index 是它在整份逐字稿裡從 0 開始的位置：模型引用的就是這個數字，
+    points[].turn 帶的也是它。
+    """
+    index: int
+    start: float
+    end: float
+    speaker: str
+    text: str
+
+
+@dataclass(frozen=True)
+class SpeakerSample:
+    """說話者清單上的一段樣本：給操作者聽聲音、確認是不是同一個人。"""
+    start: float
+    text: str
+
+
+@dataclass(frozen=True)
+class SpeakerInfo:
+    """一位說話者的統計。label 是程式給的中性代號（發言者 A／其他聲音 1），不是真人姓名。
+
+    kind 為 "participant"（主要發言者）或 "minor"（只出現一下的聲音：不進模型的可引用範圍）。
+    """
+    id: str
+    label: str
+    kind: str
+    seconds: float
+    turns: int
+    first_seen: float
+    last_seen: float
+    samples: tuple[SpeakerSample, ...] = ()
+    flags: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class DiarizationReport:
+    """這次說話者區分的來歷與品質；status 為 "ok" 或 "warn"，warn 時 warnings 說明原因。"""
+    engine: str
+    version: str
+    model: str
+    fingerprint: str
+    status: str
+    warnings: tuple[str, ...]
+    requested_speakers: int | None
+    found_speakers: int
+    minor_speakers: int
+    speech_seconds: float
+    unassigned_ratio: float
+    overlap_ratio: float
+    # 模型提出的重點數，與通過程式檢查而留下來的重點數
+    proposed_points: int = 0
+    kept_points: int = 0
+    # 下面四個只給記錄與 AttributionUnreliable 的訊息看，**不在 API 契約裡**（payload 不輸出）。
+    # None = 這次沒有重新檢查（沿用上次存的對談重點），不是 0。
+    # rescued_points：留下的點裡，改用「原話」代替模型改寫的點數（見 usecases/conversation.py 的混合條列）
+    rescued_points: int | None = None
+    # contradicted_points：程式檢查發現文字有問題而丟掉的點數（數字、問句、複述、姓名、代名詞…）
+    contradicted_points: int | None = None
+    # unverifiable_points：無法核對出處而丟掉的點數（引文不在任何一輪、內容找不到依據又不能改用原話）
+    unverifiable_points: int | None = None
+    # anchor_conflicts：其中內容出自 quote 所在那一輪以外的點數（contradicted_points 的一部分）
+    anchor_conflicts: int | None = None
+
+
+@dataclass(frozen=True)
+class Point:
+    """一個通過檢查的重點。speaker 是程式從 turn 查出來的，不是模型說的。
+
+    text 是不帶主詞的短句（「[[Sn]]：」由程式加上去），evidence 是被引用那段話裡
+    最貼近 text 的原文，讓人一眼核對。
+    """
+    speaker: str
+    turn: int
+    start: float
+    text: str
+    evidence: str
+
+
+@dataclass(frozen=True)
+class RawPoint:
+    """模型回傳、尚未檢查的重點：只有它引用的 turn 編號，沒有說話者。
+
+    context 是回答很短（對、不是）時，模型補充的上文 turn 編號。
+    quote 是模型從逐字稿「照抄」的一小段原文（先抄、再填 turn、最後才寫 text）：程式拿它找出
+    真正說這段話的那一輪，說話者就是那一輪的說話者。預設空字串（沒有引文的點無法核對，會被丟掉）。
+    """
+    turn: int
+    text: str
+    context: tuple[int, ...] = ()
+    quote: str = ""
+
+
+@dataclass(frozen=True)
+class RawSlide:
+    """模型回傳、尚未檢查的一頁。"""
+    title: str
+    points: tuple[RawPoint, ...]
+
+
 @dataclass(frozen=True)
 class AudioClip:
     """下載好的音訊檔與其影片資訊。
@@ -52,6 +207,8 @@ class Slide:
     # 詳細模式下該章節的完整敘述；一般模式為空字串。條列是「提醒你看過什麼」，
     # 這一段是「沒看影片也能懂」，兩者用途不同，不能互相取代。
     detail: str = ""
+    # 多人模式才有：這一頁每個重點由誰說、出自哪一段話。單人頁面維持空 tuple。
+    points: tuple[Point, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -106,6 +263,10 @@ class Deck:
     transcript_text: str = ""
     # 詳細模式下另外產生的質詢卡；產不出來時為 None，成品照常出片。
     brief: Brief | None = None
+    # 多人模式（"diarize"）才會改；議會與單人影片維持 "single"，其餘兩個欄位也維持空。
+    speaker_mode: str = "single"
+    speakers: tuple[SpeakerInfo, ...] = ()
+    diarization: DiarizationReport | None = None
 
     @property
     def missing_images(self) -> int:

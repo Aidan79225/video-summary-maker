@@ -5,6 +5,7 @@ Ollama、不需要網路。
 """
 from __future__ import annotations
 
+import logging
 import threading
 from collections.abc import Callable, Mapping
 from dataclasses import replace
@@ -16,6 +17,7 @@ from slidebox.usecases.build_deck import BuildDeckUseCase
 from slidebox.usecases.queue import video_key
 from slidebox.usecases.sources import ivod_id, ntpc_id, tccc_id
 
+from .failures import FailureReporter
 from .jobs import Job, JobKind, JobStore
 from .payload import deck_payload, followup_payload, topic_payload
 
@@ -25,6 +27,8 @@ Executor = Callable[[Job, ProgressCallback, CancelCheck], dict]
 
 DEFAULT_POLL_SECONDS = 0.2
 
+logger = logging.getLogger(__name__)
+
 
 class JobWorker:
     """單一背景執行緒，一次跑一個工作。
@@ -33,10 +37,14 @@ class JobWorker:
     """
 
     def __init__(self, store: JobStore, execute: Executor,
-                 poll_seconds: float = DEFAULT_POLL_SECONDS):
+                 poll_seconds: float = DEFAULT_POLL_SECONDS,
+                 failures: FailureReporter | None = None):
         self._store = store
         self._execute = execute
         self._poll = poll_seconds
+        # 每一則存起來的文字（失敗原因與進度）都先經過它：翻成中文、遮掉機密與路徑。
+        # 預設的什麼都沒設定，仍然會擋 hf_ 樣式的 token。
+        self._failures = failures or FailureReporter()
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
 
@@ -71,14 +79,16 @@ class JobWorker:
             return True
 
         def progress(fraction: float | None, status: str) -> None:
-            self._store.progress(job.id, fraction, status)
+            self._store.progress(job.id, fraction, self._failures.scrub(status))
 
         try:
             result = self._execute(job, progress, job.cancel_requested.is_set)
         except OperationCancelled:
             self._store.cancelled(job.id)
         except Exception as e:  # noqa: BLE001 任何失敗都要變成這個工作的錯誤
-            self._store.fail(job.id, f"{type(e).__name__}: {e}"[:800])
+            # 存給 Pi 的是翻成中文、遮掉機密與路徑的版本；翻譯前的原文（過濾過）只留在這台主機的 log
+            logger.warning("工作 %s 失敗：%s", job.id, self._failures.original(e))
+            self._store.fail(job.id, self._failures.describe(e))
         else:
             self._store.finish(job.id, result)
         return True
@@ -119,8 +129,10 @@ class SlideboxExecutor:
     def __call__(self, job: Job, progress: ProgressCallback,
                  is_cancelled: CancelCheck) -> dict:
         settings = self._apply(job)
-        result = self._usecase.execute(job.url, settings, progress, is_cancelled,
-                                       speech_hint=job.speech_hint)
+        kwargs = {"speech_hint": job.speech_hint}
+        if job.speaker_mode != "single" or job.speaker_count is not None:
+            kwargs.update(speaker_mode=job.speaker_mode, speaker_count=job.speaker_count)
+        result = self._usecase.execute(job.url, settings, progress, is_cancelled, **kwargs)
         return deck_payload(result.deck, video_id_of(job.url))
 
     def _apply(self, job: Job) -> Settings:
@@ -193,8 +205,10 @@ class ByKindExecutor:
     工作。
     """
 
-    def __init__(self, executors: Mapping[JobKind, Executor]):
+    def __init__(self, executors: Mapping[JobKind, Executor],
+                 speaker_capabilities: Callable[[], tuple[bool, str]] | None = None):
         self._executors = dict(executors)
+        self.speaker_capabilities = speaker_capabilities
 
     def __call__(self, job: Job, progress: ProgressCallback,
                  is_cancelled: CancelCheck) -> dict:

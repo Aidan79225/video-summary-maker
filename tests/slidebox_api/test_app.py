@@ -41,10 +41,11 @@ class FakeExecutor:
         return {"video_id": "171180", "slides": [], "title": job.url}
 
 
-def _app(store, worker, api_key="", reachable=True):
+def _app(store, worker, api_key="", reachable=True, speaker_probe=None):
     return create_app(store=store, worker=worker, api_key=api_key,
                       model="qwen3.5:9b", ollama_host="http://localhost:11434",
-                      probe_ollama=lambda: reachable)
+                      probe_ollama=lambda: reachable,
+                      probe_speaker_diarization=speaker_probe)
 
 
 @pytest.fixture
@@ -63,6 +64,41 @@ def test_health_answers_even_when_nothing_has_been_submitted(kit):
     body = client.get("/health").json()
     assert body["ok"] is True
     assert "model" in body and "ollama_reachable" in body
+
+
+def test_capabilities_reports_when_diarization_is_not_configured(kit):
+    client, *_ = kit
+
+    body = client.get("/capabilities").json()
+
+    assert body == {"speaker_diarization": False,
+                    "reason": "GPU 尚未提供多人說話者區分能力",
+                    "speaker_contract": 1}
+
+
+def test_diarization_capability_and_fixed_speaker_count_are_forwarded():
+    store = JobStore()
+    worker = JobWorker(store, FakeExecutor())
+    with TestClient(_app(store, worker, speaker_probe=lambda: (True, "已載入"))) as client:
+        worker.stop()
+        response = client.post("/jobs", json={
+            "url": IVOD, "speaker_mode": "diarize", "speaker_count": 2,
+        })
+
+    assert response.status_code == 202
+    job = store.get(response.json()["id"])
+    assert job.speaker_mode == "diarize"
+    assert job.speaker_count == 2
+
+
+def test_diarization_rejects_single_as_a_fixed_count(kit):
+    client, *_ = kit
+
+    response = client.post("/jobs", json={
+        "url": IVOD, "speaker_mode": "diarize", "speaker_count": 1,
+    })
+
+    assert response.status_code == 422
 
 
 def test_submitting_returns_202_and_a_job_id(kit):

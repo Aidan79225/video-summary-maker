@@ -27,6 +27,11 @@ class JobKind(StrEnum):
     FOLLOWUP = "followup"  # 舊的要求＋後來的一篇 → 有沒有追問
 
 
+class SpeakerMode(StrEnum):
+    SINGLE = "single"
+    DIARIZE = "diarize"
+
+
 class JobStatus(StrEnum):
     QUEUED = "queued"
     RUNNING = "running"
@@ -64,6 +69,9 @@ class Job:
     model: str | None = None
     # 語音辨識的專有名詞提示（講者姓名、機關名）；有逐字稿的來源用不到
     speech_hint: str | None = None
+    # 議會舊工作是 single；YouTube add_video 預設送 diarize。
+    speaker_mode: SpeakerMode = SpeakerMode.SINGLE
+    speaker_count: int | None = None
     kind: JobKind = JobKind.DECK
     # 只有分類工作用得到：要分類的文字與可選的領域
     text: str = ""
@@ -135,12 +143,14 @@ class JobStore:
 
     def submit(self, url: str = "", detailed: bool = True, min_slides: int | None = None,
                max_slides: int | None = None, model: str | None = None,
-               speech_hint: str | None = None, kind: JobKind = JobKind.DECK,
+               speech_hint: str | None = None, speaker_mode: SpeakerMode = SpeakerMode.SINGLE,
+               speaker_count: int | None = None, kind: JobKind = JobKind.DECK,
                text: str = "", labels: Sequence[TopicLabel] = (),
                followup: FollowUpPair | None = None) -> Job:
         job = Job(id=uuid.uuid4().hex, url=url, detailed=detailed,
                   min_slides=min_slides, max_slides=max_slides, model=model,
-                  speech_hint=speech_hint, kind=kind, text=text,
+                  speech_hint=speech_hint, speaker_mode=speaker_mode,
+                  speaker_count=speaker_count, kind=kind, text=text,
                   labels=tuple(labels), followup=followup)
         with self._lock:
             self._jobs[job.id] = job

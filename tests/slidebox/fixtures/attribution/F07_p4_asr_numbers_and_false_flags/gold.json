@@ -1,0 +1,649 @@
+{
+ "id": "asr-noisy-3p-01",
+ "genre": "meeting",
+ "synthetic": true,
+ "notes": "Worst-case Whisper-style transcript of a three-person startup weekly meeting (S1 founder, S2 CTO, S3 customer success) in Taiwanese Mandarin: practically no punctuation (spaces only), English terms inside Mandarin (sprint, ticket, backlog, P0, QA, MRR, burn rate, runway, churn, term sheet, pre-money, onboarding), Taiwanese particles (啦 喔 耶 欸 齁), numbers and dates in mixed formats (38萬, 4萬2, 3/11, 3月21號, 三月二十八號, 禮拜三, 百分之二點三 next to 1.8%, 一成六七 next to 14.3%, 1.2億, 2000萬), homophone slips (全限 for 權限, 稀式 for 稀釋, 對其 for 對齊, 穿接 for 串接, 平估 for 評估) and a company name that the ASR spells two ways (鯨落創投 and 京洛). A sentence is split across turn boundaries (the latency figure). Tests: (1) echoes of numbers and dates in the next speaker's turn, including S1's recap of S2's and S3's commitments (a point must carry only the speaker's own new claim); (2) vocatives by fictional nicknames (阿凱, 小安, 老大); (3) bare answers (7折, 沒問題, 對我記好了) that only make sense with the previous question; (4) pronouns whose referent sits in an earlier turn or is never named (他們 = a customer, a competitor or the investor, 他 = the hiring candidate, 她 = the shop owner); (5) quotes of absent third parties (customers and the investor); (6) one overlapped S0 turn with a date nobody may be credited with; (7) two speakers giving different dilution figures for the same deal (merge trap); (8) code-switched turns. Every key is unique to its speaker except the declared echoes.",
+ "speakers": {
+  "S1": {
+   "role": "founder and CEO",
+   "kind": "participant"
+  },
+  "S2": {
+   "role": "CTO",
+   "kind": "participant"
+  },
+  "S3": {
+   "role": "sales and customer success",
+   "kind": "participant"
+  }
+ },
+ "window": {
+  "first_turn": 0,
+  "last_turn": 88
+ },
+ "turns": [
+  {
+   "index": 0,
+   "speaker": "S1",
+   "start": 3.0,
+   "end": 34.41,
+   "text": "好大家都到了嗎 阿凱 小安 那我們就開始吧 呃今天主要三件事 第一個是工程進度 第二個是客戶 第三個是錢 最後我們把這禮拜的action item對一下 然後我今天四點半要去見鯨落創投 所以一個小時內要結束拜託大家 不要講太久好不好"
+  },
+  {
+   "index": 1,
+   "speaker": "S2",
+   "start": 34.75,
+   "end": 60.78,
+   "text": "好那我先講工程 呃上禮拜sprint 14收掉了 我們關掉31張ticket 還有6張carry over到下一個sprint 然後bug的部分 就是現在backlog現在還有23個 其中P0有4個 這個是比較嚴重的 我們都有標起來"
+  },
+  {
+   "index": 2,
+   "speaker": "S1",
+   "start": 61.16,
+   "end": 63.35,
+   "text": "四個P零是哪四個"
+  },
+  {
+   "index": 3,
+   "speaker": "S2",
+   "start": 63.84,
+   "end": 83.0,
+   "text": "三個 三個是離線同步的問題 還有一個是權限 就是那個店長跟店員的全限會亂掉 這個這禮拜五前會修完 但是離線同步比較麻煩 可能要拖到下禮拜 因為牽涉到資料庫的結構要改"
+  },
+  {
+   "index": 4,
+   "speaker": "S1",
+   "start": 83.26,
+   "end": 84.54,
+   "text": "好還有嗎"
+  },
+  {
+   "index": 5,
+   "speaker": "S2",
+   "start": 84.68,
+   "end": 96.45,
+   "text": "呃對還有 還有一個好消息 就是latency的部分 我們這個禮拜已經把查詢的API從820毫秒降到"
+  },
+  {
+   "index": 6,
+   "speaker": "S1",
+   "start": 96.65,
+   "end": 97.13,
+   "text": "嗯"
+  },
+  {
+   "index": 7,
+   "speaker": "S2",
+   "start": 97.23,
+   "end": 100.41,
+   "text": "310毫秒了 大概這樣啦"
+  },
+  {
+   "index": 8,
+   "speaker": "S3",
+   "start": 101.19,
+   "end": 120.53,
+   "text": "離線同步喔 欸這個晴天洗衣就有遇到耶 就是那個他們十四間分店裡面有兩間網路真的很爛 資料一直對不起來 然後老闆娘昨天還打電話來罵我 超尷尬的啦 我差點要跪下去道歉"
+  },
+  {
+   "index": 9,
+   "speaker": "S1",
+   "start": 121.39,
+   "end": 137.1,
+   "text": "對所以你剛剛說這禮拜五前會修完 那這兩間要優先 就是修完以後先給那兩間測 確認OK再推給其他分店 小安你去跟老闆娘講一下"
+  },
+  {
+   "index": 10,
+   "speaker": "S2",
+   "start": 137.41,
+   "end": 159.95,
+   "text": "可以啊 不過我先講喔 禮拜五修完只是code修完而已 還要QA跑一輪 所以真的可以給客戶測 比較實際的是下週二3/11 你們不要跟客戶講禮拜五 不然到時候又變成我們跳票 然後大家都不開心"
+  },
+  {
+   "index": 11,
+   "speaker": "S3",
+   "start": 160.64,
+   "end": 177.83,
+   "text": "3/11喔 那剛好 因為晴天洗衣3/12就要開第15間店了 他們老闆娘超緊張 就是怕開幕那天系統掛掉 然後被客人罵 對啦對啦對啦 所以千萬不要再延了"
+  },
+  {
+   "index": 12,
+   "speaker": "S2",
+   "start": 178.49,
+   "end": 202.33,
+   "text": "還有一個風險我要講一下 我們資料庫的備份現在一天只有一次 我想改成每小時一次 大概要2個人天 因為上個月有一個客戶不小心刪掉整個門市的資料 我們只能還原到前一天晚上 他整天的帳都不見了"
+  },
+  {
+   "index": 13,
+   "speaker": "S1",
+   "start": 203.22,
+   "end": 213.49,
+   "text": "這個不要省 這種事情出一次就完蛋了 阿凱你這禮拜就排進去 好 那客戶這邊 小安你報一下"
+  },
+  {
+   "index": 14,
+   "speaker": "S3",
+   "start": 214.31,
+   "end": 240.44,
+   "text": "好目前MRR是38萬 比上個月多了4萬2 主要是大碗公麵館簽了9間店 一間店月費4800 然後青蛙診所試用30天快到期了 他們說想續約但是要砍價 這個比較麻煩 我跟你講 然後然後 目前活躍門市一共有212間 其他的小客戶都還算穩"
+  },
+  {
+   "index": 15,
+   "speaker": "S1",
+   "start": 240.68,
+   "end": 241.47,
+   "text": "砍多少"
+  },
+  {
+   "index": 16,
+   "speaker": "S3",
+   "start": 241.69,
+   "end": 242.29,
+   "text": "7折"
+  },
+  {
+   "index": 17,
+   "speaker": "S1",
+   "start": 242.5,
+   "end": 256.81,
+   "text": "那就是月費3360對吧 呃我們毛利抓多少 阿凱你上次不是算過 那個表格還在嗎 我印象是毛利抓六成左右 但是不確定"
+  },
+  {
+   "index": 18,
+   "speaker": "S2",
+   "start": 257.64,
+   "end": 274.74,
+   "text": "對我上次算過 伺服器加SMS一間店一個月成本是1130 所以月費3360是還有賺 但是如果把客服人力算進去 就差不多打平 表格我晚點丟給你"
+  },
+  {
+   "index": 19,
+   "speaker": "S3",
+   "start": 275.33,
+   "end": 290.56,
+   "text": "所以我才說不能打啦 一旦開了先例 其他客戶都會來要 到時候就收不回來了 我的想法是不要降價 改成送他們三個月的進階報表 這樣比較好看"
+  },
+  {
+   "index": 20,
+   "speaker": "S1",
+   "start": 291.46,
+   "end": 304.79,
+   "text": "進階報表那個我覺得可以送 因為成本很低 反正功能本來就要做 阿凱你這個月有辦法出嗎 我跟你說不用做到很漂亮 能看就好"
+  },
+  {
+   "index": 21,
+   "speaker": "S2",
+   "start": 305.33,
+   "end": 321.45,
+   "text": "進階報表UI設計還沒好欸 後端API大概要8個人天 前端12個人天 加起來20個人天 最快也要四月中 因為設計師也在忙別的"
+  },
+  {
+   "index": 22,
+   "speaker": "S1",
+   "start": 321.68,
+   "end": 333.12,
+   "text": "四月中太晚了啦 青蛙診所3月底就到期 那時候就沒有東西可以給他們看 到時候他們一定走 我不想看到這樣"
+  },
+  {
+   "index": 23,
+   "speaker": "S2",
+   "start": 333.49,
+   "end": 349.93,
+   "text": "那先做簡單版 只放三張圖表 大概5個人天 3月21號前可以給你 這個我可以排進去 不過要有人幫我決定是哪三張 不要到時候又改"
+  },
+  {
+   "index": 24,
+   "speaker": "S3",
+   "start": 350.18,
+   "end": 367.24,
+   "text": "只放三張圖表就夠啦 他們只在乎耗材庫存週轉跟過期提醒 其他都不重要 真的 診所的人就是這樣 我去拜訪過好幾次了 護理長每次都問同一個問題"
+  },
+  {
+   "index": 25,
+   "speaker": "S1",
+   "start": 367.53,
+   "end": 381.63,
+   "text": "好 你說3月21號前可以給你 那就做簡單版 小安你拿去跟青蛙診所談 不打折 就說我們送報表 這是加值不是折扣"
+  },
+  {
+   "index": 26,
+   "speaker": "S3",
+   "start": 381.85,
+   "end": 397.82,
+   "text": "還有就是海膽方案 現在好幾個客戶都在問有沒有便宜一點的 我覺得要出一個輕量版 月費2980 這樣可以把小店拉進來 不然他們都跑去用別人的咧"
+  },
+  {
+   "index": 27,
+   "speaker": "S1",
+   "start": 398.2,
+   "end": 412.25,
+   "text": "月費2980喔 比標準版的4800便宜快四成 你不怕大客戶全部跳過來嗎 這個我真的有點擔心 一旦跳過來我們收入反而會掉"
+  },
+  {
+   "index": 28,
+   "speaker": "S3",
+   "start": 412.63,
+   "end": 428.23,
+   "text": "不會啦 輕量版我們拿掉離線模式 還有限制三個帳號 大客戶一定要離線 所以不會跳 我看過晴天洗衣他們的用法 每間店至少6個人在用"
+  },
+  {
+   "index": 29,
+   "speaker": "S2",
+   "start": 428.9,
+   "end": 448.46,
+   "text": "拿掉離線模式的話 工程上其實是好事 因為離線同步就是我們P0最大宗 輕量版全部走雲端 少一半的bug 我是很支持啦 因為我們現在最大的痛就是離線"
+  },
+  {
+   "index": 30,
+   "speaker": "S1",
+   "start": 448.77,
+   "end": 466.18,
+   "text": "這個我有點心動 但是我擔心標準版跟輕量版中間差太多 要有一個中間價 像3800這樣 你們覺得呢 我不想讓客戶有一種被我們拆開賣的感覺"
+  },
+  {
+   "index": 31,
+   "speaker": "S3",
+   "start": 466.43,
+   "end": 479.59,
+   "text": "3800太貴了啦 齁 小店老闆算的是3000以內 超過就直接說我再想想 然後就沒有然後了 我遇過太多次了"
+  },
+  {
+   "index": 32,
+   "speaker": "S1",
+   "start": 480.11,
+   "end": 481.87,
+   "text": "那對手賣多少"
+  },
+  {
+   "index": 33,
+   "speaker": "S3",
+   "start": 482.31,
+   "end": 494.8,
+   "text": "有查啊 豆芽菜他們最低的方案是月費1990 也沒有客服電話 只有一個信箱 而且功能很少 只能記帳而已"
+  },
+  {
+   "index": 34,
+   "speaker": "S1",
+   "start": 495.29,
+   "end": 504.75,
+   "text": "月費1990 那我們2980還是貴一大截 為什麼客戶要選我們 我需要一個說法"
+  },
+  {
+   "index": 35,
+   "speaker": "S3",
+   "start": 505.23,
+   "end": 518.25,
+   "text": "因為我們有人會回電話啊 這個他們做不到 客戶吃過虧就知道了 之前有客戶用別人的 資料掉了找不到人"
+  },
+  {
+   "index": 36,
+   "speaker": "S1",
+   "start": 518.8,
+   "end": 532.39,
+   "text": "好啦先不加中間價 就輕量版月費2980 年約85折 阿凱你這個月可以把方案頁做出來嗎 我想要下個月就上"
+  },
+  {
+   "index": 37,
+   "speaker": "S2",
+   "start": 532.98,
+   "end": 549.37,
+   "text": "方案頁簡單2天就好 不過計費邏輯要改 要支援兩種方案 這個要3個人天 還有發票那邊也要跟會計系統穿接 要小安去確認 我自己不太懂發票"
+  },
+  {
+   "index": 38,
+   "speaker": "S3",
+   "start": 549.75,
+   "end": 563.75,
+   "text": "發票我來 我禮拜三前問會計 對了老街茶行說他們要退租 月費6800 理由是店員學不會 就是那個年紀比較大的店員 一直按錯"
+  },
+  {
+   "index": 39,
+   "speaker": "S1",
+   "start": 564.59,
+   "end": 576.93,
+   "text": "老街茶行月費6800是我們前五大客戶欸 這個要處理 小安你明天去一趟 不要只用電話 要當面去道歉"
+  },
+  {
+   "index": 40,
+   "speaker": "S3",
+   "start": 577.37,
+   "end": 588.36,
+   "text": "好我明天下午去 順便帶輕量版的DM過去 看他們要不要降級不要退租 能留住一個是一個 我會帶禮物去"
+  },
+  {
+   "index": 41,
+   "speaker": "S1",
+   "start": 589.22,
+   "end": 596.79,
+   "text": "店員學不會這個問題 你有沒有想過做教學影片 我覺得比一直跑現場有效"
+  },
+  {
+   "index": 42,
+   "speaker": "S3",
+   "start": 597.55,
+   "end": 607.46,
+   "text": "有啊 我想錄五支三分鐘的教學影片 放在app裡面 我自己錄 兩天可以做完"
+  },
+  {
+   "index": 43,
+   "speaker": "S1",
+   "start": 607.84,
+   "end": 609.35,
+   "text": "好 你先做"
+  },
+  {
+   "index": 44,
+   "speaker": "S3",
+   "start": 609.91,
+   "end": 628.99,
+   "text": "還有一個客服的數字 這個禮拜一共接了47通電話 其中18通是離線同步的問題 剩下大部分是在問怎麼改價格 所以我覺得離線這個一定要先解掉 不然客服人力會被吃光"
+  },
+  {
+   "index": 45,
+   "speaker": "S2",
+   "start": 629.47,
+   "end": 641.87,
+   "text": "18通喔 比我預期的少 因為我們有看log 離線的錯誤其實一週有200多筆 只是客戶沒有打來 他們就默默忍耐"
+  },
+  {
+   "index": 46,
+   "speaker": "S1",
+   "start": 643.1,
+   "end": 647.13,
+   "text": "所以有很多人遇到但是沒有講 對嗎"
+  },
+  {
+   "index": 47,
+   "speaker": "S2",
+   "start": 647.51,
+   "end": 661.04,
+   "text": "對 大部分的店長會自己重開機 重開機有時候就好了 所以沒有人打電話 但是資料會慢一天才到 這個其實很危險"
+  },
+  {
+   "index": 48,
+   "speaker": "S1",
+   "start": 662.79,
+   "end": 664.8,
+   "text": "嗯 那這個先放著"
+  },
+  {
+   "index": 49,
+   "speaker": "S2",
+   "start": 665.03,
+   "end": 680.62,
+   "text": "另外大碗公麵館寄了資安問卷過來 一共52題 他們要4/15之前回 我已經回了30題 剩下的有些要小安幫忙補合約的部分 這個禮拜我一定要弄完"
+  },
+  {
+   "index": 50,
+   "speaker": "S3",
+   "start": 681.42,
+   "end": 695.21,
+   "text": "合約的部分我來 不過他們法務很慢耶 上次一份NDA來回改了三週 我都懷疑他們是不是忘記了 每次都要我去催"
+  },
+  {
+   "index": 51,
+   "speaker": "S1",
+   "start": 695.52,
+   "end": 709.74,
+   "text": "好接下來講錢 burn rate目前一個月62萬 runway只剩7個月 所以我們一定要在九月前拿到錢 這個大家要有概念"
+  },
+  {
+   "index": 52,
+   "speaker": "S2",
+   "start": 710.13,
+   "end": 724.68,
+   "text": "只剩7個月是用現在的bern rate算吧 如果外包那兩個前端進來 burn rate會到多少 因為我們現在算的只有現在這幾個人"
+  },
+  {
+   "index": 53,
+   "speaker": "S1",
+   "start": 725.38,
+   "end": 739.49,
+   "text": "會多18萬 就是變成80萬 那runway就只剩5個月出頭 所以才是兩難 你們懂我的意思吧 我也不想看到這個數字"
+  },
+  {
+   "index": 54,
+   "speaker": "S3",
+   "start": 740.07,
+   "end": 753.49,
+   "text": "不要外包啦 外包還要帶 onboarding就要兩週 不如我們自己加班把山羌版趕出來 反正我們以前也都是這樣過來的"
+  },
+  {
+   "index": 55,
+   "speaker": "S2",
+   "start": 753.74,
+   "end": 766.58,
+   "text": "加班不是辦法 上個月就已經有人連續三週每天做到十一點 再這樣會有人離職 我自己也快不行了老實講"
+  },
+  {
+   "index": 56,
+   "speaker": "S3",
+   "start": 767.43,
+   "end": 768.94,
+   "text": "齁對啊對啊"
+  },
+  {
+   "index": 57,
+   "speaker": "S1",
+   "start": 769.53,
+   "end": 782.82,
+   "text": "我懂 所以我才想要錢 鯨落創投的合夥人上禮拜跟我說 他們願意投2000萬 估值1.2億 這個數字我覺得很合理"
+  },
+  {
+   "index": 58,
+   "speaker": "S2",
+   "start": 783.59,
+   "end": 792.68,
+   "text": "喔 2000萬 估值1.2億 那稀式就是一成六七對吧 這樣我們剩下八成多"
+  },
+  {
+   "index": 59,
+   "speaker": "S1",
+   "start": 792.98,
+   "end": 802.98,
+   "text": "不對 1.2億是pre-money 所以是2000萬除以1.4億 稀釋大概14.3%"
+  },
+  {
+   "index": 60,
+   "speaker": "S2",
+   "start": 803.54,
+   "end": 814.31,
+   "text": "喔pre-money喔 那就是14.3% 好 比我想的好 這樣我們剩下八成五左右"
+  },
+  {
+   "index": 61,
+   "speaker": "S3",
+   "start": 814.61,
+   "end": 822.5,
+   "text": "欸京洛那邊我聽說也在看另外兩家 所以我們要快一點 不然被別人先簽走"
+  },
+  {
+   "index": 62,
+   "speaker": "S1",
+   "start": 822.71,
+   "end": 835.47,
+   "text": "term sheet他們說下禮拜五前會給 但是要我們先把財報數字對其 小安你把MRR跟churn整理好 週二給我"
+  },
+  {
+   "index": 63,
+   "speaker": "S3",
+   "start": 835.74,
+   "end": 856.82,
+   "text": "好 churn這個月是百分之二點三 上個月是1.8% 主要是前陣子退掉的兩間小店 MRR我週二就可以給你 我覺得這個月還在可以接受的範圍 只要老街茶行不走就還好"
+  },
+  {
+   "index": 64,
+   "speaker": "S1",
+   "start": 857.34,
+   "end": 878.04,
+   "text": "還有pitch deck 我昨天晚上又改了一版 客戶數從46家更新成52家 技術架構那一頁阿凱你幫我看一下有沒有講錯 還有市場規模的數字我也想更新 你們有沒有比較新的資料"
+  },
+  {
+   "index": 65,
+   "speaker": "S2",
+   "start": 878.24,
+   "end": 909.36,
+   "text": "好我今天晚上看 不過有一頁寫我們支援離線同步 那個要改 因為輕量版沒有 要寫清楚 我順便把架構圖也更新 之前那張還是去年的 對了回到人的問題 我還是覺得要補一個資深後端 外包前端我可以接受 但是後端的核心不能外包 因為那是我們的命脈"
+  },
+  {
+   "index": 66,
+   "speaker": "S1",
+   "start": 909.65,
+   "end": 912.14,
+   "text": "資深後端月薪要多少"
+  },
+  {
+   "index": 67,
+   "speaker": "S2",
+   "start": 912.87,
+   "end": 926.83,
+   "text": "市場價大概11萬到13萬 我認識一個人 他願意15號之前給答覆 他現在在一家比較大的公司 已經待了五年"
+  },
+  {
+   "index": 68,
+   "speaker": "S1",
+   "start": 927.2,
+   "end": 931.48,
+   "text": "那個人你確定嗎 我們預算只有一個缺"
+  },
+  {
+   "index": 69,
+   "speaker": "S2",
+   "start": 931.73,
+   "end": 943.66,
+   "text": "他以前跟我同一個團隊 做過離線同步 這個正好是我們最痛的 我平估過值得 薪水我們也許可以用股票補一點"
+  },
+  {
+   "index": 70,
+   "speaker": "S1",
+   "start": 944.43,
+   "end": 960.59,
+   "text": "好你約他 下週一晚上吃飯 我也一起去 我請客 地點你挑 不要太貴的 好最後 山羌版什麼時候上線 阿凱你給我一個日期 不要講區間"
+  },
+  {
+   "index": 71,
+   "speaker": "S2",
+   "start": 961.2,
+   "end": 978.19,
+   "text": "山羌版我排三月二十八號上線 前一天會在staging跑完整回歸 如果出事我們有rollback 15分鐘內可以退回去 回歸測試大概要跑6個小時"
+  },
+  {
+   "index": 72,
+   "speaker": "S1",
+   "start": 978.54,
+   "end": 989.39,
+   "text": "三月二十八號 好 那就剛好 4/2我要帶demo給鯨落創投看 所以那一週一定要穩"
+  },
+  {
+   "index": 73,
+   "speaker": "S3",
+   "start": 989.78,
+   "end": 1002.4,
+   "text": "4/2那天晴天洗衣剛好也要來公司開會 我可以請他們老闆娘一起來看demo嗎 她很想見你 她說想當面謝謝你"
+  },
+  {
+   "index": 74,
+   "speaker": "S1",
+   "start": 1003.29,
+   "end": 1014.07,
+   "text": "可以 但是不要給她看還沒修好的東西 阿凱你確保那天staging很穩 那天不能出任何狀況"
+  },
+  {
+   "index": 75,
+   "speaker": "S2",
+   "start": 1014.32,
+   "end": 1015.05,
+   "text": "沒問題"
+  },
+  {
+   "index": 76,
+   "speaker": "S1",
+   "start": 1015.25,
+   "end": 1033.85,
+   "text": "好我們來對一下action item 阿凱 你的是這禮拜五前會修完 3月21號前可以給你 還有約資深後端 對吧 我全部都會寫在群組裡面 大家週五前確認"
+  },
+  {
+   "index": 77,
+   "speaker": "S2",
+   "start": 1034.5,
+   "end": 1048.93,
+   "text": "對 還有輕量版的方案頁跟計費邏輯 加起來我估整個sprint 15都會被吃掉 所以進階報表的簡單版真的要小心"
+  },
+  {
+   "index": 78,
+   "speaker": "S1",
+   "start": 1049.56,
+   "end": 1062.28,
+   "text": "小安 你的是禮拜三前問會計發票 明天下午去老街茶行 週二把MRR跟churn給我 這三個都要確定"
+  },
+  {
+   "index": 79,
+   "speaker": "S3",
+   "start": 1062.68,
+   "end": 1064.16,
+   "text": "對我記好了"
+  },
+  {
+   "index": 80,
+   "speaker": "S0",
+   "start": 1065.02,
+   "end": 1071.19,
+   "text": "review排二十號 不對二十五號比較好 欸等一下"
+  },
+  {
+   "index": 81,
+   "speaker": "S1",
+   "start": 1072.05,
+   "end": 1073.64,
+   "text": "欸一個一個講"
+  },
+  {
+   "index": 82,
+   "speaker": "S2",
+   "start": 1073.87,
+   "end": 1086.19,
+   "text": "我說sprint 15的review排兩週後的禮拜四 就是3月27號 這樣山羌版上線前有一天緩衝"
+  },
+  {
+   "index": 83,
+   "speaker": "S1",
+   "start": 1086.82,
+   "end": 1097.77,
+   "text": "好3月27號review 隔天上線 然後四月初demo 很緊但是可以做到 大家再撐一下"
+  },
+  {
+   "index": 84,
+   "speaker": "S3",
+   "start": 1098.43,
+   "end": 1110.07,
+   "text": "老大還有一件事 大碗公麵館他們要加開3間店 希望5月前上線 我先跟你講 他們老闆昨天打給我的"
+  },
+  {
+   "index": 85,
+   "speaker": "S1",
+   "start": 1110.89,
+   "end": 1119.85,
+   "text": "太好了 這個放進pipeline 下禮拜再看 今天就到這裡 散會 辛苦大家了"
+  },
+  {
+   "index": 86,
+   "speaker": "S3",
+   "start": 1120.41,
+   "end": 1133.59,
+   "text": "對了便當我訂好了 一共6個 一個95 總共570 雞腿的有4個 排骨的有2個 有人不吃辣的嗎 我有叫他們分開裝"
+  },
+  {
+   "index": 87,
+   "speaker": "S1",
+   "start": 1134.02,
+   "end": 1138.4,
+   "text": "我要排骨 不要放那個菜脯 我吃不習慣"
+  },
+  {
+   "index": 88,
+   "speaker": "S2",
+   "start": 1139.09,
+   "end": 1144.04,
+   "text": "我雞腿 錢我昨天付過了喔 不要再跟我收"
+  }
+ ]
+}

@@ -1,0 +1,187 @@
+{
+ "about": "Representative raw outputs of the attribution lab (round 2). Gold files are synthetic dialogues (no real people). expect.json rows come from the lab's reference validators (V1b percent-aware numbers + V2 question detection + V3 transcript-derived names, fragment-wise quote guard with anchor agreement) and the hybrid policy; they are what a conforming implementation should reproduce, except where a row says otherwise. hand_adjudication marks points read by hand.",
+ "fixtures": [
+  {
+   "id": "F01_prod_qa_official_names",
+   "variant": "P_prod",
+   "model": "qwen3.5:9b",
+   "dialogue": "qa-official-2p-01",
+   "window": 2,
+   "turn_range": [
+    41,
+    86
+   ],
+   "proposed_points": 45,
+   "why": "The shipped prompt (no quote, no enum): five points whose text carries a name or title the transcript uses to address people (署長, 部長, 里長 ...) and similar wording leaks. The committed validators keep them (attribution of every one is right); the transcript-derived name check (V3) must drop them. Also the number-format problem: digits vs Chinese numerals.",
+   "files": [
+    "call.json",
+    "expect.json",
+    "gold.json"
+   ]
+  },
+  {
+   "id": "F02_prod_retry_debate",
+   "variant": "P_prod",
+   "model": "qwen3.5:9b",
+   "dialogue": "debate-2p-01",
+   "window": 1,
+   "turn_range": [
+    0,
+    88
+   ],
+   "proposed_points": 10,
+   "why": "The production retry loop: call_first.json is attempt 1 (rejected, more than 25% dropped); call.json is attempt 2 whose user message carries the rejection hint between the range lines and the transcript. Pins the hint format and shows the second attempt being accepted (8 of 10 kept). Debate: two speakers who restate each other's figures (echo traps).",
+   "files": [
+    "call.json",
+    "call_first.json",
+    "expect.json",
+    "expect_first.json",
+    "gold.json"
+   ]
+  },
+  {
+   "id": "F03_p4_clean_callin",
+   "variant": "P4",
+   "model": "qwen3.5:9b",
+   "dialogue": "callin-3p-01",
+   "window": 1,
+   "turn_range": [
+    0,
+    70
+   ],
+   "proposed_points": 16,
+   "why": "A mostly clean P4 output (caller, host, a minor voice tagged X): 15 of 16 points survive the recommended pipeline; the minor/undecidable turns are never cited (enum). The one drop is a computed figure: T30 says the budget was 三億兩千萬 and 實際執行 一億二千萬 and the point states 預算執行率僅約六成 (a ratio the speaker never said, and wrong): number check, no rescue.",
+   "files": [
+    "call.json",
+    "expect.json",
+    "gold.json"
+   ]
+  },
+  {
+   "id": "F04_p4_debate_stitched_quote",
+   "variant": "P4",
+   "model": "qwen3.5:9b",
+   "dialogue": "debate-2p-01",
+   "window": 1,
+   "turn_range": [
+    0,
+    88
+   ],
+   "proposed_points": 16,
+   "why": "A stitched quote that joins the end of one turn with the start of the next (貨車可以夜間配送。對，晚上十點到早上六點配送): the fragment-wise quote guard must drop it (no single turn holds every fragment). Echo turns (a speaker restating the other side's figure) must not be re-anchored.",
+   "files": [
+    "call.json",
+    "expect.json",
+    "gold.json"
+   ]
+  },
+  {
+   "id": "F05_p4_qa_restatement_and_rescue",
+   "variant": "P4",
+   "model": "qwen3.5:9b",
+   "dialogue": "qa-official-2p-01",
+   "window": 1,
+   "turn_range": [
+    0,
+    40
+   ],
+   "proposed_points": 16,
+   "why": "Hybrid policy: points whose paraphrase fails only the lexical support check are shown as the verified verbatim quote; BUT T30 is the legislator restating the official's logic and asking for confirmation (...所以十個標案發出去就算達成，土方有沒有清根本不重要，是這個意思嗎？): quoting the declarative part alone would invert the stance, so that quote must NOT be rescued.",
+   "files": [
+    "call.json",
+    "expect.json",
+    "gold.json"
+   ]
+  },
+  {
+   "id": "F06_p4f_panel_percent_to_minutes",
+   "variant": "P4",
+   "model": "qwen3.5:9b",
+   "dialogue": "panel-4p-LONG",
+   "window": 1,
+   "turn_range": [
+    0,
+    41
+   ],
+   "proposed_points": 16,
+   "why": "Fresh-sample call (seed 3001). T23 (S4) says 旅行時間可以減少百分之十二; the point says 可縮短十二分鐘車程 (percent became minutes). Attribution is right, the committed validators and V1 (bare value 12 == 12) keep it, the percent-aware number check V1b drops it. Also holds a 'question stated as fact' false positive and several ordinary kept points.",
+   "files": [
+    "call.json",
+    "expect.json",
+    "gold.json"
+   ]
+  },
+  {
+   "id": "F07_p4_asr_numbers_and_false_flags",
+   "variant": "P4",
+   "model": "qwen3.5:9b",
+   "dialogue": "asr-noisy-3p-01",
+   "window": 1,
+   "turn_range": [
+    0,
+    88
+   ],
+   "proposed_points": 16,
+   "why": "ASR-noisy meeting with mixed numeral formats (3/11, 570, 95, 六個), nicknames used as vocatives (阿凱, 小安) and turns that restate someone's problem. Two points are flagged by the key-based scorer ('hallucinated' T12, 'merged' T41) and are false positives (hand read): expect them kept.",
+   "files": [
+    "call.json",
+    "expect.json",
+    "gold.json"
+   ]
+  },
+  {
+   "id": "F08_p4f_press_wrong_speaker_reanchor",
+   "variant": "P4",
+   "model": "qwen3.5:9b",
+   "dialogue": "press-conference-3p-01",
+   "window": 1,
+   "turn_range": [
+    0,
+    63
+   ],
+   "proposed_points": 16,
+   "why": "Fresh-sample call (seed 3001). Page 1 point 3 (統計六千三百二十位學生食用，十七位通報不適) has its quote in T0 (the spokesman, S1) but the committed validators re-anchor it to T2 (a reporter, S2, who repeats the figures in a question) and KEEP it: a wrong-speaker point (hand-confirmed). Anchor agreement with the quote's turn drops it (anchor_conflict). Page 2 point 1: the model cited T8 (the reporter's question) but the words are the spokesman's answer in T9: re-anchored to T9 (legitimate, cross-speaker) and shown as the verified verbatim quote (rescued).",
+   "files": [
+    "call.json",
+    "expect.json",
+    "gold.json"
+   ]
+  },
+  {
+   "id": "F09_p4f_monologue_percent_to_cheng",
+   "variant": "P4",
+   "model": "qwen3.5:9b",
+   "dialogue": "monologue-2p-LONG",
+   "window": 2,
+   "turn_range": [
+    44,
+    88
+   ],
+   "proposed_points": 24,
+   "why": "Fresh-sample call (seed 3001; the only call of 36 with 6 slides, fit_to_range cuts the sixth). T61: 使用率只有55% -> 使用率僅五十五成; T68: 涵蓋率現在是百分之九十一 -> 涵蓋率九十一成. V1 (bare value) keeps both, the committed check drops them by accident (literal 五十五), V1b drops them for the right reason. Also pins number formats that must be ACCEPTED: 兩百一十 / 二百一十, 1100萬 / 一千一百萬, 30元 / 三十元, 三萬九.",
+   "files": [
+    "call.json",
+    "expect.json",
+    "gold.json"
+   ]
+  },
+  {
+   "id": "F10_gemma4_overlong_slide",
+   "variant": "P4",
+   "model": "gemma4:latest",
+   "dialogue": "asr-noisy-3p-01",
+   "window": 1,
+   "turn_range": [
+    0,
+    88
+   ],
+   "proposed_points": 48,
+   "why": "gemma4:latest ignores 'three to four points per slide': one slide with 39 points (the product shows at most MAX_BULLETS = 4 per slide, so the rest are validated but never displayed). Pins the need to cap or re-ask, and shows gemma4's output shape.",
+   "files": [
+    "call.json",
+    "expect.json",
+    "gold.json"
+   ]
+  }
+ ]
+}

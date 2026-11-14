@@ -29,7 +29,10 @@ services:
     build: .
     image: ly-summary-api
     restart: unless-stopped
-    # 語音辨識（臺中市議會的片段）用顯示卡跑；和 Ollama 一起約 8 GB VRAM
+    # 語音辨識（臺中市議會的片段）用顯示卡跑；和 Ollama 一起約 8 GB VRAM。
+    # YouTube 多人模式另外要把說話者區分模型（pyannote）也放上顯示卡，用量沒有實測：
+    # 在這台機器上跑 `python -m slidebox_api.diarize_check --sample` 會印出顯示卡記憶體峰值，
+    # 不夠的話把 SLIDEBOX_DIARIZATION_DEVICE 設成 cpu。
     gpus: all
     ports:
       - "${API_PORT:-8800}:8800"
@@ -39,10 +42,33 @@ services:
       SLIDEBOX_MODEL: ${SLIDEBOX_MODEL:-qwen3.5:9b}
       # auto：有 CUDA 就用顯示卡，載不起來退回 CPU；cpu／cuda 強制
       SLIDEBOX_WHISPER_DEVICE: ${SLIDEBOX_WHISPER_DEVICE:-auto}
+      # --- YouTube 多人說話者區分（speaker_mode=diarize），設定步驟見 README「多人說話者模式」 ---
+      # pyannote/speaker-diarization-community-1 的 Hugging Face token（唯讀即可）；
+      # 需先在 Hugging Face 接受模型條款。沒有它時議會單人工作仍可跑，YouTube 多人模式會拒絕。
+      HUGGINGFACE_TOKEN: ${HUGGINGFACE_TOKEN:-}
+      # pyannote：啟用（預設）；off：關掉多人模式，/capabilities 會回報「不提供」
+      SLIDEBOX_DIARIZER: ${SLIDEBOX_DIARIZER:-pyannote}
+      # auto：有 CUDA 就用顯示卡，載不起來退回 CPU（進度裡會說）；cuda：強制，失敗就回報失敗；
+      # cpu：完全不碰 CUDA，驅動跟映像裡的 CUDA 版本（鎖檔裡的 torch 是 CUDA 13）對不上時的逃生口，較慢
+      SLIDEBOX_DIARIZATION_DEVICE: ${SLIDEBOX_DIARIZATION_DEVICE:-auto}
+      # 說話者區分單次工作的時間上限（秒）：超過就把工作行程殺掉、回報失敗，免得卡死的行程一直佔著顯示卡。
+      # 留空是預設的 21600（6 小時），0 是不設上限。
+      # （說話者區分用的 Python 環境 SLIDEBOX_DIARIZATION_PYTHON 由映像自己設好，不要放進這裡：
+      #   設成空字串也會蓋掉映像裡的設定，說話者區分就找不到 pyannote。）
+      SLIDEBOX_DIARIZATION_TIMEOUT_SECONDS: ${SLIDEBOX_DIARIZATION_TIMEOUT_SECONDS:-}
+      # 多人對談切窗的字數預算（1000–20000）；留空或超出範圍就用程式裡的預設值
+      SLIDEBOX_CHUNK_CHARS: ${SLIDEBOX_CHUNK_CHARS:-}
+      # 安全模式：1／true／yes 時，多人模式留下的每個重點都顯示核對過的原話，不看模型寫的文字。
+      # 留空（預設）是關；說明見 README「每個重點怎麼核對」
+      SLIDEBOX_QUOTE_ONLY: ${SLIDEBOX_QUOTE_ONLY:-}
+      # 不把使用統計送回 pyannote／Hugging Face
+      PYANNOTE_METRICS_ENABLED: "0"
+      HF_HUB_DISABLE_TELEMETRY: "1"
     volumes:
       - summary-output:/data/output
-      # faster-whisper 第一次用會下載 1.6 GB 的模型，放 volume 才不會每次重建都重抓。
-      # 臺中市議會的片段沒有逐字稿，全靠它。
+      # Hugging Face 的模型快取：faster-whisper 第一次用會下載 1.6 GB 的模型，臺中市議會的片段
+      # 沒有逐字稿，全靠它；pyannote 的說話者區分模型也放在這裡，第一次用多人模式時下載一次。
+      # 放 volume 才不會每次重建都重抓。（名稱維持 whisper-cache，改名會讓已經下載的模型變成孤兒。）
       - whisper-cache:/root/.cache/huggingface
     depends_on:
       ollama:

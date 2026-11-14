@@ -1,0 +1,376 @@
+{
+ "fixture": "F04_p4_debate_stitched_quote",
+ "about": "points of call.json",
+ "points": [
+  {
+   "page": 1,
+   "number": 1,
+   "cited_turn": 0,
+   "text": "說明將二百六十格停車位改為有隔離自行車道",
+   "context": [],
+   "quote": "把其中的二百六十格，改成有隔離的自行車道",
+   "scorer_category": "correct",
+   "cited_speaker": "S1",
+   "hybrid_decision": "kept_paraphrase",
+   "reference_v1b_v2_v3": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 0,
+    "reanchored": false
+   },
+   "reference_v1b_v2_v3_fragment_quote_guard": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 0,
+    "reanchored": false
+   }
+  },
+  {
+   "page": 1,
+   "number": 2,
+   "cited_turn": 1,
+   "text": "反對提案，指出兩側有三百二十家店會受影響",
+   "context": [],
+   "quote": "這個提案會把商圈殺死。榕溪路兩側有三百二十家店",
+   "scorer_category": "correct",
+   "cited_speaker": "S2",
+   "hybrid_decision": "kept_paraphrase",
+   "reference_v1b_v2_v3": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 1,
+    "reanchored": false
+   },
+   "reference_v1b_v2_v3_fragment_quote_guard": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 1,
+    "reanchored": false
+   }
+  },
+  {
+   "page": 1,
+   "number": 3,
+   "cited_turn": 1,
+   "text": "預估營業額將下降百分之十二",
+   "context": [],
+   "quote": "預估營業額會掉百分之十二，這不是危言聳聽",
+   "scorer_category": "correct",
+   "cited_speaker": "S2",
+   "hybrid_decision": "kept_paraphrase",
+   "reference_v1b_v2_v3": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 1,
+    "reanchored": false
+   },
+   "reference_v1b_v2_v3_fragment_quote_guard": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 1,
+    "reanchored": false
+   }
+  },
+  {
+   "page": 1,
+   "number": 4,
+   "cited_turn": 4,
+   "text": "質疑在店門口發問卷的代表性不足",
+   "context": [],
+   "quote": "問卷是在店門口發的，誰敢說不好？",
+   "scorer_category": "unmatched",
+   "cited_speaker": "S1",
+   "hybrid_decision": "kept_paraphrase",
+   "reference_v1b_v2_v3": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 4,
+    "reanchored": false
+   },
+   "reference_v1b_v2_v3_fragment_quote_guard": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 4,
+    "reanchored": false
+   }
+  },
+  {
+   "page": 2,
+   "number": 1,
+   "cited_turn": 8,
+   "text": "指出試辦期間事故下降百分之三十八",
+   "context": [],
+   "quote": "試辦那六百公尺，試辦半年，事故下降了百分之三十八",
+   "scorer_category": "correct",
+   "cited_speaker": "S1",
+   "hybrid_decision": "kept_paraphrase",
+   "reference_v1b_v2_v3": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 8,
+    "reanchored": false
+   },
+   "reference_v1b_v2_v3_fragment_quote_guard": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 8,
+    "reanchored": false
+   }
+  },
+  {
+   "page": 2,
+   "number": 2,
+   "cited_turn": 9,
+   "text": "強調平日單車使用率僅有百分之四",
+   "context": [],
+   "quote": "現在榕溪路平日的單車使用率，只有百分之四",
+   "scorer_category": "unmatched",
+   "cited_speaker": "S2",
+   "hybrid_decision": "dropped:question_stated_as_fact",
+   "reference_v1b_v2_v3": {
+    "status": "dropped",
+    "code": "question_stated_as_fact",
+    "anchor_turn": null,
+    "reanchored": null
+   },
+   "reference_v1b_v2_v3_fragment_quote_guard": {
+    "status": "dropped",
+    "code": "question_stated_as_fact",
+    "anchor_turn": null,
+    "reanchored": null
+   }
+  },
+  {
+   "page": 2,
+   "number": 3,
+   "cited_turn": 10,
+   "text": "指出去年發生十七起事故傷亡事件",
+   "context": [],
+   "quote": "去年榕溪路單車事故傷亡就有十七人，十七人耶",
+   "scorer_category": "unmatched",
+   "cited_speaker": "S1",
+   "hybrid_decision": "kept_paraphrase",
+   "reference_v1b_v2_v3": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 10,
+    "reanchored": false
+   },
+   "reference_v1b_v2_v3_fragment_quote_guard": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 10,
+    "reanchored": false
+   }
+  },
+  {
+   "page": 2,
+   "number": 4,
+   "cited_turn": 13,
+   "text": "反駁以國外情況作比較的論點",
+   "context": [
+    12
+   ],
+   "quote": "這裡不是歐洲。",
+   "scorer_category": "hallucinated",
+   "cited_speaker": "S2",
+   "hybrid_decision": "dropped:unsupported,quote_short",
+   "reference_v1b_v2_v3": {
+    "status": "dropped",
+    "code": "unsupported",
+    "anchor_turn": null,
+    "reanchored": null
+   },
+   "reference_v1b_v2_v3_fragment_quote_guard": {
+    "status": "dropped",
+    "code": "unsupported",
+    "anchor_turn": null,
+    "reanchored": null
+   }
+  },
+  {
+   "page": 3,
+   "number": 1,
+   "cited_turn": 19,
+   "text": "估算整條路工程費需約四千六百八十萬",
+   "context": [],
+   "quote": "一公里的工程費要二千六百萬，一點八公里你自己算",
+   "scorer_category": "unmatched",
+   "cited_speaker": "S2",
+   "hybrid_decision": "dropped:number_mismatch",
+   "reference_v1b_v2_v3": {
+    "status": "dropped",
+    "code": "number_mismatch",
+    "anchor_turn": null,
+    "reanchored": null
+   },
+   "reference_v1b_v2_v3_fragment_quote_guard": {
+    "status": "dropped",
+    "code": "number_mismatch",
+    "anchor_turn": null,
+    "reanchored": null
+   }
+  },
+  {
+   "page": 3,
+   "number": 2,
+   "cited_turn": 20,
+   "text": "說明實際採用標線與分隔墩，成本僅三百八十萬每公里",
+   "context": [],
+   "quote": "我們這個是用標線加像膠分隔墩，一公里只要三百八十萬",
+   "scorer_category": "correct",
+   "cited_speaker": "S1",
+   "hybrid_decision": "kept_paraphrase",
+   "reference_v1b_v2_v3": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 20,
+    "reanchored": false
+   },
+   "reference_v1b_v2_v3_fragment_quote_guard": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 20,
+    "reanchored": false
+   }
+  },
+  {
+   "page": 3,
+   "number": 3,
+   "cited_turn": 28,
+   "text": "提出分段夜間施工且店家可照常營業的方案",
+   "context": [],
+   "quote": "每一段只封兩個月，而且是夜間施工，白天店家照常營業",
+   "scorer_category": "unmatched",
+   "cited_speaker": "S1",
+   "hybrid_decision": "kept_paraphrase",
+   "reference_v1b_v2_v3": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 28,
+    "reanchored": false
+   },
+   "reference_v1b_v2_v3_fragment_quote_guard": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 28,
+    "reanchored": false
+   }
+  },
+  {
+   "page": 3,
+   "number": 4,
+   "cited_turn": 28,
+   "text": "說明已編列每月一萬二的補償預算",
+   "context": [],
+   "quote": "補償金每家每個月一萬二，這個預算在上個月已經編好了",
+   "scorer_category": "unmatched",
+   "cited_speaker": "S1",
+   "hybrid_decision": "kept_paraphrase",
+   "reference_v1b_v2_v3": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 28,
+    "reanchored": false
+   },
+   "reference_v1b_v2_v3_fragment_quote_guard": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 28,
+    "reanchored": false
+   }
+  },
+  {
+   "page": 4,
+   "number": 1,
+   "cited_turn": 38,
+   "text": "指出七十五歲以上住戶需停車看醫拿藥",
+   "context": [],
+   "quote": "榕溪路附近七十歲以上的住戶有四千一百戶",
+   "scorer_category": "unmatched",
+   "cited_speaker": "S2",
+   "hybrid_decision": "dropped:number_mismatch",
+   "reference_v1b_v2_v3": {
+    "status": "dropped",
+    "code": "number_mismatch",
+    "anchor_turn": null,
+    "reanchored": null
+   },
+   "reference_v1b_v2_v3_fragment_quote_guard": {
+    "status": "dropped",
+    "code": "number_mismatch",
+    "anchor_turn": null,
+    "reanchored": null
+   }
+  },
+  {
+   "page": 4,
+   "number": 2,
+   "cited_turn": 45,
+   "text": "提出貨車於夜間十點至清晨六點配送的替代方案",
+   "context": [],
+   "quote": "貨車可以夜間配送。對，晚上十點到早上六點配送",
+   "scorer_category": "unmatched",
+   "cited_speaker": "S1",
+   "hybrid_decision": "dropped:bad_quote",
+   "reference_v1b_v2_v3": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 45,
+    "reanchored": false
+   },
+   "reference_v1b_v2_v3_fragment_quote_guard": {
+    "status": "dropped",
+    "code": "bad_quote",
+    "anchor_turn": null,
+    "reanchored": null
+   }
+  },
+  {
+   "page": 4,
+   "number": 3,
+   "cited_turn": 48,
+   "text": "介紹立體停車場有三百一十個空位可供替代",
+   "context": [],
+   "quote": "運動公園旁邊的立體停車廠，現在平均還有310個空位",
+   "scorer_category": "unmatched",
+   "cited_speaker": "S1",
+   "hybrid_decision": "kept_paraphrase",
+   "reference_v1b_v2_v3": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 48,
+    "reanchored": false
+   },
+   "reference_v1b_v2_v3_fragment_quote_guard": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 48,
+    "reanchored": false
+   }
+  },
+  {
+   "page": 4,
+   "number": 4,
+   "cited_turn": 58,
+   "text": "說明同一空間可停放八台自行車服務更多人",
+   "context": [],
+   "quote": "同樣的空間，可以停八台自行車，這是最簡單的算術",
+   "scorer_category": "correct",
+   "cited_speaker": "S1",
+   "hybrid_decision": "kept_paraphrase",
+   "reference_v1b_v2_v3": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 58,
+    "reanchored": false
+   },
+   "reference_v1b_v2_v3_fragment_quote_guard": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 58,
+    "reanchored": false
+   }
+  }
+ ]
+}

@@ -10,6 +10,27 @@ class NoSubtitlesAvailable(Exception):
     """影片沒有任何可用的字幕軌。"""
 
 
+class DiarizationUnavailable(Exception):
+    """需要區分說話者，但 GPU 上的 diarization 無法使用。"""
+
+
+class SpeechRecognitionFailed(Exception):
+    """多人模式的音訊下載或語音辨識失敗（沒有偵測到語音也算）：工作失敗，什麼都不發佈。
+
+    多人模式不用字幕，所以不借用 NoSubtitlesAvailable——那個例外的訊息一開頭就是
+    「這部影片沒有字幕」，對一支其實沒去找過字幕的工作是誤導。
+    """
+
+
+class AttributionUnreliable(Exception):
+    """多人模式沒辦法可靠地說出「誰說了什麼」：工作失敗，什麼都不發佈。
+
+    例如聲音區分的結果不合理（要求 2 人卻只找到 1 人、主要發言者超過 8 人、沒有
+    任何發言者），或模型的重點被程式檢查丟掉太多、某一段一頁都留不下來。訊息要帶
+    數字，讓操作者看得出是哪一種。寧可失敗也不退回單人的「講者」寫法。
+    """
+
+
 class SubtitleDownloadFailed(NoSubtitlesAvailable):
     """取得逐字稿失敗，而且**改走語音也幫不上忙**：use case 直接回報，不做語音備援。
 

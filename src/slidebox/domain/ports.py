@@ -9,12 +9,16 @@ from .entities import (
     Brief,
     Cue,
     Deck,
+    DiarizerOutput,
     FollowUpPair,
     FollowUpResult,
+    RawSlide,
     Slide,
     TopicLabel,
     TopicResult,
     Transcript,
+    Word,
+    WordTranscript,
 )
 
 # 進度回報：fraction 為 0..1，None 表示不確定；status 為文字說明。
@@ -225,6 +229,119 @@ class SpeechTranscriber(Protocol):
         ...
 
 
+class WordTranscriber(Protocol):
+    """多人模式的語音辨識：每個字都帶時間，才能把字對到說話者。
+
+    跟 SpeechTranscriber 是兩個介面——單人路徑的 transcribe() 與它的呼叫一個字都不動。
+    """
+
+    @property
+    def fingerprint(self) -> str:
+        """「這一版辨識程式」的指紋（辨識參數、字的整理的原始碼）：存檔的字帶著它，
+        改了程式，舊的字就不會被拿來冒充。沒有或是空的，use case 就不沿用任何舊存檔。"""
+        ...
+
+    def transcribe_words(
+        self,
+        audio_path: str,
+        duration: float,
+        progress: ProgressCallback,
+        is_cancelled: CancelCheck,
+        speech_hint: str | None = None,
+    ) -> tuple[tuple[Word, ...], str]:
+        """回傳 (按時間排序的字, 偵測到的語言代碼)。
+
+        speech_hint 的意義同 SpeechTranscriber.transcribe 的 initial_prompt。沒偵測到
+        任何語音時回傳空的 tuple。逐段檢查 is_cancelled，取消時 raise OperationCancelled。
+        辨識失敗（模型載不起來、解碼出錯…）raise SpeechRecognitionFailed，訊息給操作者看；
+        不用 NoSubtitlesAvailable——多人模式根本沒有找過字幕。
+        """
+        ...
+
+
+class SpeechDiarizer(Protocol):
+    """把音訊切成說話者區段（diarization）。引擎可以換，介面不變。"""
+
+    @property
+    def engine(self) -> str:
+        """引擎名稱，例如 "pyannote.audio"。"""
+        ...
+
+    @property
+    def version(self) -> str:
+        """引擎套件的版本；沒安裝時是空字串。"""
+        ...
+
+    @property
+    def model(self) -> str:
+        """模型識別，例如 "pyannote/speaker-diarization-community-1"。"""
+        ...
+
+    @property
+    def fingerprint(self) -> str:
+        """引擎＋版本＋模型＋實作程式的指紋（16 個十六進位字元）：存檔與結果都帶著它，
+        換了引擎、模型或實作（含另一個環境裡的工作行程腳本），舊的說話者區分結果就不會被拿來冒充。"""
+        ...
+
+    def available(self) -> tuple[bool, str]:
+        """回傳 (可用與否, 給管理者看的原因)。**要便宜**：不載入模型、不下載任何東西。"""
+        ...
+
+    def diarize(
+        self,
+        audio_path: str,
+        duration: float,
+        speaker_count: int | None,
+        progress: ProgressCallback,
+        is_cancelled: CancelCheck,
+    ) -> DiarizerOutput:
+        """回傳互斥的說話者區段（按時間排序）與重疊秒數；speaker 是引擎自己的原始標籤。
+
+        speaker_count 為 None 表示自動判斷人數，否則是固定的人數（>= 2）。
+        任何失敗都 raise DiarizationUnavailable（訊息給操作者看）；取消時 raise
+        OperationCancelled。
+        """
+        ...
+
+
+class ConversationSummarizer(Protocol):
+    """把一段已標好說話者的對話寫成「重點」：模型只引用 turn 的編號，不決定誰說了什麼。"""
+
+    @property
+    def fingerprint(self) -> str:
+        """「這一版摘要程式」的指紋（提示詞、取樣設定、回應解析的原始碼）：存下來的摘要帶著它，
+        改了程式，舊的摘要就不會被拿來冒充。沒有或是空的，use case 就不沿用任何舊存檔。"""
+        ...
+
+    def summarize_window(
+        self,
+        window_text: str,
+        first_turn: int,
+        last_turn: int,
+        citable_turns: Sequence[int],
+        min_slides: int,
+        max_slides: int,
+        hint: str,
+        progress: ProgressCallback,
+        is_cancelled: CancelCheck | None = None,
+    ) -> tuple[RawSlide, ...]:
+        """window_text 是 format_window() 的產出（`[T12] S1：…` 一行一段話）。
+
+        citable_turns 是這個窗裡可以引用的 turn 編號（說話者是主要發言者的那些；其他聲音與無法判斷
+        的段落不在裡面，它們在 window_text 裡標成 X）。實作要把它做成 schema 裡 turn 的列舉
+        （conversation_schema），模型想引用 X 也寫不出來；不可以是空的（沒有可以引用的段落就不該
+        送出這個窗，use case 會略過它）。
+
+        回傳的重點只能引用 first_turn..last_turn 之間的編號；超出的由程式檢查丟掉，
+        這裡不必信任也不必過濾。hint 非空時是上一次被程式檢查退回的原因。每個點的 quote 是模型
+        照抄的原文，由程式核對（說話者是 quote 所在那一輪的說話者）。
+
+        回應不是合法的結構時 raise SummarizerOutputInvalid；連不上模型時 raise
+        SummarizerUnavailable。取消的規則與 Summarizer 相同。
+        """
+        ...
+
+
 class Checkpoints(Protocol):
     """做完的貴步驟（逐字稿、摘要、摘要卡）存起來：工作中途失敗或取消時，同一個網址再跑一次
     就從斷掉的地方接著做，不用再等一次語音辨識與摘要。
@@ -255,6 +372,39 @@ class Checkpoints(Protocol):
         ...
 
     def save_brief(self, output_dir: str, url: str, fingerprint: str, brief: Brief) -> None:
+        ...
+
+    # 以下兩個階段只有多人模式用：單人模式的階段（transcript、slides、brief）與檔案不變。
+    # 多人模式的 diarization 是 CPU 上最貴的一步、words 是語音辨識，各自存檔，
+    # 一邊失敗或被取消時另一邊不必重做。**絕不存降級或沒有說話者的結果。**
+
+    def load_diarization(self, output_dir: str, url: str,
+                         fingerprint: str) -> DiarizerOutput | None:
+        ...
+
+    def save_diarization(self, output_dir: str, url: str, fingerprint: str,
+                         output: DiarizerOutput) -> None:
+        ...
+
+    def load_words(self, output_dir: str, url: str,
+                   fingerprint: str) -> WordTranscript | None:
+        ...
+
+    def save_words(self, output_dir: str, url: str, fingerprint: str,
+                   words: WordTranscript) -> None:
+        ...
+
+    def load_conversation(self, output_dir: str, url: str,
+                          fingerprint: str) -> tuple[tuple[Slide, ...], int] | None:
+        """多人模式通過檢查的摘要：(投影片（含 points）, 模型提出的重點數)；沒有或對不上時回 None。
+
+        不借用 slides 階段：那一階段的檔案格式是單人模式的，沒有 points，也沒地方放提出的點數
+        （diarization_report 的 proposed_points 要用）。兩種模式的階段各用各的檔案，不會互相蓋掉。
+        """
+        ...
+
+    def save_conversation(self, output_dir: str, url: str, fingerprint: str,
+                          slides: Sequence[Slide], proposed: int) -> None:
         ...
 
     def clear(self, output_dir: str, url: str) -> None:

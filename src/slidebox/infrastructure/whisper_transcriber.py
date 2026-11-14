@@ -7,17 +7,37 @@ GPU 主機的容器裝了 cuBLAS／cuDNN，臺中市議會 50 分鐘的片段在
 """
 from __future__ import annotations
 
+import hashlib
 import importlib.util
+import json
+import math
 import os
+import re
 import sys
-from collections.abc import Callable
+import unicodedata
+from collections.abc import Callable, Sequence
+from dataclasses import replace
 
-from ..domain.entities import Cue
-from ..domain.errors import NoSubtitlesAvailable, OperationCancelled
+from ..domain.entities import Cue, Word
+from ..domain.errors import NoSubtitlesAvailable, OperationCancelled, SpeechRecognitionFailed
 from ..domain.ports import CancelCheck, ProgressCallback
-from .chinese_script import fix_transcript, keep_terms_from
+from ..usecases.code_fingerprint import code_fingerprint
+from .chinese_script import fix_transcript, keep_terms_from, to_traditional
 
 DEVICE_ENV = "SLIDEBOX_WHISPER_DEVICE"
+# 多人模式：靜默超過這麼久的地方，faster-whisper 會把落在裡面的幻覺字句丟掉（需要字的時間）。
+# 暫定值，用實際影片校正。改了它，辨識器的 fingerprint 會跟著變，存檔的字就會自己重做
+# （不必記得升 speakers.ALIGN_VERSION）。
+HALLUCINATION_SILENCE_SECONDS = 2.0
+# 多人模式呼叫模型的辨識參數（initial_prompt 另外帶：它是呼叫端給的語音提示，已經在存檔的指紋裡）。
+# 呼叫模型用它，fingerprint 也含它：參數放在這一個地方，兩邊不會各改各的。
+WORD_OPTIONS = {
+    "vad_filter": True,
+    "word_timestamps": True,
+    "hallucination_silence_threshold": HALLUCINATION_SILENCE_SECONDS,
+}
+# 決定「同一段音訊會辨識出什麼字」的程式：本模組（參數、字的整理、裝置與精度的選擇）與正體修正
+CODE_MODULES = (__name__, f"{__package__}.chinese_script")
 # ctranslate2 第一次用顯示卡時才載入的 DLL。Windows 版的 ctranslate2 自帶 cuDNN，缺的只有它
 _WINDOWS_CUBLAS = "cublas64_12.dll"
 # 只對普通話做正體修正。粵語的「晒」「吓」是正確寫法，轉了就錯；日文漢字更不能碰。
@@ -147,6 +167,13 @@ class FasterWhisperTranscriber:
         # 模型載入要約 40 秒，載一次後留著給之後的生成重複使用
         self._model = None
 
+    @property
+    def fingerprint(self) -> str:
+        """多人模式的「字」是這一版程式辨識出來的：辨識參數（WORD_OPTIONS）加上 CODE_MODULES 的原始碼。
+        模型名稱不算在內（它在存檔指紋的別的欄位）。讀不到原始碼時，指紋對不上任何舊存檔。"""
+        raw = json.dumps([sorted(WORD_OPTIONS.items()), code_fingerprint(CODE_MODULES)], ensure_ascii=False)
+        return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
+
     def transcribe(
         self,
         audio_path: str,
@@ -200,6 +227,53 @@ class FasterWhisperTranscriber:
             cues = [Cue(start=c.start, end=c.end, text=t) for c, t in zip(cues, texts)]
         return tuple(cues), info.language
 
+    def transcribe_words(
+        self,
+        audio_path: str,
+        duration: float,
+        progress: ProgressCallback,
+        is_cancelled: CancelCheck,
+        speech_hint: str | None = None,
+    ) -> tuple[tuple[Word, ...], str]:
+        """多人模式：回傳 (按時間排序的字, 語言)；每個字帶著開始／結束時間，才能對到說話者。
+
+        跟 transcribe() 是兩個獨立的呼叫，單人路徑的那個一個字都沒動。不去重複、不略過
+        重複句：重複輸出要等到說話者對完之後才分得出來（同一位說話者連續重複才算，
+        見 speakers.build_turns）。
+        """
+        try:
+            model = self._load(progress)
+        except NoSubtitlesAvailable as e:
+            # _load 的訊息是為單人路徑寫的（開頭「這部影片沒有字幕」）；多人模式沒有去找過字幕
+            raise SpeechRecognitionFailed(_NO_SUBTITLES_PREFIX.sub("", str(e))) from e
+        if is_cancelled():
+            raise OperationCancelled()
+
+        duration = _finite(duration, 0.0)         # 進度文字只是參考：NaN／無限大當作不知道，不要讓它害辨識失敗
+        total = f" / {_mmss(duration)}" if duration > 0 else ""
+        segments_words: list[list[Word]] = []
+        progress(None, "準備語音辨識…（解碼音訊、偵測人聲）")
+        try:
+            segments, info = model.transcribe(
+                audio_path, initial_prompt=speech_hint or None, **WORD_OPTIONS)
+            language = info.language
+            for number, seg in enumerate(segments):
+                if is_cancelled():
+                    raise OperationCancelled()
+                words = _segment_words(seg, number)
+                if words:
+                    segments_words.append(words)
+                reached = _finite(getattr(seg, "end", math.nan), 0.0)
+                done = min(reached, duration) if duration > 0 else reached
+                progress(None, f"語音辨識中… {_mmss(done)}{total}")
+        except OperationCancelled:
+            raise
+        except Exception as e:  # noqa: BLE001 底層錯誤一律轉成可讀訊息
+            raise SpeechRecognitionFailed(f"語音辨識失敗：{_brief(e)}") from e
+        if language == _MANDARIN and segments_words:
+            segments_words = _to_traditional(segments_words, keep_terms_from(speech_hint))
+        return tuple(w for words in segments_words for w in words), language
+
     def _load(self, progress: ProgressCallback):
         if self._model is not None:
             return self._model
@@ -219,3 +293,91 @@ class FasterWhisperTranscriber:
                 f"這部影片沒有字幕，語音辨識模型 {self._model_name} 也無法載入：{_brief(e)}"
             ) from e
         return self._model
+
+
+# --- 多人模式：字 ---
+
+# _load 為單人路徑寫的訊息開頭：「這部影片沒有字幕，…」「這部影片沒有字幕；…」
+_NO_SUBTITLES_PREFIX = re.compile(r"^這部影片沒有字幕[，；]\s*")
+# 把一句話切成「一個字（連同前面的空白）」：中文一字一個、英數連續的一個
+_SPREAD_PIECE = re.compile(r"\s*[0-9A-Za-z]+|\s*[^\s0-9A-Za-z]")
+
+
+def _finite(value: object, fallback: float) -> float:
+    try:
+        number = float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return fallback
+    return number if math.isfinite(number) else fallback
+
+
+def _segment_words(seg, number: int) -> list[Word]:
+    """一個 Whisper 段落的字。faster-whisper 沒給字的時間（極少見）就把整段話按字數攤開。"""
+    start = _finite(getattr(seg, "start", math.nan), math.nan)
+    end = _finite(getattr(seg, "end", math.nan), math.nan)
+    out: list[Word] = []
+    for w in getattr(seg, "words", None) or []:
+        text = str(getattr(w, "word", "") or "")
+        if not text.strip():
+            continue
+        w_start = _finite(getattr(w, "start", math.nan), start)
+        w_end = _finite(getattr(w, "end", math.nan), end)
+        if not (math.isfinite(w_start) and math.isfinite(w_end)):
+            continue
+        probability = _finite(getattr(w, "probability", 1.0), 0.0)
+        out.append(Word(w_start, max(w_end, w_start), text, number, probability))
+    if out or not math.isfinite(start) or not math.isfinite(end):
+        return out
+    return _spread(str(getattr(seg, "text", "") or ""), start, max(end, start), number)
+
+
+def _spread(text: str, start: float, end: float, segment: int) -> list[Word]:
+    """沒有字的時間時，把一段話按字數平均攤在 [start, end]。
+
+    可信度記 0：這些時間是推算的。標點黏在前一個字（開引號、開括號黏在後一個字），
+    所以對齊時換人只可能發生在句尾那種自然的邊界。
+    """
+    pieces: list[list] = []                      # [文字, 字數]
+    carry = ""
+    for raw in _SPREAD_PIECE.findall(text):
+        core = raw.strip()
+        if all(unicodedata.category(ch)[0] in "PS" for ch in core):
+            if unicodedata.category(core[0]) in ("Ps", "Pi") or not pieces:
+                carry += raw
+            else:
+                pieces[-1][0] += raw
+            continue
+        pieces.append([carry + raw, len(core)])
+        carry = ""
+    if carry and pieces:
+        pieces[-1][0] += carry
+    total = sum(weight for _, weight in pieces)
+    out: list[Word] = []
+    done = 0
+    for piece, weight in pieces:
+        out.append(Word(start + (end - start) * done / total,
+                        start + (end - start) * (done + weight) / total, piece, segment, 0.0))
+        done += weight
+    return out
+
+
+def _to_traditional(segments_words: Sequence[list[Word]], keep_terms: Sequence[str]) -> list[list[Word]]:
+    """中文長音訊會在中途漂成簡體：照單人路徑的做法，整份一起看（哪一段漂了要看前後文），
+    再把轉好的文字按字數切回每個字，字的時間一點都不動。
+
+    轉換逐字進行、長度不變，所以切得回去。萬一某段的長度對不上（目前的轉換器不會），
+    那一段退回逐字單獨轉換：少了前後文，但字與時間一個都不會錯位。
+    """
+    originals = ["".join(w.text for w in words) for words in segments_words]
+    converted = fix_transcript(originals, keep_terms)
+    out: list[list[Word]] = []
+    for words, original, new in zip(segments_words, originals, converted):
+        if len(new) == len(original):
+            rebuilt, at = [], 0
+            for w in words:
+                rebuilt.append(replace(w, text=new[at:at + len(w.text)]))
+                at += len(w.text)
+        else:
+            rebuilt = [replace(w, text=to_traditional(w.text, keep_terms)) for w in words]
+        out.append(rebuilt)
+    return out

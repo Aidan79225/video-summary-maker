@@ -1,0 +1,850 @@
+{
+ "fixture": "F01_prod_qa_official_names",
+ "about": "points of call.json",
+ "points": [
+  {
+   "page": 1,
+   "number": 1,
+   "cited_turn": 41,
+   "text": "下個月可以先補進二十名約聘工程人員。",
+   "context": [],
+   "quote": null,
+   "scorer_category": "correct",
+   "cited_speaker": "S2",
+   "hybrid_decision": null,
+   "reference_v1b_v2_v3": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 41,
+    "reanchored": false
+   }
+  },
+  {
+   "page": 1,
+   "number": 2,
+   "cited_turn": 42,
+   "text": "缺六十二個你補二十個，經驗呢？累計變更設計六次，增加經費四點七億，其中三次是同一個標案同一個設計單位，而且都是得標以後三個月內就變更，這個叫設計不周延，部長，你有沒有檢討過是設計單位的問題？",
+   "context": [],
+   "quote": null,
+   "scorer_category": "correct",
+   "cited_speaker": "S1",
+   "hybrid_decision": null,
+   "hand_adjudication": [
+    {
+     "truth": "real_error",
+     "kind": "name_leak",
+     "note": "部長 (vocative inside the text, second person) in the text; attribution itself right"
+    }
+   ],
+   "reference_v1b_v2_v3": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 42,
+    "reanchored": false
+   }
+  },
+  {
+   "page": 1,
+   "number": 3,
+   "cited_turn": 43,
+   "text": "有，已經要求設計單位提出改善報告。",
+   "context": [
+    42
+   ],
+   "quote": null,
+   "scorer_category": "correct",
+   "cited_speaker": "S2",
+   "hybrid_decision": null,
+   "reference_v1b_v2_v3": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 43,
+    "reanchored": false
+   }
+  },
+  {
+   "page": 2,
+   "number": 1,
+   "cited_turn": 44,
+   "text": "廠商講，你們的工程款常常拖，從估驗到撥款要九十天，資金壓在他們身上，他們當然不敢標，而且不是一家兩家，本席接到的有五家，每一家講的都差不多，部長，這個是不是事實？",
+   "context": [],
+   "quote": null,
+   "scorer_category": "correct",
+   "cited_speaker": "S1",
+   "hybrid_decision": null,
+   "reference_v1b_v2_v3": {
+    "status": "dropped",
+    "code": "clause_pronoun",
+    "anchor_turn": null,
+    "reanchored": null
+   }
+  },
+  {
+   "page": 2,
+   "number": 2,
+   "cited_turn": 45,
+   "text": "沒有，都是三十天內付款。",
+   "context": [
+    44
+   ],
+   "quote": null,
+   "scorer_category": "correct",
+   "cited_speaker": "S2",
+   "hybrid_decision": null,
+   "reference_v1b_v2_v3": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 45,
+    "reanchored": false
+   }
+  },
+  {
+   "page": 2,
+   "number": 3,
+   "cited_turn": 46,
+   "text": "三十天，好，那本席手上這幾張估驗單怎麼會寫8月20號估驗，11月才撥款，中間差了八十幾天，這個本席會提供給你，你們部裡的會計室自己去對一下，我們看到底是誰在講真話。",
+   "context": [],
+   "quote": null,
+   "scorer_category": "correct",
+   "cited_speaker": "S1",
+   "hybrid_decision": null,
+   "reference_v1b_v2_v3": {
+    "status": "dropped",
+    "code": "first_person",
+    "anchor_turn": null,
+    "reanchored": null
+   }
+  },
+  {
+   "page": 2,
+   "number": 4,
+   "cited_turn": 47,
+   "text": "好，我們會查。",
+   "context": [
+    46
+   ],
+   "quote": null,
+   "scorer_category": "unmatched",
+   "cited_speaker": "S2",
+   "hybrid_decision": null,
+   "reference_v1b_v2_v3": {
+    "status": "dropped",
+    "code": "first_person",
+    "anchor_turn": null,
+    "reanchored": null
+   }
+  },
+  {
+   "page": 2,
+   "number": 5,
+   "cited_turn": 48,
+   "text": "專案管理顧問，這一期的契約是九千八百萬，顧問公司每個月應該交一份進度報告，本席查到到現在只交過兩份，九千八百萬只換到兩份報告，一份報告平均四千九百萬，部長，你們有沒有扣款？",
+   "context": [],
+   "quote": null,
+   "scorer_category": "correct",
+   "cited_speaker": "S1",
+   "hybrid_decision": null,
+   "reference_v1b_v2_v3": {
+    "status": "dropped",
+    "code": "first_person",
+    "anchor_turn": null,
+    "reanchored": null
+   }
+  },
+  {
+   "page": 2,
+   "number": 6,
+   "cited_turn": 49,
+   "text": "有，扣了三百一十萬。",
+   "context": [
+    48
+   ],
+   "quote": null,
+   "scorer_category": "correct",
+   "cited_speaker": "S2",
+   "hybrid_decision": null,
+   "reference_v1b_v2_v3": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 49,
+    "reanchored": false
+   }
+  },
+  {
+   "page": 2,
+   "number": 7,
+   "cited_turn": 50,
+   "text": "三百一十萬，九千八百萬的百分之三，這叫處罰嗎？本席覺得這個叫意思意思，你們如果每個月都這樣扣，顧問公司的老闆應該很高興，因為不交報告也只被扣這麼一點點。",
+   "context": [],
+   "quote": null,
+   "scorer_category": "merged",
+   "cited_speaker": "S1",
+   "hybrid_decision": null,
+   "reference_v1b_v2_v3": {
+    "status": "dropped",
+    "code": "first_person",
+    "anchor_turn": null,
+    "reanchored": null
+   }
+  },
+  {
+   "page": 2,
+   "number": 8,
+   "cited_turn": 51,
+   "text": "我們會再研議。",
+   "context": [
+    50
+   ],
+   "quote": null,
+   "scorer_category": "unmatched",
+   "cited_speaker": "S2",
+   "hybrid_decision": null,
+   "reference_v1b_v2_v3": {
+    "status": "dropped",
+    "code": "first_person",
+    "anchor_turn": null,
+    "reanchored": null
+   }
+  },
+  {
+   "page": 3,
+   "number": 1,
+   "cited_turn": 52,
+   "text": "還有維護，維護預算一年一點八億，本席調了保養紀錄，已經完工的十一座裡面，有七座近一年沒有任何保養紀錄，七座，超過一半，抽水機是不是放在那邊長草？部長，一年一點八億的維護費，到底花到哪裡去了？",
+   "context": [],
+   "quote": null,
+   "scorer_category": "correct",
+   "cited_speaker": "S1",
+   "hybrid_decision": null,
+   "reference_v1b_v2_v3": {
+    "status": "dropped",
+    "code": "first_person",
+    "anchor_turn": null,
+    "reanchored": null
+   }
+  },
+  {
+   "page": 3,
+   "number": 2,
+   "cited_turn": 53,
+   "text": "報告委員，保養紀錄有一些是廠商用紙本，還沒有上傳到系統，我們下個月全部電子化，之後委員隨時都可以調閱。",
+   "context": [
+    52
+   ],
+   "quote": null,
+   "scorer_category": "correct",
+   "cited_speaker": "S2",
+   "hybrid_decision": null,
+   "reference_v1b_v2_v3": {
+    "status": "dropped",
+    "code": "first_person",
+    "anchor_turn": null,
+    "reanchored": null
+   }
+  },
+  {
+   "page": 3,
+   "number": 3,
+   "cited_turn": 54,
+   "text": "紙本還沒有上傳，好，再來地方配合款。河灣市的配合款二十二億，到現在一毛錢沒有撥，北嶼縣九億六千萬也只撥了一半，這個不是中央的錢，兩個地方政府的財政都不好，本席知道，可是沒有地方配合，抽水站蓋好了也沒人管，部長你們有沒有跟市政府談？",
+   "context": [],
+   "quote": null,
+   "scorer_category": "correct",
+   "cited_speaker": "S1",
+   "hybrid_decision": null,
+   "reference_v1b_v2_v3": {
+    "status": "dropped",
+    "code": "first_person",
+    "anchor_turn": null,
+    "reanchored": null
+   }
+  },
+  {
+   "page": 3,
+   "number": 4,
+   "cited_turn": 55,
+   "text": "報告委員，委員講的二十二億，是河灣市還沒有把請款文件送過來，文件到了我們十一月底前一定撥。",
+   "context": [
+    54
+   ],
+   "quote": null,
+   "scorer_category": "merged",
+   "cited_speaker": "S2",
+   "hybrid_decision": null,
+   "reference_v1b_v2_v3": {
+    "status": "dropped",
+    "code": "first_person",
+    "anchor_turn": null,
+    "reanchored": null
+   }
+  },
+  {
+   "page": 4,
+   "number": 1,
+   "cited_turn": 56,
+   "text": "再來查核，今年七月的查核報告抽查了一百三十二處工程，有十四處品質缺失，其中三處是嚴重缺失，這三處你現在告訴本席，是哪三處，改善了沒有？",
+   "context": [],
+   "quote": null,
+   "scorer_category": "correct",
+   "cited_speaker": "S1",
+   "hybrid_decision": null,
+   "reference_v1b_v2_v3": {
+    "status": "dropped",
+    "code": "first_person",
+    "anchor_turn": null,
+    "reanchored": null
+   }
+  },
+  {
+   "page": 4,
+   "number": 2,
+   "cited_turn": 57,
+   "text": "報告委員，三處嚴重缺失，我們都已經要求廠商限期三十日改善，其中兩處已經完成複驗，剩下的一處下週會去複驗。",
+   "context": [
+    56
+   ],
+   "quote": null,
+   "scorer_category": "correct",
+   "cited_speaker": "S2",
+   "hybrid_decision": null,
+   "reference_v1b_v2_v3": {
+    "status": "dropped",
+    "code": "first_person",
+    "anchor_turn": null,
+    "reanchored": null
+   }
+  },
+  {
+   "page": 4,
+   "number": 3,
+   "cited_turn": 58,
+   "text": "那還有一處呢？沒有複驗就是沒有改善，對不對？那這一處是在哪個標案，哪一個廠商，改善期限到哪一天，部長你現在回答不出來，本席等一下要書面資料，一個禮拜內送到本席辦公室。",
+   "context": [],
+   "quote": null,
+   "scorer_category": "correct",
+   "cited_speaker": "S1",
+   "hybrid_decision": null,
+   "reference_v1b_v2_v3": {
+    "status": "dropped",
+    "code": "first_person",
+    "anchor_turn": null,
+    "reanchored": null
+   }
+  },
+  {
+   "page": 4,
+   "number": 4,
+   "cited_turn": 59,
+   "text": "對。",
+   "context": [
+    58
+   ],
+   "quote": null,
+   "scorer_category": "hallucinated",
+   "cited_speaker": "S2",
+   "hybrid_decision": null,
+   "reference_v1b_v2_v3": {
+    "status": "dropped",
+    "code": "too_short",
+    "anchor_turn": null,
+    "reanchored": null
+   }
+  },
+  {
+   "page": 4,
+   "number": 5,
+   "cited_turn": 60,
+   "text": "本席再問預警，8月14號那天，淹水預警簡訊發出去的時間，比水位到警戒線晚了十七分鐘，十七分鐘，那天一共發了四十一萬則，你們不是說簡訊系統有雙備援嗎，你們是不是等水都進家門了才通知民眾？",
+   "context": [],
+   "quote": null,
+   "scorer_category": "correct",
+   "cited_speaker": "S1",
+   "hybrid_decision": null,
+   "reference_v1b_v2_v3": {
+    "status": "dropped",
+    "code": "first_person",
+    "anchor_turn": null,
+    "reanchored": null
+   }
+  },
+  {
+   "page": 4,
+   "number": 6,
+   "cited_turn": 61,
+   "text": "有檢討，已經改成同步發送了。",
+   "context": [
+    60
+   ],
+   "quote": null,
+   "scorer_category": "correct",
+   "cited_speaker": "S2",
+   "hybrid_decision": null,
+   "reference_v1b_v2_v3": {
+    "status": "slide_dropped",
+    "code": null,
+    "anchor_turn": 61,
+    "reanchored": false
+   }
+  },
+  {
+   "page": 4,
+   "number": 7,
+   "cited_turn": 62,
+   "text": "還有民眾陳情，八月淹水之後一個月內，民眾向你們陳情的有一千四百二十件，本席查到回覆率只有百分之三十八，另外六成多的人寫了信打了電話，到現在連一個回音都沒有，部長你知道那是什麼感覺嗎？",
+   "context": [],
+   "quote": null,
+   "scorer_category": "correct",
+   "cited_speaker": "S1",
+   "hybrid_decision": null,
+   "reference_v1b_v2_v3": {
+    "status": "dropped",
+    "code": "first_person",
+    "anchor_turn": null,
+    "reanchored": null
+   }
+  },
+  {
+   "page": 4,
+   "number": 8,
+   "cited_turn": 63,
+   "text": "我們會逐件回覆。",
+   "context": [
+    62
+   ],
+   "quote": null,
+   "scorer_category": "unmatched",
+   "cited_speaker": "S2",
+   "hybrid_decision": null,
+   "reference_v1b_v2_v3": {
+    "status": "dropped",
+    "code": "first_person",
+    "anchor_turn": null,
+    "reanchored": null
+   }
+  },
+  {
+   "page": 4,
+   "number": 9,
+   "cited_turn": 64,
+   "text": "好，再來雨量站，全流域一共設了二十八個雨量站，本席查到其中六站故障超過三個月，八月十四號那天最上游的兩個站根本沒有資料，你們那個雨量是用剩下的站去推的對不對？部長，故障的站為什麼三個月都不修？",
+   "context": [],
+   "quote": null,
+   "scorer_category": "correct",
+   "cited_speaker": "S1",
+   "hybrid_decision": null,
+   "reference_v1b_v2_v3": {
+    "status": "dropped",
+    "code": "first_person",
+    "anchor_turn": null,
+    "reanchored": null
+   }
+  },
+  {
+   "page": 4,
+   "number": 10,
+   "cited_turn": 65,
+   "text": "報告委員，已經修復四站，剩下兩站在山區，要等道路搶修完才進得去。",
+   "context": [
+    64
+   ],
+   "quote": null,
+   "scorer_category": "correct",
+   "cited_speaker": "S2",
+   "hybrid_decision": null,
+   "hand_adjudication": [
+    {
+     "truth": "real_error",
+     "kind": "name_leak",
+     "note": "報告委員 in the text; attribution itself right"
+    }
+   ],
+   "reference_v1b_v2_v3": {
+    "status": "dropped",
+    "code": "other:文字裡有逐字稿用來稱呼人的名字或稱謂「告委員」；不要寫進去",
+    "anchor_turn": null,
+    "reanchored": null
+   }
+  },
+  {
+   "page": 5,
+   "number": 1,
+   "cited_turn": 66,
+   "text": "備用機組，規定備用率要兩成，你們現在實際只有百分之六點八，備用機組是整個系統最後一道保險，你們連一成都不到，一旦主要的抽水機故障，底下根本沒有東西可以頂上去，本席要問，備用機組到底採購了沒有？",
+   "context": [],
+   "quote": null,
+   "scorer_category": "correct",
+   "cited_speaker": "S1",
+   "hybrid_decision": null,
+   "reference_v1b_v2_v3": {
+    "status": "dropped",
+    "code": "first_person",
+    "anchor_turn": null,
+    "reanchored": null
+   }
+  },
+  {
+   "page": 5,
+   "number": 2,
+   "cited_turn": 67,
+   "text": "還沒有。已經向三家租賃業者詢價。",
+   "context": [
+    66
+   ],
+   "quote": null,
+   "scorer_category": "correct",
+   "cited_speaker": "S2",
+   "hybrid_decision": null,
+   "reference_v1b_v2_v3": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 67,
+    "reanchored": false
+   }
+  },
+  {
+   "page": 5,
+   "number": 3,
+   "cited_turn": 68,
+   "text": "詢價詢價，汛期都過了才詢價。里長跟本席講，八月十四號那天晚上，下游那座抽水站沒有人開機，是里長自己打電話找廠商，廠商說值班的人要等署裡通知才能啟動，里長的原話是「我們淹到膝蓋了他們還在等公文」，部長你聽聽看，這個叫防災嗎？",
+   "context": [],
+   "quote": null,
+   "scorer_category": "correct",
+   "cited_speaker": "S1",
+   "hybrid_decision": null,
+   "reference_v1b_v2_v3": {
+    "status": "dropped",
+    "code": "first_person",
+    "anchor_turn": null,
+    "reanchored": null
+   }
+  },
+  {
+   "page": 5,
+   "number": 4,
+   "cited_turn": 69,
+   "text": "報告委員，值班規定是水位到警戒線就要開機，不需要等公文，這個部分我們昨天已經派人去查，查到了會處分。",
+   "context": [
+    68
+   ],
+   "quote": null,
+   "scorer_category": "correct",
+   "cited_speaker": "S2",
+   "hybrid_decision": null,
+   "reference_v1b_v2_v3": {
+    "status": "dropped",
+    "code": "first_person",
+    "anchor_turn": null,
+    "reanchored": null
+   }
+  },
+  {
+   "page": 5,
+   "number": 5,
+   "cited_turn": 70,
+   "text": "派人去查，好。第三標的工期展延了兩百一十天，違約金依契約是每天千分之一，契約金額三億兩千萬，一天三十二萬，兩百一十天乘起來六千七百二十萬，到現在一毛錢沒有罰，是不是展延都是你們核准的所以不罰？",
+   "context": [],
+   "quote": null,
+   "scorer_category": "correct",
+   "cited_speaker": "S1",
+   "hybrid_decision": null,
+   "reference_v1b_v2_v3": {
+    "status": "kept",
+    "code": null,
+    "anchor_turn": 70,
+    "reanchored": false
+   }
+  },
+  {
+   "page": 5,
+   "number": 6,
+   "cited_turn": 71,
+   "text": "是我們核准的，因為屬於不可歸責於廠商的事由。",
+   "context": [
+    70
+   ],
+   "quote": null,
+   "scorer_category": "correct",
+   "cited_speaker": "S2",
+   "hybrid_decision": null,
+   "reference_v1b_v2_v3": {
+    "status": "dropped",
+    "code": "first_person",
+    "anchor_turn": null,
+    "reanchored": null
+   }
+  },
+  {
+   "page": 5,
+   "number": 7,
+   "cited_turn": 72,
+   "text": "不可歸責，每一次都是不可歸責，下雨不可歸責，漲價不可歸責，用地也不可歸責，那什麼才叫可歸責？部長，你告訴本席，這一期有哪一個標案是可歸責於廠商而且有罰的？",
+   "context": [],
+   "quote": null,
+   "scorer_category": "correct",
+   "cited_speaker": "S1",
+   "hybrid_decision": null,
+   "reference_v1b_v2_v3": {
+    "status": "dropped",
+    "code": "first_person",
+    "anchor_turn": null,
+    "reanchored": null
+   }
+  },
+  {
+   "page": 5,
+   "number": 8,
+   "cited_turn": 73,
+   "text": "報告委員，這個部分是因為——",
+   "context": [
+    72
+   ],
+   "quote": null,
+   "scorer_category": "unmatched",
+   "cited_speaker": "S2",
+   "hybrid_decision": null,
+   "hand_adjudication": [
+    {
+     "truth": "real_error",
+     "kind": "name_leak",
+     "note": "報告委員 (pleasantry, no content) in the text; attribution itself right"
+    }
+   ],
+   "reference_v1b_v2_v3": {
+    "status": "dropped",
+    "code": "other:文字裡有逐字稿用來稱呼人的名字或稱謂「告委員」；不要寫進去",
+    "anchor_turn": null,
+    "reanchored": null
+   }
+  },
+  {
+   "page": 5,
+   "number": 9,
+   "cited_turn": 74,
+   "text": "我不要聽因為，我問你有沒有！",
+   "context": [],
+   "quote": null,
+   "scorer_category": "correct",
+   "cited_speaker": "S1",
+   "hybrid_decision": null,
+   "reference_v1b_v2_v3": {
+    "status": "dropped",
+    "code": "first_person",
+    "anchor_turn": null,
+    "reanchored": null
+   }
+  },
+  {
+   "page": 5,
+   "number": 10,
+   "cited_turn": 75,
+   "text": "沒有。",
+   "context": [
+    74
+   ],
+   "quote": null,
+   "scorer_category": "unmatched",
+   "cited_speaker": "S2",
+   "hybrid_decision": null,
+   "reference_v1b_v2_v3": {
+    "status": "dropped",
+    "code": "too_short",
+    "anchor_turn": null,
+    "reanchored": null
+   }
+  },
+  {
+   "page": 5,
+   "number": 11,
+   "cited_turn": 76,
+   "text": "沒有，所以違約金這個制度等於沒有在用，對不對？那契約裡面把違約金寫得那麼漂亮是寫好看的嗎？好，我們進到最後一個部分。",
+   "context": [],
+   "quote": null,
+   "scorer_category": "correct",
+   "cited_speaker": "S1",
+   "hybrid_decision": null,
+   "reference_v1b_v2_v3": {
+    "status": "dropped",
+    "code": "first_person",
+    "anchor_turn": null,
+    "reanchored": null
+   }
+  },
+  {
+   "page": 5,
+   "number": 12,
+   "cited_turn": 77,
+   "text": "對。",
+   "context": [
+    76
+   ],
+   "quote": null,
+   "scorer_category": "hallucinated",
+   "cited_speaker": "S2",
+   "hybrid_decision": null,
+   "reference_v1b_v2_v3": {
+    "status": "dropped",
+    "code": "too_short",
+    "anchor_turn": null,
+    "reanchored": null
+   }
+  },
+  {
+   "page": 6,
+   "number": 1,
+   "cited_turn": 78,
+   "text": "如果明年一月年度結束，這三十一億抽水站的錢沒有花完，是不是又要保留？保留兩次之後就要繳庫，部長，現在保留的一共有幾筆，你們有沒有清單，本席要看到每一筆的原因，還有每一筆預計什麼時候動工，不要又是一句會努力就想帶過去？",
+   "context": [],
+   "quote": null,
+   "scorer_category": "correct",
+   "cited_speaker": "S1",
+   "hybrid_decision": null,
+   "reference_v1b_v2_v3": {
+    "status": "dropped",
+    "code": "first_person",
+    "anchor_turn": null,
+    "reanchored": null
+   }
+  },
+  {
+   "page": 6,
+   "number": 2,
+   "cited_turn": 79,
+   "text": "有，一共十七筆。",
+   "context": [
+    78
+   ],
+   "quote": null,
+   "scorer_category": "correct",
+   "cited_speaker": "S2",
+   "hybrid_decision": null,
+   "reference_v1b_v2_v3": {
+    "status": "slide_dropped",
+    "code": null,
+    "anchor_turn": 79,
+    "reanchored": false
+   }
+  },
+  {
+   "page": 6,
+   "number": 3,
+   "cited_turn": 80,
+   "text": "十七筆，好。還有淹水潛勢圖，那個是居民買房子、里長做疏散規劃都在看的，本席查到你們上一次更新是六年前，六年，中間堤防也蓋了，抽水站也蓋了，圖還是六年前的，部長，這個圖你什麼時候更新，不要又跟本席講會再研議？",
+   "context": [],
+   "quote": null,
+   "scorer_category": "correct",
+   "cited_speaker": "S1",
+   "hybrid_decision": null,
+   "reference_v1b_v2_v3": {
+    "status": "dropped",
+    "code": "first_person",
+    "anchor_turn": null,
+    "reanchored": null
+   }
+  },
+  {
+   "page": 6,
+   "number": 4,
+   "cited_turn": 81,
+   "text": "報告委員，今年底前會完成更新。",
+   "context": [
+    80
+   ],
+   "quote": null,
+   "scorer_category": "correct",
+   "cited_speaker": "S2",
+   "hybrid_decision": null,
+   "hand_adjudication": [
+    {
+     "truth": "real_error",
+     "kind": "name_leak",
+     "note": "報告委員 in the text; attribution itself right"
+    }
+   ],
+   "reference_v1b_v2_v3": {
+    "status": "dropped",
+    "code": "other:文字裡有逐字稿用來稱呼人的名字或稱謂「告委員」；不要寫進去",
+    "anchor_turn": null,
+    "reanchored": null
+   }
+  },
+  {
+   "page": 6,
+   "number": 5,
+   "cited_turn": 82,
+   "text": "好，本席把今天問的整理一下，六百二十億的計畫，九月底執行率百分之四十一點八，三十七座抽水站完工十一座，第二標流標三次，八月十四號淹了兩千一百八十戶，領到救助金的只有三百二十戶，清淤只清了三分之一，備用機組連一成都不到，這些加起來，居民看到的是什麼，是六百二十億，還是一個沒有人負責的水溝。時間有限，本席最後要求兩件事，第一，十二月十五號以前，把三十七座抽水站逐座的時程表交到委員會，每一座什麼時候發包什麼時候完工，第二，從下個月開始每個月書面報告進度，部長，可以嗎？",
+   "context": [],
+   "quote": null,
+   "scorer_category": "correct",
+   "cited_speaker": "S1",
+   "hybrid_decision": null,
+   "reference_v1b_v2_v3": {
+    "status": "dropped",
+    "code": "too_long",
+    "anchor_turn": null,
+    "reanchored": null
+   }
+  },
+  {
+   "page": 6,
+   "number": 6,
+   "cited_turn": 83,
+   "text": "可以，我們會照辦。",
+   "context": [
+    82
+   ],
+   "quote": null,
+   "scorer_category": "unmatched",
+   "cited_speaker": "S2",
+   "hybrid_decision": null,
+   "reference_v1b_v2_v3": {
+    "status": "dropped",
+    "code": "first_person",
+    "anchor_turn": null,
+    "reanchored": null
+   }
+  },
+  {
+   "page": 6,
+   "number": 7,
+   "cited_turn": 84,
+   "text": "還有，如果十二月十五號交不出來，明年的預算本席會先凍結三成，這個不是威脅，是程序，是本席代表選民對這個計畫該負的責任，也是對下游那兩千多戶居民該有的交代，部長你聽清楚了嗎？",
+   "context": [],
+   "quote": null,
+   "scorer_category": "correct",
+   "cited_speaker": "S1",
+   "hybrid_decision": null,
+   "reference_v1b_v2_v3": {
+    "status": "dropped",
+    "code": "first_person",
+    "anchor_turn": null,
+    "reanchored": null
+   }
+  },
+  {
+   "page": 6,
+   "number": 8,
+   "cited_turn": 85,
+   "text": "聽清楚了，謝謝湯委員。",
+   "context": [
+    84
+   ],
+   "quote": null,
+   "scorer_category": "unmatched",
+   "cited_speaker": "S2",
+   "hybrid_decision": null,
+   "hand_adjudication": [
+    {
+     "truth": "real_error",
+     "kind": "name_leak",
+     "note": "湯委員 (pleasantry) in the text; attribution itself right"
+    }
+   ],
+   "reference_v1b_v2_v3": {
+    "status": "dropped",
+    "code": "other:文字裡有逐字稿用來稱呼人的名字或稱謂「湯委員」；不要寫進去",
+    "anchor_turn": null,
+    "reanchored": null
+   }
+  }
+ ]
+}
