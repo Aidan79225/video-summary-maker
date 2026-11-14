@@ -97,8 +97,8 @@ const finite = (v: unknown): number => (typeof v === 'number' && Number.isFinite
 const count = (v: unknown): number | null =>
   typeof v === 'number' && Number.isInteger(v) && v >= 0 ? v : null;
 
-/** 後端最多送 12 位；多留一倍的空間，再多就是壞資料，DOM 不能被無限撐大 */
-const MAX_SPEAKERS = 24;
+/** 後端最多送 24 位（CONTRACT_MAX_SPEAKERS）；多留一倍的空間，再多就是壞資料，DOM 不能被無限撐大 */
+const MAX_SPEAKERS = 48;
 const MAX_POINTS = 40;
 const MAX_WARNINGS = 8;
 
@@ -108,8 +108,9 @@ const MAX_WARNINGS = 8;
  */
 /** 一個時間點最大的秒數：契約的 MAX_SECONDS（一天）。影片本身預設最長 3 小時，遠遠不到 */
 const CONTRACT_MAX_SECONDS = 24 * 3600;
-/** 一支影片最多幾位說話者（參與者加短暫的聲音）：契約的 MAX_SPEAKERS。參與者的人數不可能比它多 */
-const CONTRACT_MAX_SPEAKERS = 12;
+/** 一支影片最多幾位說話者（參與者加短暫的聲音）：契約的 MAX_SPEAKERS（Pi 的 speaker_result.py 與 GPU 的
+ * MAX_PUBLISHED_SPEAKERS 是同一個數字，三邊要一起改）。參與者的人數不可能比它多 */
+const CONTRACT_MAX_SPEAKERS = 24;
 
 /**
  * speakers：不是陣列、元素不是物件（舊版逐句標記時代是字串陣列）、沒有編號、編號重複的，
@@ -219,7 +220,7 @@ export function normalizeSlides(raw: unknown, speakers: readonly VideoSpeaker[] 
     .map((s) => ({ ...s, points: normalizePoints(s.points, speakers) }) as unknown as Slide);
 }
 
-/** 列表卡片的參與者人數：不是正整數、或比一支影片可能有的說話者還多（契約上限 12 位）就不顯示 */
+/** 列表卡片的參與者人數：不是正整數、或比一支影片可能有的說話者還多（契約上限 24 位）就不顯示 */
 export function cardParticipantCount(raw: unknown): number | undefined {
   return typeof raw === 'number' && Number.isInteger(raw) && raw > 0 && raw <= CONTRACT_MAX_SPEAKERS
     ? raw

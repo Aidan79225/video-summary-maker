@@ -151,8 +151,8 @@ def violations(payload: dict, requested_speakers: int | None = None) -> list[str
     if report.get("requested_speakers") != requested_speakers:
         problems.append("diarization.requested_speakers 與要求的人數不同")
     speakers = payload.get("speakers")
-    if not isinstance(speakers, list) or not 1 <= len(speakers) <= 12:
-        problems.append("speakers 不是 1 到 12 個")
+    if not isinstance(speakers, list) or not 1 <= len(speakers) <= 24:
+        problems.append("speakers 不是 1 到 24 個")
         speakers = []
     ids = [s.get("id") for s in speakers]
     if len(set(ids)) != len(ids) or not all(isinstance(i, str) and SPEAKER_ID.match(i) for i in ids):

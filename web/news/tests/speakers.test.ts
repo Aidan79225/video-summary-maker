@@ -221,9 +221,10 @@ describe('normalizeSpeakers：舊的或壞掉的 API 也不能讓頁面爆掉', 
     assert.deepEqual(s?.flags, ['a', 'b']);
   });
 
-  it('人數有上限（頁面的 DOM 不能被無限撐大）', () => {
-    const many = Array.from({ length: 100 }, (_, i) => raw({ id: `S${i + 1}`, display: `發言者 ${i}` }));
-    assert.ok(normalizeSpeakers(many).length <= 24);
+  it('契約最多 24 位說話者，一位都不能被截掉；再多的（壞資料）有上限，頁面的 DOM 不能被無限撐大', () => {
+    const make = (n: number) => Array.from({ length: n }, (_, i) => raw({ id: `S${i + 1}`, display: `發言者 ${i}` }));
+    assert.equal(normalizeSpeakers(make(24)).length, 24);
+    assert.equal(normalizeSpeakers(make(100)).length, 48);
   });
 });
 
@@ -547,6 +548,25 @@ describe('buildCast：出場名單與每位說話者的記號', () => {
     assert.equal(new Set(cast.members.slice(0, 6).map((m) => m.tone)).size, 6);
   });
 
+  it('契約最多 24 位：二十四位的形狀與色調組合也不重複，次要的聲音也是（每個晶片的文字另外還不同）', () => {
+    const all = Array.from({ length: 24 }, (_, i) =>
+      sp({
+        id: `S${i + 1}`,
+        label: i < 8 ? `發言者 ${i}` : `其他聲音 ${i - 7}`,
+        display: i < 8 ? `發言者 ${i}` : `其他聲音 ${i - 7}`,
+        kind: i < 8 ? 'participant' : 'minor',
+      }),
+    );
+    const cast = buildCast(all);
+    assert.equal(cast.members.length, 24);
+    assert.equal(new Set(cast.members.map((m) => `${m.tone}/${m.shape}`)).size, 24);
+    // 主要發言者排在前面，其他聲音接在後面
+    assert.deepEqual(
+      cast.members.map((m) => m.kind),
+      [...Array(8).fill('participant'), ...Array(16).fill('minor')],
+    );
+  });
+
   describe('身分依據（basis）：寧可少說，不可多說', () => {
     it('編輯設了名字的是「operator」，沒設的是「none」', () => {
       const cast = buildCast([
@@ -645,9 +665,9 @@ describe('其他小工具', () => {
 
   it('cardParticipantCount：列表卡片的人數只收正整數，其餘不顯示', () => {
     assert.equal(cardParticipantCount(2), 2);
-    assert.equal(cardParticipantCount(12), 12);
-    // 契約：一支影片最多 12 位說話者（參與者加短暫的聲音），人數不可能比它多
-    for (const huge of [13, 25, 1e21, Number.MAX_SAFE_INTEGER]) {
+    assert.equal(cardParticipantCount(24), 24);
+    // 契約：一支影片最多 24 位說話者（參與者加短暫的聲音），人數不可能比它多
+    for (const huge of [25, 49, 1e21, Number.MAX_SAFE_INTEGER]) {
       assert.equal(cardParticipantCount(huge), undefined, String(huge));
     }
     for (const bad of [0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY, '2', null, undefined, {}, [2], true]) {

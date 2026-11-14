@@ -31,7 +31,9 @@ from .youtube_source import UrlRejected, clean_text, parse_video_url, video_id_f
 MODE = "diarize"
 
 # 上限。GPU 自己有限制，這裡是第二道：結果寫進資料庫、印在終端機、送到網頁之前，不信任任何一個大小。
-MAX_SPEAKERS = 12
+# MAX_SPEAKERS 是名單的長度（主要發言者加其他聲音），跟 GPU（usecases/speakers.py）的 MAX_PUBLISHED_SPEAKERS 是
+# 同一個數字，兩邊要一起改（網站的 CONTRACT_MAX_SPEAKERS 也是）。它不是品質門檻：能被引用的人另有 MAX_PARTICIPANTS。
+MAX_SPEAKERS = 24
 MAX_SAMPLES = 3
 MAX_FLAGS = 8
 MAX_WARNINGS = 8
@@ -383,7 +385,7 @@ def check_speaker_result(article, payload: object) -> SpeakerResult:
       1. 結果自己說是多人模式（speaker_mode == "diarize"），不是舊版 GPU 的單人或逐句標記格式；
       2. 結果的 video_id 與 source_url 都要有、而且都是這支影片的；diarization 的狀態是 ok／warn、至少找到一位說話者，而且
          requested_speakers 跟我們送出去的一樣（自動＝None，指定人數＝那個數字）：接回了另一種設定的工作時會對不上；
-      3. speakers 是 1～12 位、編號不重複、種類是 participant／minor、至少一位 participant；稱呼（label）只能是
+      3. speakers 是 1～24 位、編號不重複、種類是 participant／minor、至少一位 participant；稱呼（label）只能是
          程式給的中性形狀（participant＝「發言者 A」…、minor＝「其他聲音 1」…，形狀要跟種類一致）：人名、
          「主持人」這類的字一律拒絕，名字只由操作者用 label_video 設定；名單與 GPU 的區分報告對得上
          （found_speakers／minor_speakers 就是 participant／minor 的人數、participant 不超過 8 位、指定 2 人以上

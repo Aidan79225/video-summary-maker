@@ -185,18 +185,18 @@ def test_when_attribution_fails_the_job_fails_with_the_reason_and_nothing_is_del
     assert type(error).__name__ in view["error"] and str(error) in view["error"]
 
 
-def test_a_conversation_with_more_than_twelve_voices_fails_the_job_and_delivers_nothing():
-    """真的 use case（假零件）從頭到尾：13 個聲音，工作失敗、沒有成品、沒有任何一次模型呼叫，
+def test_a_conversation_with_more_than_twenty_four_voices_fails_the_job_and_delivers_nothing():
+    """真的 use case（假零件）從頭到尾：25 個聲音，工作失敗、沒有成品、沒有任何一次模型呼叫，
     而且前兩個階段的存檔還在，錯誤訊息把人數與下一步講清楚。"""
     from tests.slidebox import diarized_support as support
 
-    parts = support.crowd_parts(10)
+    parts = support.crowd_parts(22)
 
     view, _ = finish(CONTRACT["request"], usecase=parts.usecase)
 
     assert view["status"] == JobStatus.FAILED and view["result"] is None
     assert view["error"].startswith("AttributionUnreliable: ")
-    for needle in ("2 位主要發言者", "11 個其他聲音", "共 13 個", "上限 12 個", "--speakers N"):
+    for needle in ("2 位主要發言者", "23 個其他聲音", "共 25 個", "上限 24 個", "--speakers N"):
         assert needle in view["error"], needle
     assert parts.conversation.calls == [] and parts.renderer.rendered == []
     assert parts.checkpoints.stages("OUT", support.URL) == ["diarization", "words"]

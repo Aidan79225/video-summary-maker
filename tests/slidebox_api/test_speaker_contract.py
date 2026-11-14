@@ -7,11 +7,14 @@ from __future__ import annotations
 
 import copy
 import json
+import re
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
 
 from slidebox.domain.entities import DeckResult, Settings
+from slidebox.usecases import speakers
 from slidebox.usecases.conversation import render_slide
 from slidebox_api.app import CapabilitiesView, JobRequest, create_app
 from slidebox_api.jobs import JobStore, SpeakerMode
@@ -143,19 +146,53 @@ def test_a_payload_the_pipeline_really_makes_has_the_same_shape_as_the_example()
     assert json.loads(json.dumps(payload, ensure_ascii=False)) == payload
 
 
-def test_a_payload_with_exactly_twelve_speakers_passes_the_checks_and_a_thirteenth_would_not():
-    """攔的 bug：GPU 的上限和新聞服務的上限（speakers 1 到 12 個）差一個，或差在有沒有算其他聲音。
-    正好 12 個（2 位主要發言者、10 個其他聲音）要過；多一個，新聞服務一定擋，GPU 也一定不交。"""
-    payload = deck_payload(support.run(support.crowd_parts(9)).deck, "abcdefghijk")
+def test_a_payload_with_exactly_twenty_four_speakers_passes_the_checks_and_a_twenty_fifth_would_not():
+    """攔的 bug：GPU 的上限和新聞服務的上限（speakers 1 到 24 個）差一個，或差在有沒有算其他聲音。
+    正好 24 個（2 位主要發言者、22 個其他聲音）要過；多一個，新聞服務一定擋，GPU 也一定不交。"""
+    payload = deck_payload(support.run(support.crowd_parts(21)).deck, "abcdefghijk")
 
-    assert len(payload["speakers"]) == 12
+    assert len(payload["speakers"]) == 24
     assert key_paths(payload) == key_paths(RESULT)
     assert violations(payload, requested_speakers=None) == []
     assert json.loads(json.dumps(payload, ensure_ascii=False)) == payload
 
-    thirteenth = copy.deepcopy(payload)
-    thirteenth["speakers"].append({**thirteenth["speakers"][-1], "id": "S13"})
-    assert "speakers 不是 1 到 12 個" in violations(thirteenth, requested_speakers=None)
+    twenty_fifth = copy.deepcopy(payload)
+    twenty_fifth["speakers"].append({**twenty_fifth["speakers"][-1], "id": "S25"})
+    assert "speakers 不是 1 到 24 個" in violations(twenty_fifth, requested_speakers=None)
+
+
+# --- 三條線各寫死一份的上限，不能悄悄分家 ---
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+PI_CHECK = REPO_ROOT / "services" / "news" / "articles" / "speaker_result.py"
+SITE_LIB = REPO_ROOT / "web" / "news" / "src" / "lib" / "speakers.ts"
+
+
+def constant_in(path: Path, pattern: str) -> int:
+    """另一條線的原始碼裡寫死的一個整數。只看行首的常數定義，註解裡提到的數字不算；找不到就是失敗
+    （常數改名了，這個檢查就要跟著改，不能悄悄變成什麼都沒比）。"""
+    found = re.search(pattern, path.read_text("utf-8"), re.MULTILINE)
+    assert found, f"{path.name} 裡找不到符合 {pattern} 的常數定義"
+    return int(found.group(1))
+
+
+def test_the_constant_finder_reads_the_definition_and_not_a_comment_about_it(tmp_path):
+    source = tmp_path / "limits.py"
+    source.write_text("# MAX_SPEAKERS = 99（舊的數字）\nMAX_SPEAKERS = 24    # 上限\nMAX_SPEAKERS_OPTION = 20\n", "utf-8")
+    assert constant_in(source, r"^MAX_SPEAKERS = (\d+)") == 24
+    with pytest.raises(AssertionError, match="找不到"):
+        constant_in(source, r"^MAX_PARTICIPANTS = (\d+)")
+
+
+@pytest.mark.skipif(not (PI_CHECK.exists() and SITE_LIB.exists()),
+                    reason="新聞服務與網站的程式不在這個 checkout 裡（只有 GPU 這條線的 image）")
+def test_the_speaker_limits_are_the_same_numbers_on_all_three_sides():
+    """攔的 bug：只改了一邊。GPU 的上限比新聞服務大，GPU 做完整支影片、成品交過去才被拒絕；比它小，新聞服務
+    收得下的結果 GPU 先擋掉了。網站的卡片人數用同一個契約數字，頁面的 DOM 上限也要留得下全部的說話者。"""
+    assert constant_in(PI_CHECK, r"^MAX_SPEAKERS = (\d+)") == speakers.MAX_PUBLISHED_SPEAKERS
+    assert constant_in(PI_CHECK, r"^MAX_PARTICIPANTS = (\d+)") == speakers.MAX_PARTICIPANTS
+    assert constant_in(SITE_LIB, r"^const CONTRACT_MAX_SPEAKERS = (\d+);") == speakers.MAX_PUBLISHED_SPEAKERS
+    assert constant_in(SITE_LIB, r"^const MAX_SPEAKERS = (\d+);") >= speakers.MAX_PUBLISHED_SPEAKERS
 
 
 def test_a_fixed_speaker_count_comes_back_as_requested_speakers():

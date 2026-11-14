@@ -65,9 +65,14 @@ SAMPLE_COUNT = 3
 SAMPLE_CHARS = 80
 MAX_PARTICIPANTS = 8
 # 發佈的說話者清單（主要發言者加其他聲音）最多幾個。新聞服務存檔之前也檢查同一個數字
-# （services/news/articles/speaker_result.py 的 MAX_SPEAKERS，speakers 要 1 到 12 個），
-# 兩邊要一起改；這裡先擋，才不會等整支影片都做完、成品交到新聞服務才被拒絕。
-MAX_PUBLISHED_SPEAKERS = 12
+# （services/news/articles/speaker_result.py 的 MAX_SPEAKERS，speakers 要 1 到 24 個），
+# 兩邊要一起改（網站的 CONTRACT_MAX_SPEAKERS 也是；tests/slidebox_api/test_speaker_contract.py 會比對三個數字）；
+# 這裡先擋，才不會等整支影片都做完、成品交到新聞服務才被拒絕。
+# 這個數字只管名單放得下幾個人，不是品質門檻：能被引用的人另有 MAX_PARTICIPANTS 管。其他聲音不能被引用、
+# 事後可以用 label_video --merge 併回去，所以多放一些進來不會多出任何錯誤歸屬（太多時 MANY_MINOR 會掛警告）。
+# 原本是 12，那是新聞服務檢查名單大小的暫定值、沒有量過；第一次真的跑時一支 7 位主要發言者＋7 個其他聲音的影片
+# 因此整支失敗，才放寬到 24（網站本來就收得下 24 個）。
+MAX_PUBLISHED_SPEAKERS = 24
 UNASSIGNED_WARN_RATIO = 0.25
 MANY_MINOR = 4
 
@@ -540,7 +545,7 @@ def diarization_report(
     """這次說話者區分的品質；明顯不可靠就 raise AttributionUnreliable（工作失敗，不發佈）。
 
     失敗：要求 2 人以上卻只找到 1 位發言者、主要發言者超過 8 位、主要發言者與其他聲音合計
-    超過 12 個（發佈的說話者清單放不下）、一位發言者都沒有。
+    超過 24 個（發佈的說話者清單放不下）、一位發言者都沒有。
     警告（照常發佈，但網站會標出來）：人數與要求不符、S0 超過 25%、其他聲音 4 個以上、
     自動模式只找到 1 位發言者。found_speakers 是主要發言者（participant）的人數。
     proposed_points／kept_points 由 use case 在模型的重點檢查完之後補上。

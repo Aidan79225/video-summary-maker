@@ -64,7 +64,7 @@ def without_counters(report):
 
 
 def test_the_models_only_hear_the_cut_audio_and_the_audio_is_cut_once():
-    """攔的 bug：區間外的聲音照樣進聲音區分（人數與 12 個聲音的上限被它們吃掉），或音訊被切了兩次。"""
+    """攔的 bug：區間外的聲音照樣進聲音區分（人數與 24 個聲音的上限被它們吃掉），或音訊被切了兩次。"""
     parts = long_video()
     run(parts, time_range=RANGE)
     assert parts.cutter.calls == [(LONG_CLIP.path, 600.0, 1500.0, AUDIO_DIR)]
@@ -340,8 +340,8 @@ def test_the_availability_check_and_the_speaker_count_are_unchanged_by_a_range()
 
 def test_a_diarizer_that_finds_too_many_voices_in_the_range_is_judged_like_any_other_job():
     """區間不放寬任何門檻：切出來的那一段裡聲音太多，一樣失敗（這是區間存在的理由——前後的採訪不在裡面）。"""
-    parts = crowd_parts(10, audio=FakeAudioGateway(clip=LONG_CLIP))
-    with pytest.raises(AttributionUnreliable, match="上限 12 個"):
+    parts = crowd_parts(22, audio=FakeAudioGateway(clip=LONG_CLIP))
+    with pytest.raises(AttributionUnreliable, match="上限 24 個"):
         run(parts, time_range=RANGE)
     assert parts.conversation.calls == [] and stored(parts) == ["diarization", "words"]
 
