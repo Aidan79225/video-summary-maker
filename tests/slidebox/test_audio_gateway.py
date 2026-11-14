@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import re
 
 import pytest
 import yt_dlp.utils
@@ -12,6 +13,9 @@ from slidebox.infrastructure import ytdlp_audio
 from slidebox.infrastructure.ytdlp_audio import YtDlpAudioGateway
 
 INFO = {"id": "aqz-KE-bpKQ", "title": "Big Buck Bunny", "duration": 635}
+
+# monkeypatch 會把模組上的 YoutubeDL 換成假的；真的那個先存起來，算檔名的測試要用
+_REAL_YOUTUBEDL = yt_dlp.YoutubeDL
 
 
 def _fake_ydl(info=INFO, *, write=True, error=None, hook_events=()):
@@ -36,7 +40,9 @@ def _fake_ydl(info=INFO, *, write=True, error=None, hook_events=()):
                 raise error
             if not write:
                 return {**info, "requested_downloads": []}
-            path = self.params["outtmpl"].replace("%(id)s", info["id"]).replace("%(ext)s", "webm")
+            # 範本裡的 %(id)s、%(id).80B 之類都換成 id（長度上限由最下面「真的 yt-dlp 算檔名」的測試管）
+            path = re.sub(r"%\(id\)(?:\.\d+)?[sB]", lambda _m: info["id"], self.params["outtmpl"])
+            path = path.replace("%(ext)s", "webm")
             # 比照真實 yt-dlp：目標檔已存在就不覆寫、直接回報那個舊檔（「already
             # downloaded」）。少了這個語意，任何測試都攔不到舊音訊被重複使用。
             if not os.path.exists(path):
@@ -119,7 +125,7 @@ def test_a_leftover_file_from_another_video_is_never_reused(tmp_path, monkeypatc
         assert f.read() == b"aqz-KE-bpKQ"
 
 
-def _capture_format(monkeypatch, tmp_path):
+def _capture_params(monkeypatch, tmp_path):
     captured: list[dict] = []
 
     class Capturing:
@@ -138,7 +144,11 @@ def _capture_format(monkeypatch, tmp_path):
     monkeypatch.setattr(ytdlp_audio.yt_dlp, "YoutubeDL", Capturing)
     with pytest.raises(NoSubtitlesAvailable):
         YtDlpAudioGateway().download_audio("URL", str(tmp_path), _quiet, lambda: False)
-    return captured[0]["format"]
+    return captured[0]
+
+
+def _capture_format(monkeypatch, tmp_path):
+    return _capture_params(monkeypatch, tmp_path)["format"]
 
 
 def test_the_audio_format_excludes_hls_streams(tmp_path, monkeypatch):
@@ -156,3 +166,41 @@ def test_any_yt_dlp_failure_becomes_a_domain_error(tmp_path, monkeypatch):
     monkeypatch.setattr(ytdlp_audio.yt_dlp, "YoutubeDL", _fake_ydl(error=err))
     with pytest.raises(NoSubtitlesAvailable):
         YtDlpAudioGateway().download_audio("URL", str(tmp_path), _quiet, lambda: False)
+
+
+# --- 檔名長度 ---
+
+# GitHub release 的網址（diarize_check --sample 的樣本）被轉到一串很長的簽章網址，yt-dlp 的一般解析器拿
+# 轉址後的整串當 id；Docker 映像跑在 Linux，檔名最多 255 位元組，yt-dlp 還會在後面加 .part
+GITHUB_RELEASE_ASSET_ID = (
+    "b2b5ab0b-f5ba-42e3-a3ab-7d7141e564cc？sp=r&sv=2018-11-09&sr=b&spr=https&se=2026-11-14T02_38_06Z"
+    "&rscd=attachment;+filename=0-four-speakers-zh.wav&rsct=application⧸octet-stream&sig=" + "A" * 300)
+MAX_FILE_NAME_BYTES = 255
+
+
+def _name_the_real_yt_dlp_would_write(monkeypatch, tmp_path, video_id, ext):
+    """gateway 實際交給 yt-dlp 的設定，請真的 yt-dlp 算出它會寫的檔名（不連網，只算檔名）。"""
+    params = _capture_params(monkeypatch, tmp_path)
+    ydl = _REAL_YOUTUBEDL({**params, "quiet": True})
+    info = {"id": video_id, "ext": ext, "title": "t", "extractor": "generic", "extractor_key": "Generic"}
+    return os.path.basename(ydl.prepare_filename(info))
+
+
+def test_a_very_long_extractor_id_cannot_make_the_file_name_too_long(tmp_path, monkeypatch):
+    """攔的 bug：檔名用 %(id)s，沒有長度上限。yt-dlp 的一般解析器（直接給媒體檔網址時；diarize_check
+    --sample 就是）拿轉址後的整串網址當 id，簽章網址近千字元，寫檔時 Errno 36「File name too long」：
+    冒煙測試在下載就失敗，什麼都還沒量到。"""
+    name = _name_the_real_yt_dlp_would_write(monkeypatch, tmp_path, GITHUB_RELEASE_ASSET_ID, "unknown_video")
+    assert len((name + ".part").encode()) <= MAX_FILE_NAME_BYTES
+
+
+def test_the_limit_counts_bytes_not_characters(tmp_path, monkeypatch):
+    """攔的 bug：用字元數截斷。中文一個字三個位元組，80 個字元就是 240 位元組，加上副檔名和 .part 仍然超過。"""
+    name = _name_the_real_yt_dlp_would_write(monkeypatch, tmp_path, "漢" * 200, "webm")
+    assert len((name + ".part").encode()) <= MAX_FILE_NAME_BYTES
+
+
+def test_a_youtube_id_still_names_the_file_so_different_videos_never_share_one(tmp_path, monkeypatch):
+    """對照：id 照舊是檔名（11 個字元遠低於上限）。檔名帶 id 是為了擋「舊檔被當成這支影片」，截斷不能弄丟這個。"""
+    assert _name_the_real_yt_dlp_would_write(monkeypatch, tmp_path, "aqz-KE-bpKQ", "webm") == "aqz-KE-bpKQ.webm"
+    assert _name_the_real_yt_dlp_would_write(monkeypatch, tmp_path, "jNQXAC9IVRw", "m4a") == "jNQXAC9IVRw.m4a"
