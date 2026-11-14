@@ -1,13 +1,25 @@
 ---
-import { parseTranscript } from '../lib/format';
+import { groupTranscript, parseTranscript } from '../lib/format';
+import { markOf, transcriptDisplays, type Cast } from '../lib/speakers';
+import SpeakerChip from './SpeakerChip.astro';
 
 interface Props {
   text: string;
   sourceNote?: string;
+  /**
+   * 多人影片的出場名單。有的話，逐字稿依說話者分塊、上方附說話者對照；
+   * 沒有（議會、單人影片、舊版 API）就是以前的樣子，標記一個字都沒變。
+   */
+  cast?: Cast;
 }
 
-const { text, sourceNote } = Astro.props;
-const lines = parseTranscript(text);
+const { text, sourceNote, cast } = Astro.props;
+const members = cast?.members ?? [];
+// 只有出場名單裡的顯示名（加上後端代入的「無法判斷」「未知發言者」）才拆說話者；沒有名單就完全不拆
+const lines = parseTranscript(text, cast ? transcriptDisplays(cast) : []);
+const multi = members.length > 0;
+const groups = multi ? groupTranscript(lines) : [];
+const hasMinor = members.some((m) => m.kind === 'minor');
 ---
 
 <section class="mt-14">
@@ -37,8 +49,55 @@ const lines = parseTranscript(text);
         )
       }
       {
+        multi && lines.length > 0 && (
+          <div data-legend class="mb-4 rounded-lg border border-line-soft bg-bg-soft/60 px-3 py-3">
+            <p class="text-[0.7rem] tracking-[0.2em] text-muted uppercase">說話者</p>
+            <ul class="mt-2 flex flex-wrap gap-x-4 gap-y-2" aria-label="逐字稿的說話者對照">
+              {members.map((m) => (
+                <li data-legend-item={m.ids[0]} class="flex flex-wrap items-center gap-x-2 gap-y-1">
+                  <SpeakerChip mark={markOf(m, m.display)} />
+                  {m.role && <span class="text-[0.8rem] text-ink-2">{m.role}</span>}
+                </li>
+              ))}
+            </ul>
+            {hasMinor && (
+              <p class="mt-2 text-[0.75rem] leading-relaxed text-ink-2">
+                「其他聲音」是短暫出現的聲音，只列在逐字稿裡，不會出現在各段的重點。
+              </p>
+            )}
+          </div>
+        )
+      }
+      {
         lines.length === 0 ? (
           <p class="text-sm text-muted">這篇沒有可顯示的逐字稿。</p>
+        ) : multi ? (
+          <div class="max-h-[70vh] overflow-y-auto pr-1 text-[0.92rem] leading-loose text-ink-2">
+            {groups.map((g, i) => {
+              // 顯示名對不到出場名單的（後端代入的「無法判斷」「未知發言者」）畫成中性的晶片
+              const mark = g.speaker ? markOf(cast?.byDisplay.get(g.speaker), g.speaker) : null;
+              return (
+                <div
+                  class="spk-turn"
+                  data-turn={i + 1}
+                  data-kind={mark ? mark.kind : 'none'}
+                  data-tone={mark ? mark.tone : undefined}
+                >
+                  {mark && (
+                    <p class="spk-turn-head">
+                      <SpeakerChip mark={mark} />
+                    </p>
+                  )}
+                  {g.lines.map((l) => (
+                    <p class="ts-line">
+                      <span class="tabular pt-0.5 text-[0.78rem] text-muted/70 select-none">{l.time}</span>
+                      <span>{l.body}</span>
+                    </p>
+                  ))}
+                </div>
+              );
+            })}
+          </div>
         ) : (
           <div class="max-h-[70vh] overflow-y-auto pr-1 text-[0.92rem] leading-loose text-ink-2">
             {lines.map((l) => (

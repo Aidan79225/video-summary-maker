@@ -7,6 +7,7 @@ Pi 上不跑任何模型，也不裝 slidebox——兩邊只透過 HTTP 說話�
 """
 from __future__ import annotations
 
+import http.client
 import json
 import time
 import urllib.error
@@ -54,6 +55,19 @@ class JobKind(StrEnum):
     DECK = "deck"
     TOPIC = "topic"
     FOLLOWUP = "followup"
+
+
+class SpeakerMode(StrEnum):
+    """POST /jobs 的 speaker_mode（只有 YouTube 影片會送）。省略＝single，也就是舊的單人流程。
+    協定的一部分，兩邊各留一份。"""
+    SINGLE = "single"
+    DIARIZE = "diarize"
+
+
+# GPU 主機的 /capabilities 回報的契約版本。兩邊對得上才送多人工作：版本不同代表結果的格式 Pi 不認得。
+SPEAKER_CONTRACT = 1
+
+NOT_UPDATED = "GPU 服務還沒更新到支援多人區分的版本"
 
 
 class GpuApiError(Exception):
@@ -116,8 +130,20 @@ class GpuApiClient:
         except JobNotFound:
             return None
 
+    def capabilities(self) -> dict:
+        """GET /capabilities：GPU 主機能不能做多人說話者區分。
+
+        回 {speaker_diarization: bool, reason: str, speaker_contract: int}。舊版的 GPU 沒有這個端點（404）：
+        那不是「工作不見了」，是 GPU 還沒更新——換成明確的訊息，呼叫端（add_video）據此在登記之前就擋下。
+        """
+        try:
+            return self._call("/capabilities", "GET", timeout=_POLL_TIMEOUT)
+        except JobNotFound as e:
+            raise GpuApiError(f"{NOT_UPDATED}（沒有 /capabilities 這個端點）；請先更新 GPU 主機再加影片") from e
+
     def submit(self, url: str, detailed: bool = True, min_slides: int | None = None,
-               max_slides: int | None = None, speech_hint: str | None = None) -> str:
+               max_slides: int | None = None, speech_hint: str | None = None,
+               speaker_mode: str | None = None, speaker_count: int | None = None) -> str:
         body: dict = {"url": url, "detailed": detailed}
         if min_slides:
             body["min_slides"] = min_slides
@@ -125,6 +151,17 @@ class GpuApiClient:
             body["max_slides"] = max_slides
         if speech_hint:
             body["speech_hint"] = speech_hint
+        if speaker_mode == SpeakerMode.DIARIZE:
+            # 只有多人的 YouTube 工作才帶這兩個鍵：議會與單人影片的請求逐位元組維持原樣。
+            # speaker_count 是 None＝由 GPU 自動判斷人數（契約範例裡就是 null）
+            if speaker_count is not None and (isinstance(speaker_count, bool) or not isinstance(speaker_count, int)
+                                              or not 2 <= speaker_count <= 20):
+                raise ValueError(f"多人模式的 speaker_count 只能是 None 或 2～20：{speaker_count!r}")
+            body["speaker_mode"] = SpeakerMode.DIARIZE.value
+            body["speaker_count"] = speaker_count
+        elif speaker_mode not in (None, SpeakerMode.SINGLE) or speaker_count is not None:
+            # 打錯的模式或孤零零的人數不能悄悄變成單人請求：那正是這個功能要防的事
+            raise ValueError(f"不認得的說話者設定：speaker_mode={speaker_mode!r}、speaker_count={speaker_count!r}")
         return self._submit(body)
 
     def submit_topic(self, text: str, labels: list[dict]) -> str:
@@ -202,8 +239,10 @@ class GpuApiClient:
             if e.code in _REQUEST_ERROR_CODES:
                 raise RequestRejected(f"摘要 API 拒絕這個請求（{e.code}）：{detail}") from e
             raise GpuApiError(f"摘要 API 回應 {e.code}：{detail}") from e
-        except (OSError, ValueError) as e:
-            raise GpuApiError(f"摘要 API 連線失敗：{str(e)[:200]}") from e
+        except (OSError, ValueError, http.client.HTTPException) as e:
+            # http.client 的例外（內容被截斷的 IncompleteRead、根本不是 HTTP 的 BadStatusLine…）不是 OSError：
+            # 不翻譯的話它們是一串 traceback，輪詢中途的一次截斷也不會像其他連線抖動一樣被重試
+            raise GpuApiError(f"摘要 API 連線失敗：{str(e)[:200] or type(e).__name__}") from e
         if not isinstance(payload, dict):
             raise GpuApiError("摘要 API 的回應格式不符預期")
         return payload

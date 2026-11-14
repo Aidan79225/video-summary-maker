@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import base64
+import inspect
 import io
 import shutil
 import tempfile
@@ -17,12 +18,13 @@ from django.core.files.base import ContentFile
 from django.core.files.storage import default_storage
 from django.core.management import call_command
 from django.core.management.base import CommandError
-from django.test import TestCase, override_settings
+from django.test import SimpleTestCase, TestCase, override_settings
 from django.utils import timezone
 
-from articles.gpu_client import GpuApiError, JobFailed
+from articles.gpu_client import GpuApiClient, GpuApiError, JobFailed
 from articles.ingest import MAX_ATTEMPTS, remove_video
 from articles.models import Article, ArticleStatus, Slide
+from articles.tests.speaker_support import READY_CAPABILITIES, diarized_result
 from articles.youtube_source import HttpResponse, MetadataUnavailable, VideoMeta, fetch_metadata
 
 GPU = "articles.management.commands.add_video.GpuApiClient"
@@ -43,16 +45,29 @@ def _payload(title="GPU 從影片拿到的標題", slides=2):
 
 
 class Gpu:
-    """假的 GPU 客戶端：記下每一次 submit／job／wait。"""
+    """假的 GPU 客戶端：記下每一次 submit／job／wait／capabilities。
 
-    def __init__(self, result=None, error=None, jobs=None, job_error=None):
+    result 預設是單人（--speakers 1）的結果；多人的測試要自己給契約格式的 result 與 capabilities。
+    """
+
+    def __init__(self, result=None, error=None, jobs=None, job_error=None,
+                 capabilities=None, capabilities_error=None):
         self._result = result if result is not None else _payload()
         self._error = error
         self._jobs = jobs or {}
         self._job_error = job_error
+        self._capabilities = capabilities if capabilities is not None else dict(READY_CAPABILITIES)
+        self._capabilities_error = capabilities_error
         self.submits: list[dict] = []
         self.waits: list[tuple[str, float]] = []
         self.looked_up: list[str] = []
+        self.capability_calls = 0
+
+    def capabilities(self):
+        self.capability_calls += 1
+        if self._capabilities_error is not None:
+            raise self._capabilities_error
+        return self._capabilities
 
     def job(self, job_id):
         self.looked_up.append(job_id)
@@ -63,9 +78,11 @@ class Gpu:
     def cancel(self, job_id):
         self._jobs.pop(job_id, None)
 
-    def submit(self, url, detailed=True, min_slides=None, max_slides=None, speech_hint=None):
+    def submit(self, url, detailed=True, min_slides=None, max_slides=None, speech_hint=None,
+               speaker_mode=None, speaker_count=None):
         self.submits.append({"url": url, "detailed": detailed, "min_slides": min_slides,
-                             "max_slides": max_slides, "speech_hint": speech_hint})
+                             "max_slides": max_slides, "speech_hint": speech_hint,
+                             "speaker_mode": speaker_mode, "speaker_count": speaker_count})
         if isinstance(self._error, GpuApiError):
             raise self._error
         return f"job-{len(self.submits)}"
@@ -144,13 +161,25 @@ class CommandTestCase(TestCase):
         return str(caught.exception), out.getvalue(), err.getvalue(), gpu, fetch
 
     def article(self, video_id=ZOO, **fields):
+        """已登記的影片。預設是單人（speaker_count=1，這個檔案原本測的單人流程）；多人的要自己給 None 或人數。"""
         defaults = dict(ivod_id=f"yt-{video_id}", slug=f"2005-04-24-yt-{video_id}", source="youtube",
                         title="Me at the zoo", speaker="jawed", date=date(2005, 4, 24), duration_seconds=19,
-                        ivod_url=f"https://www.youtube.com/watch?v={video_id}")
+                        ivod_url=f"https://www.youtube.com/watch?v={video_id}", speaker_count=1)
         return Article.objects.create(**(defaults | fields))
 
     def refresh(self, article=None):
         return Article.objects.get(ivod_id=f"yt-{ZOO}") if article is None else Article.objects.get(pk=article.pk)
+
+
+class GpuFakeParityTests(SimpleTestCase):
+    """這個檔案的假 GPU 客戶端不能跟真的分頭演化（同 test_ingest.ClientContractTests）：
+    真的客戶端多了參數（speaker_mode、speaker_count）或方法（capabilities），假的沒跟上，指令測試就全綠而實際會壞。"""
+
+    def test_the_fake_offers_every_method_the_command_uses_with_the_same_parameters(self):
+        for name in ("submit", "wait", "job", "cancel", "capabilities"):
+            with self.subTest(method=name):
+                self.assertEqual(list(inspect.signature(getattr(Gpu, name)).parameters),
+                                 list(inspect.signature(getattr(GpuApiClient, name)).parameters))
 
 
 class FirstLineTests(CommandTestCase):
@@ -167,9 +196,13 @@ class FirstLineTests(CommandTestCase):
                 Article.objects.all().delete()
                 out, *_ = self.run_cmd(ZOO_URL, *extra)
                 self.assertTrue(out.splitlines()[0].startswith(f"影片 {ZOO}"))
-        # 連被安全閥擋下的那一次也是
+        # 預設的多人模式
         Article.objects.all().delete()
-        _, out, *_ = self.fails(ZOO_URL)
+        out, *_ = self.run_cmd(ZOO_URL, gpu=Gpu(result=diarized_result(ZOO)))
+        self.assertTrue(out.splitlines()[0].startswith(f"影片 {ZOO}"))
+        # 連 GPU 還不能區分說話者、被擋下的那一次也是
+        Article.objects.all().delete()
+        _, out, *_ = self.fails(ZOO_URL, gpu=Gpu(capabilities={"speaker_diarization": False, "reason": "x"}))
         self.assertTrue(out.splitlines()[0].startswith(f"影片 {ZOO}"))
 
     def test_a_playlist_that_comes_with_the_video_is_called_out(self):
@@ -235,68 +268,105 @@ class UrlTests(CommandTestCase):
         fetch.assert_not_called()
 
 
-class SpeakersValveTests(CommandTestCase):
-    """第二部分（用聲音區分說話的人）完成之前的安全閥：沒有聲明單人影片就不登記、不送出。"""
+class SpeakersOptionTests(CommandTestCase):
+    """--speakers：第二部分之前它是「只有一個人」的安全閥（沒有它就不登記、不送出）；現在多人區分是預設，
+    它是說話者人數：省略＝自動、1＝跳過區分、2 以上＝固定人數。這一組是舊安全閥測試改寫成的新規則。"""
 
-    def test_without_the_declaration_nothing_is_registered_or_sent(self):
-        message, out, _, gpu, fetch = self.fails(ZOO_URL)
-        self.assertIn("--speakers 1", message)
-        self.assertIn("不只一個人", message)
-        self.assertFalse(Article.objects.exists())
-        fetch.assert_not_called()
-        self.last_client_class.assert_not_called()
-        self.assertEqual(gpu.submits, [])
-        # 第一行還是先印出 id 與網址
-        self.assertTrue(out.splitlines()[0].startswith(f"影片 {ZOO}"))
+    def test_without_the_option_the_video_is_registered_and_sent_for_automatic_multi_speaker(self):
+        """舊：沒有 --speakers 1 就拒絕登記。新：什麼都不加就是預設的多人模式。"""
+        out, _, gpu, _ = self.run_cmd(ZOO_URL, gpu=Gpu(result=diarized_result(ZOO)))
+        article = self.refresh()
+        self.assertIsNone(article.speaker_count)
+        self.assertEqual(article.status, ArticleStatus.READY)
+        self.assertEqual([(s["speaker_mode"], s["speaker_count"]) for s in gpu.submits], [("diarize", None)])
+        self.assertIn("自動區分", out)
 
-    def test_the_declaration_lets_it_through(self):
-        out, _, gpu, _ = self.run_cmd(ZOO_URL, "--speakers", "1")
+    def test_one_means_a_single_speaker_and_sends_the_request_as_part_one_did(self):
+        """舊：--speakers 1 放行。新：照樣放行，而且送出的請求跟第一部分一模一樣（不帶說話者的鍵）。"""
+        _, _, gpu, _ = self.run_cmd(ZOO_URL, "--speakers", "1")
         self.assertEqual(len(gpu.submits), 1)
-        self.assertEqual(self.refresh().status, ArticleStatus.READY)
+        self.assertEqual((gpu.submits[0]["speaker_mode"], gpu.submits[0]["speaker_count"]), (None, None))
+        article = self.refresh()
+        self.assertEqual((article.status, article.speaker_count), (ArticleStatus.READY, 1))
+        self.assertEqual(gpu.capability_calls, 0)
 
-    def test_only_one_speaker_can_be_declared_for_now(self):
-        for value in ("2", "1,2", "甲,乙", "0", ""):
+    def test_two_or_more_is_a_fixed_count(self):
+        for count in (2, 3, 20):
+            with self.subTest(count=count):
+                Article.objects.all().delete()
+                _, _, gpu, _ = self.run_cmd(ZOO_URL, "--speakers", str(count),
+                                            gpu=Gpu(result=diarized_result(ZOO, requested=count)))
+                self.assertEqual((gpu.submits[0]["speaker_mode"], gpu.submits[0]["speaker_count"]),
+                                 ("diarize", count))
+                self.assertEqual(self.refresh().speaker_count, count)
+
+    def test_a_number_outside_one_to_twenty_or_not_a_plain_number_is_refused_before_anything_happens(self):
+        """舊：只接受 1。新：1～20 的整數；其餘一律在動手之前拒絕，連影片資料都不讀、GPU 客戶端都不建。"""
+        for value in ("0", "21", "100", "-1", "abc", "1,2", "甲,乙", "", " ", "1.5", "一", "１", "٣", "1_0", "+3",
+                      "0x2", "٢", "9" * 5000):
+            with self.subTest(value=value[:20]):
+                message, _, _, _, fetch = self.fails(ZOO_URL, "--speakers", value)
+                self.assertIn("--speakers 要是 1～20 的整數", message)
+                self.assertFalse(Article.objects.exists())
+                fetch.assert_not_called()
+                self.last_client_class.assert_not_called()
+
+    def test_leading_zeros_and_spaces_around_a_plain_number_are_accepted(self):
+        for value in ("01", " 3 ", "020"):
             with self.subTest(value=value):
-                message, *_ = self.fails(ZOO_URL, "--speakers", value)
-                self.assertIn("--speakers 現在只接受 1", message)
-        self.assertFalse(Article.objects.exists())
+                out, *_ = self.run_cmd(ZOO_URL, "--speakers", value, "--dry-run")
+                self.assertIn("說話者：", out)
 
-    def test_a_dry_run_is_not_blocked(self):
-        out, _, gpu, fetch = self.run_cmd(ZOO_URL, "--dry-run")
-        fetch.assert_called_once()
-        self.assertFalse(Article.objects.exists())
-        self.assertEqual(gpu.submits, [])
+    def test_a_dry_run_makes_no_gpu_call_at_all_not_even_the_capability_probe(self):
+        """舊：dry-run 不受安全閥影響。新：多人模式要先問 GPU 能不能區分，但 dry-run 什麼都不問。"""
+        for extra in ([], ["--speakers", "3"], ["--speakers", "1"]):
+            with self.subTest(extra=extra):
+                out, _, gpu, fetch = self.run_cmd(ZOO_URL, *extra, "--dry-run")
+                fetch.assert_called_once()
+                self.assertFalse(Article.objects.exists())
+                self.assertEqual((gpu.submits, gpu.looked_up, gpu.capability_calls), ([], [], 0))
+                self.assertIn("說話者：", out)
 
-    def test_an_already_published_video_is_not_blocked(self):
+    def test_an_already_published_video_makes_no_gpu_call(self):
         self.article(status=ArticleStatus.READY)
-        out, *_ = self.run_cmd(ZOO_URL)
+        out, _, gpu, _ = self.run_cmd(ZOO_URL)
         self.assertIn("已發佈", out)
+        self.assertEqual((gpu.submits, gpu.looked_up, gpu.capability_calls), ([], [], 0))
 
-    def test_a_rerun_is_blocked_like_any_other_submission(self):
-        self.article(status=ArticleStatus.READY)
-        message, _, _, gpu, _ = self.fails(ZOO_URL, "--rerun")
-        self.assertIn("--speakers 1", message)
+    def test_a_failed_video_is_retried_in_the_mode_asked_for_and_the_gpu_is_asked_first(self):
+        """舊：FAILED 的影片不加 --speakers 1 也被擋。新：要送多人就先問 GPU，被擋下來時資料庫沒有動。"""
+        self.article(status=ArticleStatus.FAILED, error="x", attempts=3)
+        message, _, _, gpu, _ = self.fails(
+            ZOO_URL, gpu=Gpu(capabilities={"speaker_diarization": False, "reason": "模型還沒下載"}))
+        self.assertIn("模型還沒下載", message)
+        failed = self.refresh()
+        self.assertEqual((failed.status, failed.attempts, failed.error), (ArticleStatus.FAILED, 3, "x"))
         self.assertEqual(gpu.submits, [])
 
-    def test_a_failed_video_is_blocked_too(self):
-        self.article(status=ArticleStatus.FAILED, error="x")
-        message, *_ = self.fails(ZOO_URL)
-        self.assertIn("--speakers 1", message)
-        self.assertEqual(self.refresh().status, ArticleStatus.FAILED)
-
-    def test_waiting_for_somebody_elses_run_is_not_blocked(self):
+    def test_waiting_for_somebody_elses_run_asks_the_gpu_nothing(self):
         self.article(status=ArticleStatus.PROCESSING)
-        out, *_ = self.run_cmd(ZOO_URL)
+        out, _, gpu, _ = self.run_cmd(ZOO_URL)
         self.assertIn("另一個行程正在處理", out)
+        self.assertEqual((gpu.submits, gpu.capability_calls), ([], 0))
 
-    def test_in_a_batch_one_submission_blocks_all_of_it(self):
+    def test_the_gpu_is_asked_once_for_a_whole_batch_and_one_video_that_cannot_go_does_not_stop_the_others(self):
+        """舊：批次裡有一支要送出就整批擋下。新：每支各自成敗；GPU 能不能區分整批只問一次。"""
         self.article(status=ArticleStatus.READY)
-        self.fails(ZOO_URL, f"https://youtu.be/{STREAM}")
+        message, out, err, gpu, _ = self.fails(
+            ZOO_URL, f"https://youtu.be/{STREAM}", f"https://youtu.be/{'a' * 11}",
+            gpu=Gpu(capabilities={"speaker_diarization": False, "reason": "還沒準備好"}))
+        self.assertEqual(gpu.capability_calls, 1)
+        self.assertIn("2 支影片沒有成功", message)
         self.assertEqual(Article.objects.count(), 1)
+        self.assertIn("已發佈", out)
+        self.assertEqual(err.count("還沒準備好"), 2)
 
-    def test_the_declaration_is_recorded_nowhere_and_changes_nothing_else(self):
+    def test_single_speaker_mode_leaves_no_speaker_data_behind(self):
+        """舊：聲明本身不留下任何東西。新：單人影片沒有說話者、沒有區分摘要、每頁沒有重點。"""
         self.run_cmd(ZOO_URL, "--speakers", "1")
-        self.assertEqual(self.refresh().speakers, [])
+        article = self.refresh()
+        self.assertEqual((article.speakers, article.diarization), ([], None))
+        self.assertEqual([s.points for s in article.slides.all()], [[], []])
 
 
 class NewVideoTests(CommandTestCase):
@@ -309,8 +379,10 @@ class NewVideoTests(CommandTestCase):
                          ("Me at the zoo", "jawed", date(2005, 4, 24), 19, ""))
         self.assertEqual(article.attempts, 1)
         self.assertEqual(article.slides.count(), 2)
+        # 單人：說話者的兩個鍵都不帶（請求跟第一部分一模一樣）
         self.assertEqual(gpu.submits, [{"url": ZOO_URL, "detailed": True, "min_slides": 3, "max_slides": 6,
-                                        "speech_hint": "jawed。Me at the zoo"}])
+                                        "speech_hint": "jawed。Me at the zoo",
+                                        "speaker_mode": None, "speaker_count": None}])
         fetch.assert_called_once_with(ZOO)
 
     def test_the_output_prints_relative_paths_not_a_domain(self):

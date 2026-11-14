@@ -105,3 +105,42 @@ class ReadmeTests(SimpleTestCase):
         names = re.findall(r"\b([A-Z][A-Za-z]+)\b", tree)
         self.assertIn("ProfileChamber", names)
         self.assertEqual([n for n in set(names) if names.count(n) > 1], [])
+
+
+SPEC = ROOT / "docs" / "superpowers" / "specs" / "2026-10-31-youtube-videos-design.md"
+# 多人模式還沒做之前寫的句子：它們現在是錯的（預設就是多人影片，--speakers 1 才是例外）
+STALE_SPEAKERS_1 = (
+    "沒有它，指令拒絕",
+    "沒有 `--speakers 1` 的 `add_video` 一律停下來",
+    "沒有 `--speakers 1` 的指令現在會被拒絕",
+    "`add_video` 一律要加 `--speakers 1`",
+    "隨下一個 PR 交付",
+    "完成之前，有多個人講話的影片先不要加",
+)
+
+
+@unittest.skipUnless(SPEC.exists() and ROOT_README.exists() and NEWS_README.exists(),
+                     "沒有根目錄 README 或設計文件（服務的容器裡只有 services/news）")
+class YoutubeMultiSpeakerDocsTests(SimpleTestCase):
+    def test_no_document_still_says_speakers_1_is_required(self):
+        for path in (SPEC, ROOT_README, NEWS_README):
+            text = _read(path)
+            for stale in STALE_SPEAKERS_1:
+                self.assertNotIn(stale, text, f"{path.name}: 過時的句子「{stale}」")
+
+    def test_the_spec_has_the_second_part_and_its_decisions(self):
+        text = _read(SPEC)
+        self.assertIn("## 第二部分：影片裡不只一個人講話", text)
+        for number in range(19, 30):
+            self.assertRegex(text, rf"(?m)^\| {number} \| ", f"決策 #{number} 不見了")
+        for heading in ("### 部署與驗收", "### 驗證", "### 已知限制"):
+            self.assertIn(heading, text)
+
+    def test_the_default_example_command_is_the_multi_speaker_one(self):
+        """README 的「加入」範例是不帶 --speakers 的那一行（預設多人）；--speakers 1 是另外一行的例外。"""
+        lines = _read(ROOT_README).splitlines()
+        adds = [line for line in lines if line.startswith("sudo docker exec ly-news-api python manage.py add_video 'https://www.youtube.com/watch?v=jNQXAC9IVRw'")
+                and "--dry-run" not in line]
+        self.assertTrue(adds)
+        self.assertNotIn("--speakers", adds[0])
+        self.assertTrue(any("--speakers 1" in line for line in adds))

@@ -50,6 +50,15 @@
      放在深色底上太亮、會搶過數字本身；換成同色系、落在深色模式亮度帶
      （OKLCH L 0.48–0.67）裡的一階，對 surface 的對比仍大於 3:1。 */
   --c-viz-mark: #c98500;
+  /* 多人影片的說話者記號色（六種，只用在形狀與逐字稿左邊的細線）。文字永遠用 ink，
+     所以可讀性不靠色相；六個色對 surface-2 的對比都大於 6.9:1（非文字只要 3:1）。
+     色相刻意避開強調色（琥珀）與來源標籤的紅。 */
+  --c-spk-0: #6cb6ff;
+  --c-spk-1: #f08aa4;
+  --c-spk-2: #6fcf97;
+  --c-spk-3: #b69cff;
+  --c-spk-4: #4fd1c5;
+  --c-spk-5: #ff9b85;
 }
 
 @media (prefers-color-scheme: light) {
@@ -69,6 +78,13 @@
     --c-accent-ink: #7c5210;
     --c-danger: #b2402b;
     --c-viz-mark: #9a6512;
+    /* 淺色底用較深的一階，對 surface-2 的對比都大於 4.7:1 */
+    --c-spk-0: #1f6fb2;
+    --c-spk-1: #b8325a;
+    --c-spk-2: #1f7a45;
+    --c-spk-3: #6a49c4;
+    --c-spk-4: #0f766e;
+    --c-spk-5: #b4472f;
   }
 }
 
@@ -195,6 +211,120 @@ body {
   grid-template-columns: 3.6rem 1fr;
   gap: 0.75rem;
   padding: 0.2rem 0;
+}
+
+/* ------------------------------------------------------------------
+   說話者晶片（多人影片）
+
+   記號是「形狀＋文字」：形狀由 data-shape 決定、文字就是顯示名，顏色（data-tone）只是輔助，
+   所以色盲、單色螢幕、強制色彩模式下仍然分得出誰是誰。次要的聲音（minor）與後端代入的固定
+   字樣（unknown：無法判斷、未知發言者）畫成空心的形狀＋虛線框，一眼看得出是次要的。
+   晶片的大小只由字級決定，不載入任何圖片，所以不會造成版面跳動。
+   ------------------------------------------------------------------ */
+.spk,
+.spk-turn {
+  --spk: var(--c-spk-0);
+}
+.spk[data-tone="1"], .spk-turn[data-tone="1"] { --spk: var(--c-spk-1); }
+.spk[data-tone="2"], .spk-turn[data-tone="2"] { --spk: var(--c-spk-2); }
+.spk[data-tone="3"], .spk-turn[data-tone="3"] { --spk: var(--c-spk-3); }
+.spk[data-tone="4"], .spk-turn[data-tone="4"] { --spk: var(--c-spk-4); }
+.spk[data-tone="5"], .spk-turn[data-tone="5"] { --spk: var(--c-spk-5); }
+
+.spk {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  max-width: 100%;
+  min-width: 0;
+  padding: 0.08rem 0.65rem 0.08rem 0.5rem;
+  border: 1px solid var(--c-line);
+  border-radius: 999px;
+  background: var(--c-surface-2);
+  color: var(--c-ink);
+  font-size: 0.8rem;
+  font-weight: 500;
+  line-height: 1.5;
+  letter-spacing: 0.01em;
+}
+/* 自訂的名字最長 40 字、也可能是一長串拉丁字：要能斷行，不然手機會左右捲動 */
+.spk-name {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.spk-mark {
+  position: relative;
+  flex: none;
+  width: 0.7rem;
+  height: 0.7rem;
+  background: var(--spk);
+}
+.spk-mark::after {
+  content: none;
+  position: absolute;
+  inset: 2px;
+  background: var(--c-surface-2);
+}
+.spk[data-shape="circle"] .spk-mark,
+.spk[data-shape="circle"] .spk-mark::after {
+  clip-path: circle(50%);
+}
+.spk[data-shape="square"] .spk-mark,
+.spk[data-shape="square"] .spk-mark::after {
+  clip-path: inset(8% round 2px);
+}
+.spk[data-shape="triangle"] .spk-mark,
+.spk[data-shape="triangle"] .spk-mark::after {
+  clip-path: polygon(50% 6%, 96% 90%, 4% 90%);
+}
+.spk[data-shape="diamond"] .spk-mark,
+.spk[data-shape="diamond"] .spk-mark::after {
+  clip-path: polygon(50% 0, 100% 50%, 50% 100%, 0 50%);
+}
+.spk[data-shape="hexagon"] .spk-mark,
+.spk[data-shape="hexagon"] .spk-mark::after {
+  clip-path: polygon(25% 5%, 75% 5%, 100% 50%, 75% 95%, 25% 95%, 0 50%);
+}
+.spk[data-shape="pentagon"] .spk-mark,
+.spk[data-shape="pentagon"] .spk-mark::after {
+  clip-path: polygon(50% 2%, 98% 38%, 80% 96%, 20% 96%, 2% 38%);
+}
+/* 次要的聲音與代入的固定字樣：虛線框、空心形狀、中性色（放在色調規則後面，同權重時後寫的贏） */
+.spk[data-kind="minor"],
+.spk[data-kind="unknown"] {
+  --spk: var(--c-muted);
+  border-style: dashed;
+  color: var(--c-ink-2);
+}
+.spk[data-kind="minor"] .spk-mark::after,
+.spk[data-kind="unknown"] .spk-mark::after {
+  content: "";
+}
+
+/* 逐字稿裡同一位說話者連續的行：一塊，左邊一條細線（顏色同記號，輔助用），晶片只在最上面一次 */
+.spk-turn {
+  margin: 0.1rem 0 0.9rem;
+  padding-left: 0.75rem;
+  border-left: 2px solid var(--spk);
+}
+.spk-turn[data-kind="minor"],
+.spk-turn[data-kind="unknown"],
+.spk-turn[data-kind="none"] {
+  border-left-style: dashed;
+  border-left-color: var(--c-line);
+}
+.spk-turn-head {
+  margin: 0 0 0.1rem;
+  line-height: 1.6;
+}
+
+@media (forced-colors: active) {
+  .spk-mark {
+    background: CanvasText;
+  }
+  .spk-mark::after {
+    background: Canvas;
+  }
 }
 
 details > summary {

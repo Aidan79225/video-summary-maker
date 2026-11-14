@@ -1,5 +1,6 @@
 import type {
   ApiError,
+  ArticleCard,
   ArticleDetail,
   ArticleList,
   ArticleQuery,
@@ -22,6 +23,14 @@ import type {
   TopicShare,
 } from './types';
 import { isVideoSource, toSource } from './sources';
+import {
+  cardParticipantCount,
+  deepScrub,
+  normalizeDiarization,
+  normalizeSlides,
+  normalizeSpeakers,
+  participantCount,
+} from './speakers';
 import { dropUnverifiedAlignment, fixtureChamberBlock, fixtureRecords, normalizeRecords } from './records';
 import { ANY_TOPIC, TOPIC_AREAS, TOPIC_MIN_ACCURACY, TOPIC_MIN_LABELS, topicOrder } from './topics';
 import { FOLLOWUP_ANCHOR, FOLLOWUP_BLOCK, normalizeFollowupBlock } from './followups';
@@ -270,14 +279,17 @@ function inSourceScope(a: FixtureArticle, source?: string): boolean {
 }
 
 function toCard(a: FixtureArticle) {
-  const { source_note, transcript_text, slides, brief, session_id, topic, ...card } = a;
+  const { source_note, transcript_text, slides, brief, session_id, topic, speakers, diarization, ...card } = a;
   void source_note;
   void transcript_text;
   void slides;
   void brief;
   void session_id;
   void topic;
-  return card;
+  void diarization;
+  // 列表卡片不帶說話者的明細，只帶參與者人數（多人影片才有；沒有就不加這個鍵，卡片跟以前一樣）
+  const participants = participantCount(normalizeSpeakers(speakers));
+  return participants > 0 ? { ...card, participant_count: participants } : card;
 }
 
 /** 聯合質詢的講者欄位是「甲、乙」；跟後端的 _joined_q 一樣逐一比對，不用 includes（「王立」會誤中「王立任」） */
@@ -336,6 +348,38 @@ export function normalizeBrief(raw: unknown): Brief | null {
       .map((a) => ({ request: str(a.request), deadline: str(a.deadline), response: str(a.response) }))
       .filter((a) => a.request),
   };
+}
+
+/**
+ * 文章詳情，不管來自假資料還是真的 API，都走這一條：
+ *
+ * - 每個字串先清掉殘留的 [[Sn]]（後端該代換的沒代換時的最後一道，原始佔位符到不了頁面）；
+ * - speakers、diarization、slides[].points 補成可以安全 render 的形狀。舊的 API 根本沒有
+ *   這三樣、壞掉的型別也當作沒有——頁面照舊的版面 render，不爆。
+ *
+ * 議會文章與單人影片走完這條路沒有任何差別：speakers 空、diarization null、points 空。
+ */
+export function normalizeArticleDetail(raw: ArticleDetail): ArticleDetail {
+  const d = deepScrub(raw);
+  const speakers = normalizeSpeakers((d as { speakers?: unknown }).speakers);
+  return {
+    ...d,
+    slides: normalizeSlides(d.slides, speakers),
+    transcript_text: typeof d.transcript_text === 'string' ? d.transcript_text : '',
+    brief: normalizeBrief(d.brief),
+    speakers,
+    diarization: normalizeDiarization((d as { diarization?: unknown }).diarization),
+  };
+}
+
+/**
+ * 列表的一張卡片：標題、導言等字串清掉殘留的佔位符；participant_count 不是正整數就拿掉。
+ * 議會的卡片沒有這個欄位，原樣回傳（只有字串過了一遍清除）。
+ */
+function normalizeCard(raw: ArticleCard): ArticleCard {
+  const { participant_count, ...rest } = deepScrub(raw);
+  const n = cardParticipantCount(participant_count);
+  return n === undefined ? rest : { ...rest, participant_count: n };
 }
 
 function fixtureList(query: ArticleQuery): ArticleList {
@@ -691,7 +735,9 @@ export async function getArticles(query: ArticleQuery = {}): Promise<Result<Arti
       page: Number(d.page) || 1,
       page_size: Number(d.page_size) || 12,
       pages: Number(d.pages) || 1,
-      items: Array.isArray(d.items) ? d.items : [],
+      items: Array.isArray(d.items)
+        ? d.items.filter((x) => x && typeof x === 'object').map(normalizeCard)
+        : [],
     },
   };
 }
@@ -705,7 +751,7 @@ export async function getArticle(slug: string): Promise<Result<ArticleDetail>> {
         error: { kind: 'notfound', status: 404, message: '假資料裡沒有這一篇' },
       };
     }
-    return { ok: true, data: { ...found, brief: normalizeBrief(found.brief) } };
+    return { ok: true, data: normalizeArticleDetail(found) };
   }
 
   const res = await getJson<ArticleDetail>(`/api/articles/${encodeURIComponent(slug)}`);
@@ -715,15 +761,7 @@ export async function getArticle(slug: string): Promise<Result<ArticleDetail>> {
   if (!d || typeof d.slug !== 'string') {
     return { ok: false, error: { kind: 'parse', message: '文章資料不完整' } };
   }
-  return {
-    ok: true,
-    data: {
-      ...d,
-      slides: Array.isArray(d.slides) ? d.slides : [],
-      transcript_text: typeof d.transcript_text === 'string' ? d.transcript_text : '',
-      brief: normalizeBrief(d.brief),
-    },
-  };
+  return { ok: true, data: normalizeArticleDetail(d) };
 }
 
 export async function getParties(source?: string): Promise<Result<PartyList>> {

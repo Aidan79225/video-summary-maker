@@ -9,6 +9,8 @@ import { formatDateWithWeekday, humanDuration, mmss } from '../../lib/format';
 import { articleTitle, isVideoSource, sourceSiteName } from '../../lib/sources';
 import SourceBadge from '../../components/SourceBadge.astro';
 import PartyBadge from '../../components/PartyBadge.astro';
+import SpeakerChip from '../../components/SpeakerChip.astro';
+import { basisLabel, buildCast, diarizationItems, markOf, NEUTRAL_NOTE } from '../../lib/speakers';
 
 const slug = String(Astro.params.slug ?? '');
 const res = slug ? await getArticle(slug) : null;
@@ -34,6 +36,16 @@ if (video) {
   });
 }
 if (article?.source_note) notes.push({ text: article.source_note });
+
+// 多人影片（用聲音區分說話者）：出場名單與辨識說明。只有影片才有；議會與單人影片
+// 的 speakers 是空的、diarization 是 null，頁面一個字都不變。
+// 說話者由網站「只顯示、不推測」——名字與標籤都是後端代好的，沒有人確認過的名字不會出現。
+const cast = article && video ? buildCast(article.speakers) : undefined;
+const multi = !!cast && cast.members.length > 0;
+const diarization = article && video ? article.diarization : null;
+const diarizationNotes = diarizationItems(diarization);
+// 有出場名單、或後端有送辨識結果時，才顯示那一句固定的提醒
+const showDiarization = multi || !!diarization;
 ---
 
 <Base
@@ -65,7 +77,7 @@ if (article?.source_note) notes.push({ text: article.source_note });
               href={`/speaker/${encodeURIComponent(article.speaker)}?source=${article.source}`}
               class="lift rounded-full bg-accent-soft px-3 py-1 text-[0.82rem] font-medium wrap-anywhere text-accent-ink"
             >
-              {article.speaker}
+              {multi && <span data-channel-label class="mr-1.5 text-[0.75rem] font-normal tracking-wider">頻道</span>}{article.speaker}
             </a>
             <PartyBadge party={article.party} />
             <SourceBadge source={article.source} />
@@ -154,6 +166,78 @@ if (article?.source_note) notes.push({ text: article.source_note });
               </span>
             </p>
           ))}
+
+          {/* 出場：這支影片裡區分出來的說話者。頻道（上傳者）是另一回事，只在最上面那顆。
+              這裡不連到 /speaker/：「發言者 A」不是人，編輯設的名字也沒有名冊可以對 */}
+          {
+            multi && cast && (
+              <section aria-labelledby="cast-h" class="mt-5 rounded-lg border border-line bg-surface px-4 py-4">
+                <h2 id="cast-h" class="text-[0.7rem] tracking-[0.2em] text-muted uppercase">
+                  出場
+                </h2>
+                <ul data-cast class="mt-3 space-y-2.5">
+                  {cast.members.map((m) => (
+                    <li
+                      data-cast-item={m.ids[0]}
+                      data-kind={m.kind}
+                      data-basis={m.basis}
+                      class="flex flex-wrap items-center gap-x-2.5 gap-y-1.5"
+                    >
+                      <SpeakerChip mark={markOf(m, m.display)} />
+                      {m.role && <span class="text-[0.82rem] text-ink-2">{m.role}</span>}
+                      <span
+                        data-basis-chip
+                        class:list={[
+                          'rounded-full border px-2 py-0.5 text-[0.7rem] leading-snug',
+                          m.basis === 'operator' ? 'border-accent/50 text-accent-ink' : 'border-line text-muted',
+                        ]}
+                      >
+                        {basisLabel(m.basis)}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              </section>
+            )
+          }
+
+          {/* 辨識說明：固定的一句提醒；狀態是 warn 時，每個警告碼再加一句白話。不顯示任何數字 */}
+          {
+            showDiarization && (
+              <section
+                role="note"
+                aria-label="說話者辨識說明"
+                data-diarization={diarization ? diarization.status : 'none'}
+                class:list={[
+                  'mt-3 flex items-start gap-2.5 rounded-lg border-l-2 bg-surface px-4 py-3 text-[0.8rem] leading-relaxed text-muted',
+                  diarizationNotes.length > 0 ? 'border-accent' : 'border-accent/50',
+                ]}
+              >
+                <svg
+                  viewBox="0 0 24 24"
+                  class="mt-0.5 h-4 w-4 shrink-0 text-accent/80"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.7"
+                  aria-hidden="true"
+                >
+                  <circle cx="12" cy="12" r="9" />
+                  <path d="M12 11v5" stroke-linecap="round" />
+                  <circle cx="12" cy="7.8" r="0.9" fill="currentColor" stroke="none" />
+                </svg>
+                <div class="min-w-0">
+                  <p data-neutral-note>{NEUTRAL_NOTE}</p>
+                  {diarizationNotes.length > 0 && (
+                    <ul data-warnings class="mt-2 list-disc space-y-1 pl-5 text-ink-2">
+                      {diarizationNotes.map((w) => (
+                        <li data-warning={w.code}>{w.text}</li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              </section>
+            )
+          }
         </header>
 
         <!-- 逐段內容：完整敘述預設收合，這一列可以一次展開 -->
@@ -180,6 +264,7 @@ if (article?.source_note) notes.push({ text: article.source_note });
                 source={article.source}
                 order={i + 1}
                 total={slides.length}
+                cast={cast}
               />
             ))}
           </div>
@@ -194,7 +279,7 @@ if (article?.source_note) notes.push({ text: article.source_note });
         )}
 
         <!-- 完整逐字稿 -->
-        <Transcript text={article.transcript_text} sourceNote={article.source_note} />
+        <Transcript text={article.transcript_text} sourceNote={article.source_note} cast={cast} />
 
         <!-- 後續導覽 -->
         <nav class="mt-12 flex flex-wrap gap-3 border-t border-line-soft pt-8 text-sm">

@@ -21,12 +21,14 @@ from django.db.models import Count, F, Q, QuerySet
 from django.utils import timezone
 
 from .followups import forget_article
-from .gpu_client import GpuApiClient, GpuApiError, JobField, JobFailed, JobStatus
+from .gpu_client import GpuApiClient, GpuApiError, JobField, JobFailed, JobStatus, SpeakerMode
 from .ivod_source import IvodClip, SourceUnavailable
 from .law_source import LawSource, LawUnavailable
 from .members_sync import link_article
 from .models import COUNCIL_SOURCES, Article, ArticleSource, ArticleStatus, Slide, Topic
 from .profiles import attach_session
+from .speaker_result import (SlideResult, check_single_result, check_speaker_result, clean_diarization,  # noqa: F401
+                             clean_points, clean_speakers, requested_speaker_count, with_pi_fields)
 from .youtube_source import (canonical_url, clean_speaker, clean_text, is_video_id, ivod_id_for, placeholder_title,
                              slide_range, video_id_from_ivod_id)
 
@@ -201,7 +203,7 @@ def _upsert(clip: IvodClip, day: date) -> tuple[Article, bool]:
 
 
 def register_video(video_id: str, *, title: str, speaker: str, day: date,
-                   duration_seconds: int = 0) -> tuple[Article, bool]:
+                   duration_seconds: int = 0, speaker_count: int | None = None) -> tuple[Article, bool]:
     """登記一支手動加入的 YouTube 影片（add_video）。回傳 (文章, 這次是不是新建的)。
 
     跟 _upsert 刻意分開：影片不是議會的片段。來源明確寫成 youtube；`meeting` 一律留空——非空的
@@ -211,6 +213,9 @@ def register_video(video_id: str, *, title: str, speaker: str, day: date,
     ivod_id 是 yt-<11 碼影片 id>，slug 是 <日期>-yt-<id>，ivod_url 一律存正規網址：同一支影片
     用什麼寫法貼都是同一篇，GPU 的檢查點（以網址為鍵）正規化之後重試才接得回去。已經存在的
     不動——標題、講者、日期都留著原樣，已完成的也不會被打回待處理。
+
+    speaker_count：None＝預設的多人模式、人數由 GPU 自動判斷；1＝操作者聲明這支影片只有一個人（跳過
+    區分）；2 以上＝指定人數。已經存在的影片不改（要改人數用 add_video --rerun --speakers N）。
     """
     if not is_video_id(video_id):
         raise ValueError(f"不是 11 碼的影片 id：{video_id[:40]!r}")
@@ -228,6 +233,7 @@ def register_video(video_id: str, *, title: str, speaker: str, day: date,
             "ivod_url": canonical_url(video_id),
             "source": ArticleSource.YOUTUBE,
             "status": ArticleStatus.PENDING,
+            "speaker_count": speaker_count,
         },
     )
 
@@ -514,8 +520,15 @@ def _resume_or_submit(article: Article, client: GpuApiClient, timeout: float,
     if article.source == ArticleSource.YOUTUBE:
         # GPU 預設要 8～15 頁：19 秒的影片只產得出 3 頁，會因「少於下限」失敗。依長度算
         low, high = slides if slides is not None else slide_range(article.duration_seconds)
-        job_id = client.submit(article.ivod_url, detailed=True, min_slides=low, max_slides=high,
-                               speech_hint=speech_hint_for(article))
+        if wants_diarization(article):
+            # 預設：多人區分。人數只有指定 2 位以上才送，沒指定就是 None（GPU 自動判斷）
+            job_id = client.submit(article.ivod_url, detailed=True, min_slides=low, max_slides=high,
+                                   speech_hint=speech_hint_for(article), speaker_mode=SpeakerMode.DIARIZE,
+                                   speaker_count=requested_speaker_count(article))
+        else:
+            # --speakers 1：跟第一部分一模一樣的單人請求，不帶任何說話者的鍵
+            job_id = client.submit(article.ivod_url, detailed=True, min_slides=low, max_slides=high,
+                                   speech_hint=speech_hint_for(article))
     else:
         job_id = client.submit(article.ivod_url, detailed=True, speech_hint=speech_hint_for(article))
     article.gpu_job_id = job_id
@@ -524,6 +537,14 @@ def _resume_or_submit(article: Article, client: GpuApiClient, timeout: float,
         raise _deleted(article)
     logger.info("文章 %s 已送出，工作 %s", article.ivod_id, job_id)
     return job_id
+
+
+def wants_diarization(article: Article) -> bool:
+    """這支影片要不要做多人說話者區分：YouTube 影片除了操作者聲明單人（speaker_count == 1）以外，都要。
+
+    議會的來源永遠不要：一個人質詢，沒有「誰說的」的問題。
+    """
+    return article.source == ArticleSource.YOUTUBE and article.speaker_count != 1
 
 
 def _resumable_job(article: Article, client: GpuApiClient, timeout: float,
@@ -583,7 +604,19 @@ def save_result(article: Article, payload: dict) -> Article:
     會 INSERT 同一個 pk，把下架的影片連同新的截圖寫回來。所以在交易裡、任何寫入之前先確認那一列還在，
     不在就丟 ArticleDeleted、什麼都不寫（SQLite 用 IMMEDIATE 交易，交易一開始就拿了寫入鎖，確認之後
     別的行程刪不了這一列）。議會文章維持原樣。
+
+    YouTube 影片的說話者：多人模式（預設）先過 check_speaker_result——比下架的檢查還早、在任何寫入之前：
+    不合契約就丟 JobFailed，文章不發佈、舊內容（重跑時）原封不動。單人模式（--speakers 1）的結果不該
+    長得像多人結果（check_single_result）。通過之後存的是清理過的版本，而且 speakers、diarization 與每一段的
+    points 一律重寫（包括空的）：重跑時舊的說話者清單不能留在新的段落旁邊。操作者取的名字不帶過去——
+    重跑之後編號可能全變，把舊名字掛到新編號上等於安錯人。
     """
+    checked = None
+    if article.source == ArticleSource.YOUTUBE:
+        if wants_diarization(article):
+            checked = check_speaker_result(article, payload)
+        else:
+            check_single_result(payload)
     if _vanished(article):
         raise _deleted(article)
     # 用欄位自己的 storage 而不是全域的 default_storage：override_settings
@@ -604,8 +637,16 @@ def save_result(article: Article, payload: dict) -> Article:
             title = clean_text(title) or article.title
         article.title = title
     article.source_note = payload.get(DeckField.SOURCE_NOTE) or ""
-    article.transcript_text = payload.get(DeckField.TRANSCRIPT) or ""
-    article.brief = clean_brief(payload.get(DeckField.BRIEF))
+    if checked is None:
+        article.transcript_text = payload.get(DeckField.TRANSCRIPT) or ""
+        article.brief = clean_brief(payload.get(DeckField.BRIEF))
+    else:
+        # 多人模式沒有摘要卡：摘要卡的「要求與回應」不分說話者，會把主持人的前提寫成來賓的數字
+        article.transcript_text = checked.transcript_text
+        article.brief = None
+    if article.source == ArticleSource.YOUTUBE:
+        article.speakers = with_pi_fields(checked.speakers) if checked is not None else []
+        article.diarization = checked.diarization if checked is not None else None
     article.status = ArticleStatus.READY
     article.error = ""
     # 成品已經落地，那個工作 id 沒有用了；留著只會讓下一輪接回一份
@@ -615,7 +656,7 @@ def save_result(article: Article, payload: dict) -> Article:
     article.save()
 
     for position, raw in enumerate(payload.get(DeckField.SLIDES) or [], start=1):
-        _save_slide(article, raw, folder, position)
+        _save_slide(article, raw, folder, position, checked.slides[position - 1] if checked is not None else None)
 
     # 交易成功之後才刪舊檔。失敗的話什麼都沒動，舊成品原封不動還在。
     transaction.on_commit(lambda: _delete_files(old_files))
@@ -730,19 +771,24 @@ def _remove(storage: Storage, name: str, report: RemovalReport) -> None:
         logger.warning("下架時刪不掉 %s：%s", name, e)
 
 
-def _save_slide(article: Article, raw: dict, folder: str, index: int) -> None:
+def _save_slide(article: Article, raw: dict, folder: str, index: int,
+                checked: SlideResult | None = None) -> None:
     """index 用迴圈位置，不用 payload 裡的值。
 
     上游若少給或給重複的 index，兩筆都會變成 0 而撞上 unique 約束，整篇
     落地失敗。位置一定是唯一且連續的。
+
+    checked：多人影片這一頁清理過的條列、完整敘述與重點（check_speaker_result 的結果）；有它就只存它，
+    不再讀 raw 裡的同名欄位。沒有（議會、單人影片）就跟以前一樣，points 是空清單。
     """
     slide = Slide(
         article=article,
         index=index,
-        title=str(raw.get(SlideField.TITLE) or ""),
-        bullets=[str(b) for b in (raw.get(SlideField.BULLETS) or [])],
-        detail=str(raw.get(SlideField.DETAIL) or ""),
+        title=checked.title if checked is not None else str(raw.get(SlideField.TITLE) or ""),
+        bullets=list(checked.bullets) if checked is not None else [str(b) for b in (raw.get(SlideField.BULLETS) or [])],
+        detail=checked.detail if checked is not None else str(raw.get(SlideField.DETAIL) or ""),
         timestamp=float(raw.get(SlideField.TIMESTAMP) or 0.0),
+        points=list(checked.points) if checked is not None else [],
     )
     encoded = raw.get(SlideField.IMAGE)
     if encoded:
