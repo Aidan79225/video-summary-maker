@@ -29,7 +29,6 @@ import math
 import os
 import re
 import shutil
-import subprocess
 import sys
 import tempfile
 import time
@@ -48,12 +47,14 @@ from slidebox.domain.entities import (
 )
 from slidebox.domain.errors import (
     AttributionUnreliable,
+    AudioCutFailed,
     DiarizationUnavailable,
     NoSubtitlesAvailable,
     OperationCancelled,
     SpeechRecognitionFailed,
 )
 from slidebox.domain.ports import AudioGateway, SpeechDiarizer, WordTranscriber
+from slidebox.infrastructure.audio_cutter import ffmpeg_cut
 from slidebox.usecases.speakers import (
     WARN_COUNT_MISMATCH,
     WARN_HIGH_UNASSIGNED,
@@ -140,10 +141,6 @@ def _sweep(report: str) -> str:
     一行一行清是刻意的：沒有結尾的序列（OSC 一路吃到 BEL）只會吃到這一行的結尾，不會把後面的報告也吃掉。
     """
     return "\n".join(_strip_controls(line) for line in report.split("\n"))
-
-
-class AudioCutFailed(Exception):
-    """切出指定範圍的音訊失敗。"""
 
 
 class BadRange(Exception):
@@ -241,20 +238,6 @@ def peak_memory_bytes() -> int | None:
         return None
     peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
     return int(peak if sys.platform == "darwin" else peak * 1024)
-
-
-def ffmpeg_cut(src: str, dest: str, start: float, length: float | None, runner=subprocess.run,
-               ffmpeg_exe: str | None = None) -> None:
-    """把 src 從 start 秒起的 length 秒（None 是切到結尾）切成單聲道 16 kHz 的 wav（說話者區分與 Whisper 都吃這個）。"""
-    from slidebox.infrastructure.ffmpeg import ffmpeg_error, get_ffmpeg_exe
-
-    span = [] if length is None else ["-t", f"{length:.3f}"]
-    result = runner(
-        [ffmpeg_exe or get_ffmpeg_exe(), "-v", "error", "-y", "-ss", f"{start:.3f}", *span,
-         "-i", src, "-vn", "-ac", "1", "-ar", "16000", dest],
-        capture_output=True, text=True, encoding="utf-8", errors="replace")
-    if result.returncode != 0 or not os.path.exists(dest):
-        raise AudioCutFailed(f"切出指定範圍的音訊失敗：{ffmpeg_error(result.stderr) or '沒有輸出檔'}")
 
 
 @dataclass

@@ -1,6 +1,7 @@
 """領域實體：不依賴任何框架或 IO，純資料與規則。"""
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 
 
@@ -136,6 +137,10 @@ class DiarizationReport:
     # 模型提出的重點數，與通過程式檢查而留下來的重點數
     proposed_points: int = 0
     kept_points: int = 0
+    # 只處理影片的一段區間時，實際處理的起訖（原影片的秒數，終點已夾在影片長度內）；整支影片是 None。
+    # 兩個一起有或一起沒有。在 API 契約裡（只在有區間時才輸出，見 slidebox_api/payload.py）。
+    range_start: float | None = None
+    range_end: float | None = None
     # 下面四個只給記錄與 AttributionUnreliable 的訊息看，**不在 API 契約裡**（payload 不輸出）。
     # None = 這次沒有重新檢查（沿用上次存的對談重點），不是 0。
     # rescued_points：留下的點裡，改用「原話」代替模型改寫的點數（見 usecases/conversation.py 的混合條列）
@@ -189,11 +194,47 @@ class AudioClip:
 
     語音路徑是在字幕 gateway 失敗之後才走的，拿不到它原本提供的 metadata，
     所以由音訊 gateway 一併帶回。
+
+    offset：這個檔案是原影片的哪一秒開始切出來的（沒有切過就是 0）。聲音區分與語音辨識
+    量到的時間是從檔案開頭算起的，要加上它才是原影片的時間（見 usecases/time_range.py）。
     """
     path: str
     video_id: str
     title: str
     duration: float
+    offset: float = 0.0
+
+
+# 區間至少要這麼長才處理：更短的幾乎一定是打錯，而且這麼短的音訊，聲音區分與語音辨識
+# 什麼也做不出來。
+MIN_RANGE_SECONDS = 5.0
+
+
+def _range_number(value: object, name: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+        raise ValueError(f"區間的{name}要是有限的數字（秒），不是 {value!r}")
+    return float(value)
+
+
+@dataclass(frozen=True)
+class TimeRange:
+    """影片裡要處理的一段連續區間，單位是原影片的秒數。
+
+    start 是 0＝從頭開始；end 是 None＝一直到影片結尾。兩端都沒給的區間就是整支影片
+    （usecases.time_range.normalize_range 會把它當成沒有區間）。
+    """
+    start: float = 0.0
+    end: float | None = None
+
+    def __post_init__(self) -> None:
+        start = _range_number(self.start, "起點")
+        if start < 0:
+            raise ValueError(f"區間的起點不能是負的：{start:g}")
+        if self.end is not None:
+            end = _range_number(self.end, "終點")
+            if end - start < MIN_RANGE_SECONDS:
+                raise ValueError(
+                    f"區間的終點（{end:g}）要比起點（{start:g}）晚至少 {MIN_RANGE_SECONDS:g} 秒")
 
 
 @dataclass(frozen=True)

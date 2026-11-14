@@ -22,6 +22,14 @@ class SpeechRecognitionFailed(Exception):
     """
 
 
+class VideoRangeInvalid(Exception):
+    """要求的影片區間不能用（起點超過影片長度、夾完之後太短）：工作失敗，什麼都不發佈。訊息給操作者看。"""
+
+
+class AudioCutFailed(Exception):
+    """切出指定區間的音訊失敗（ffmpeg 出錯、沒有輸出檔、切出來的檔太短）：工作失敗，什麼都不發佈。"""
+
+
 class AttributionUnreliable(Exception):
     """多人模式沒辦法可靠地說出「誰說了什麼」：工作失敗，什麼都不發佈。
 
