@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import hashlib
+import os
 from types import SimpleNamespace
 
 from slidebox.domain.entities import (
@@ -39,6 +40,8 @@ FIXTURE = dialogue()
 URL = "https://www.youtube.com/watch?v=abcdefghijk"
 CLIP = AudioClip(path="OUT/.slidebox_audio_tmp/audio.webm", video_id="abcdefghijk",
                  title="少子化對談", duration=120.0)
+# 只處理一段區間（add_video --start/--end）的測試用：同一支影片，長度是半小時
+LONG_CLIP = AudioClip(path=CLIP.path, video_id=CLIP.video_id, title=CLIP.title, duration=1800.0)
 # 切成兩個窗（T0–T9、T10–T18）的字數預算；test_diarized_support 確認它真的切成這樣
 TWO_WINDOWS = 300
 SPLIT_AT = 10
@@ -208,6 +211,28 @@ class FakeConversation:
         return reply
 
 
+class FakeAudioCutter:
+    """比照 AudioCutter：不碰檔案，回傳「切好的」AudioClip——長度照區間算、夾在原音訊的長度內
+    （原音訊長度不明時，切到結尾的長度是 rest）。"""
+
+    def __init__(self, error: Exception | None = None, on_cut=None, rest: float = 0.0):
+        self.error, self._on_cut, self._rest = error, on_cut, rest
+        self.calls: list[tuple[str, float, float | None, str]] = []
+
+    def cut(self, clip, start, end, dest_dir):
+        self.calls.append((clip.path, start, end, dest_dir))
+        if self._on_cut is not None:
+            self._on_cut()
+        if self.error is not None:
+            raise self.error
+        if end is not None:
+            length = (min(end, clip.duration) if clip.duration else end) - start
+        else:
+            length = (clip.duration - start) if clip.duration else self._rest
+        return AudioClip(path=os.path.join(dest_dir, "range.wav"), video_id=clip.video_id, title=clip.title,
+                         duration=length, offset=start)
+
+
 class FakeMultiCheckpoints(FakeCheckpoints):
     """FakeCheckpoints 再加多人模式的三個階段，記下每一次存檔（stage 名稱）。"""
 
@@ -312,6 +337,7 @@ def make(chunk_chars: int = 6000, quote_only: bool = False, **overrides):
     quote_only 是安全模式（每個重點都顯示核對過的原話）。"""
     parts = SimpleNamespace(
         audio=FakeAudioGateway(clip=CLIP),
+        cutter=FakeAudioCutter(),
         diarizer=FakeDiarizer(),
         words=FakeWordTranscriber(),
         conversation=FakeConversation(),
@@ -332,17 +358,19 @@ def make(chunk_chars: int = 6000, quote_only: bool = False, **overrides):
         parts.subtitles, parts.summarizer, parts.sections, parts.frames, parts.renderer,
         audio=parts.audio, transcriber=None, diarizer=parts.diarizer, brief_writer=parts.brief_writer,
         rewriter=parts.rewriter, checkpoints=parts.checkpoints, word_transcriber=parts.words,
-        conversation=parts.conversation, chunk_chars=chunk_chars, quote_only=quote_only)
+        conversation=parts.conversation, chunk_chars=chunk_chars, quote_only=quote_only,
+        audio_cutter=parts.cutter)
     return parts
 
 
-def run(parts, cfg=None, speaker_count=None, speech_hint=None, progress=None, cancelled=None):
+def run(parts, cfg=None, speaker_count=None, speech_hint=None, progress=None, cancelled=None, time_range=None):
     return parts.usecase.execute(
         URL, cfg or settings(), progress, cancelled, speech_hint=speech_hint,
-        speaker_mode="diarize", speaker_count=speaker_count)
+        speaker_mode="diarize", speaker_count=speaker_count, time_range=time_range)
 
 
-__all__ = ["CLIP", "FIXTURE", "POOL", "SPEAKERS", "SPLIT_AT", "TURNS", "TWO_WINDOWS", "URL", "CancelDuring",
-           "FakeConversation", "FakeDiarizer", "FakeMultiCheckpoints", "FakeWordTranscriber", "FlakyRenderer",
+__all__ = ["CLIP", "FIXTURE", "LONG_CLIP", "POOL", "SPEAKERS", "SPLIT_AT", "TURNS", "TWO_WINDOWS", "URL",
+           "CancelDuring", "FakeAudioCutter", "FakeConversation", "FakeDiarizer", "FakeMultiCheckpoints",
+           "FakeWordTranscriber", "FlakyRenderer",
            "QuietAudio", "at", "crowd_parts", "good_points", "good_reply", "make", "run", "settings",
            "with_extra_voices"]
