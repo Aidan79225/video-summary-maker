@@ -10,14 +10,20 @@
  */
 import type { Brief } from '../lib/types';
 import { safeExternalUrl } from '../lib/api';
+import { isVideoSource } from '../lib/sources';
 
 interface Props {
   brief: Brief;
+  /** 文章的來源。影片沒有「要求與回應」這一塊，見下面 asks 的註解 */
+  source?: string;
 }
 
-const { brief } = Astro.props;
+const { brief, source } = Astro.props;
 const numbers = brief.key_numbers.slice(0, 4);
-const asks = brief.asks.slice(0, 4);
+// 「要求與回應」是議會質詢的版型：對象被要求、對象有沒有回應。「未定期限」與「未明確回應」是網站替沒有
+// 期限、沒有回應的要求補的字樣；影片裡沒有被質詢的對象，沒有人會回應，照樣印出來就等於說某個沒說是誰的人
+// 沒有回應。影片的要求（講者呼籲觀眾做的事）也不是質詢，所以整塊不顯示，其餘（一句話、關鍵數字）照舊。
+const asks = isVideoSource(source) ? [] : brief.asks.slice(0, 4);
 const cited = numbers.filter((n) => n.sources.length > 0);
 ---
 

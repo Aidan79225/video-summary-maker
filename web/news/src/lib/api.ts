@@ -21,7 +21,7 @@ import type {
   TopicClassifier,
   TopicShare,
 } from './types';
-import { toSource } from './sources';
+import { isVideoSource, toSource } from './sources';
 import { dropUnverifiedAlignment, fixtureChamberBlock, fixtureRecords, normalizeRecords } from './records';
 import { ANY_TOPIC, TOPIC_AREAS, TOPIC_MIN_ACCURACY, TOPIC_MIN_LABELS, topicOrder } from './topics';
 import { FOLLOWUP_ANCHOR, FOLLOWUP_BLOCK, normalizeFollowupBlock } from './followups';
@@ -261,6 +261,14 @@ function fixtureArticles(): FixtureArticle[] {
   return [...fx.articles].sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0));
 }
 
+/**
+ * 來源範圍，跟後端一樣：沒帶 source 時只回議會，要看影片得明確帶 source=youtube。
+ * 假資料沒有後端幫忙收斂，不在這裡擋的話，影片會冒到首頁與發言者、政黨的選單裡。
+ */
+function inSourceScope(a: FixtureArticle, source?: string): boolean {
+  return source ? a.source === source : !isVideoSource(a.source);
+}
+
 function toCard(a: FixtureArticle) {
   const { source_note, transcript_text, slides, brief, session_id, topic, ...card } = a;
   void source_note;
@@ -338,7 +346,7 @@ function fixtureList(query: ArticleQuery): ArticleList {
   const filtered = fixtureArticles().filter((a) => {
     if (query.date && a.date !== query.date) return false;
     if (query.speaker && !speakerNames(a.speaker).includes(query.speaker)) return false;
-    if (query.source && a.source !== query.source) return false;
+    if (!inSourceScope(a, query.source)) return false;
     // 下面三個跟後端的篩選同一套定義：側寫的「看這 N 篇」靠它們把 N 篇列出來
     if (query.session && a.session_id !== query.session) return false;
     // 單獨發言照 spec 的字面定義：講者欄位沒有「、」。不數 speakerNames 的人數——
@@ -722,7 +730,7 @@ export async function getParties(source?: string): Promise<Result<PartyList>> {
   if (isFixtureMode()) {
     const map = new Map<string, Party>();
     for (const a of fixtureArticles()) {
-      if (source && a.source !== source) continue;
+      if (!inSourceScope(a, source)) continue;
       for (const name of (a.party ?? '').split('、').map((s) => s.trim()).filter(Boolean)) {
         const cur = map.get(name);
         if (cur) {
@@ -744,7 +752,7 @@ export async function getSpeakers(source?: string): Promise<Result<SpeakerList>>
   if (isFixtureMode()) {
     const map = new Map<string, Speaker>();
     for (const a of fixtureArticles()) {
-      if (source && a.source !== source) continue;
+      if (!inSourceScope(a, source)) continue;
       // 跟後端一樣把聯合質詢拆開、每人各算一篇，發言者頁才找得到每一位的 person_id
       for (const name of speakerNames(a.speaker)) {
         const key = `${a.source}:${name}`;

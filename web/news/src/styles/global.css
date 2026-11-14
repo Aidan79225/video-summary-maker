@@ -104,6 +104,10 @@ body {
   letter-spacing: -0.01em;
   line-height: 1.35;
   text-wrap: balance;
+  /* YouTube 的標題與頻道名稱是任意的拉丁文字（網址、#標籤、很長的複合字）：沒有可以斷行的地方就會把
+     整頁撐寬（375px 的手機要左右捲動）。anywhere 連最小寬度（min-content）也算進去，格線與 flex 的項目才不會被撐開；
+     中文本來就可以在任何字之間斷行，不受影響 */
+  overflow-wrap: anywhere;
 }
 
 .prose-cn {
