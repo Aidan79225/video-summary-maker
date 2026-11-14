@@ -898,7 +898,7 @@ describe('正式站的路徑（假後端）', () => {
         card('c', { participant_count: -1 }),
         card('d', { participant_count: 2.5 }),
         card('e', {}),
-        card('f', { participant_count: 13 }),
+        card('f', { participant_count: 25 }),
         card('g', { participant_count: 1e21 }),
       ],
     };

@@ -357,12 +357,29 @@ class SpeakersTests(SimpleTestCase):
     def field(self, key, value, fragment=None):
         self.fails(lambda speakers: speakers[0].update({key: value}), fragment or f"speakers[0].{key}")
 
-    def test_the_list_has_between_one_and_twelve_speakers(self):
-        self.fails(lambda s: s.clear(), "1～12")
-        self.fails(lambda s: s.__init__(roster(8, 5)), "1～12")
-        # 上限剛好：8 位主要發言者（GPU 的上限）加 4 個其他聲音
-        payload = with_roster(good(), participants=8, minors=4)
-        self.assertEqual(len(check_speaker_result(video(), payload).speakers), 12)
+    def test_the_list_has_between_one_and_twenty_four_speakers(self):
+        self.fails(lambda s: s.clear(), "1～24")
+        self.fails(lambda s: s.__init__(roster(8, 17)), "1～24")
+        # 上限剛好：8 位主要發言者（GPU 的上限）加 16 個其他聲音
+        payload = with_roster(good(), participants=8, minors=16)
+        self.assertEqual(len(check_speaker_result(video(), payload).speakers), 24)
+
+    def test_a_crowd_of_seven_main_speakers_and_seven_other_voices_is_accepted_with_the_warnings_it_earns(self):
+        """第一次真的跑的那支影片（指定 14 人）：7 位主要發言者、7 個其他聲音，共 14 個。以前超過 12 個，整支被
+        拒絕；其他聲音不會被引用，所以收下，只是人數對不上、其他聲音很多這兩個警告要掛上去（Pi 自己算，不靠 GPU）。"""
+        payload = with_roster(good(), participants=7, minors=7)
+        payload["diarization"]["requested_speakers"] = 14
+        checked = check_speaker_result(video(14), payload)
+        self.assertEqual(len(checked.speakers), 14)
+        self.assertEqual(checked.diarization["status"], "warn")
+        self.assertEqual(checked.diarization["warnings"], ["count_mismatch", "many_minor"])
+
+    def test_more_main_speakers_than_eight_are_still_refused_when_the_total_is_far_below_the_limit(self):
+        """放寬的只有總數：主要發言者（可以被引用的人）還是最多 8 位。9 位主要發言者共 9 個聲音，離 24 個還很遠。"""
+        payload = with_roster(good(), participants=9, minors=0)
+        with self.assertRaises(JobFailed) as caught:
+            check_speaker_result(video(), payload)
+        self.assertIn("主要發言者有 9 位，超過上限 8 位", str(caught.exception))
 
     def test_it_must_be_a_list_of_objects(self):
         for junk in (None, "S1", {"S1": {}}, 5):

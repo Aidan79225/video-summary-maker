@@ -819,51 +819,73 @@ def test_more_than_eight_participants_fails():
     assert report(eight, summarize_speakers(eight)).found_speakers == 8
 
 
-def test_twelve_voices_in_all_are_published_and_a_thirteenth_fails():
-    """攔的 bug：只數主要發言者，8 位主要＋20 個其他聲音照樣過關，到新聞服務才因為
-    speakers 超過 12 個被擋下來——GPU 白白做完整支影片，還把不可靠的區分當成可以發佈。"""
-    twelve = balanced(2, 100.0, minors=10)
-    assert len(summarize_speakers(twelve)) == 12
-    out = report(twelve, summarize_speakers(twelve))
-    assert (out.found_speakers, out.minor_speakers) == (2, 10)
+def test_twenty_four_voices_in_all_are_published_and_a_twenty_fifth_fails():
+    """攔的 bug：只數主要發言者，8 位主要＋40 個其他聲音照樣過關，到新聞服務才因為
+    speakers 超過 24 個被擋下來——GPU 白白做完整支影片，還把不可靠的區分當成可以發佈。"""
+    twenty_four = balanced(2, 100.0, minors=22)
+    assert len(summarize_speakers(twenty_four)) == 24
+    out = report(twenty_four, summarize_speakers(twenty_four))
+    assert (out.found_speakers, out.minor_speakers) == (2, 22)
 
-    thirteen = balanced(2, 100.0, minors=11)
-    assert len(summarize_speakers(thirteen)) == 13
+    twenty_five = balanced(2, 100.0, minors=23)
+    assert len(summarize_speakers(twenty_five)) == 25
     with pytest.raises(AttributionUnreliable):
-        report(thirteen, summarize_speakers(thirteen))
+        report(twenty_five, summarize_speakers(twenty_five))
+
+
+def test_a_crowd_of_seven_main_speakers_and_seven_other_voices_is_published_with_warnings():
+    """第一次真的跑的那支影片（指定 14 人）：7 位主要發言者、7 個其他聲音，共 14 個。以前超過 12 個就整支
+    失敗；其他聲音不會被引用、事後也併得回去，所以照常發佈，只是網站上會掛警告。"""
+    turns = balanced(7, 100.0, minors=7)
+    assert len(summarize_speakers(turns)) == 14
+
+    out = report(turns, summarize_speakers(turns), requested_speakers=14)
+
+    assert (out.found_speakers, out.minor_speakers) == (7, 7)
+    assert out.status == "warn" and out.warnings == ("count_mismatch", "many_minor")
 
 
 def test_the_limit_counts_participants_and_other_voices_together():
-    eight_and_four = balanced(8, 100.0, minors=4)
-    assert report(eight_and_four, summarize_speakers(eight_and_four)).found_speakers == 8
-    eight_and_five = balanced(8, 100.0, minors=5)
-    with pytest.raises(AttributionUnreliable, match="13"):
-        report(eight_and_five, summarize_speakers(eight_and_five))
+    eight_and_sixteen = balanced(8, 100.0, minors=16)
+    assert report(eight_and_sixteen, summarize_speakers(eight_and_sixteen)).found_speakers == 8
+    eight_and_seventeen = balanced(8, 100.0, minors=17)
+    with pytest.raises(AttributionUnreliable, match="共 25 個"):
+        report(eight_and_seventeen, summarize_speakers(eight_and_seventeen))
 
 
 def test_the_limit_is_the_one_the_news_service_checks_before_it_saves():
-    assert speakers.MAX_PUBLISHED_SPEAKERS == 12
+    assert speakers.MAX_PUBLISHED_SPEAKERS == 24
+
+
+def test_the_limit_on_main_speakers_did_not_move_with_the_limit_on_all_voices():
+    """上限放寬的只有「其他聲音」那一邊：主要發言者（可以被引用的人）仍然是 8 位，再多就是聲音區分不可靠。
+    總數離上限還很遠（9 位主要＋0 個其他聲音）也一樣失敗。"""
+    assert speakers.MAX_PARTICIPANTS == 8
+    nine = balanced(9, 100.0, minors=0)
+    assert len(summarize_speakers(nine)) == 9 < speakers.MAX_PUBLISHED_SPEAKERS
+    with pytest.raises(AttributionUnreliable, match="找到 9 位主要發言者，超過上限 8 位"):
+        report(nine, summarize_speakers(nine))
 
 
 def test_the_message_for_too_many_voices_has_every_count_and_the_way_out():
-    turns = balanced(3, 100.0, minors=11)
+    turns = balanced(3, 100.0, minors=22)
 
     with pytest.raises(AttributionUnreliable) as raised:
         report(turns, summarize_speakers(turns))
 
     message = str(raised.value)
-    for needle in ("3 位主要發言者", "11 個其他聲音", "共 14 個", "上限 12 個", "--speakers N"):
+    for needle in ("3 位主要發言者", "22 個其他聲音", "共 25 個", "上限 24 個", "--speakers N"):
         assert needle in message, needle
 
 
 def test_when_a_count_was_already_given_the_message_does_not_tell_the_operator_to_give_one():
-    turns = balanced(3, 100.0, minors=11)
+    turns = balanced(3, 100.0, minors=22)
 
     with pytest.raises(AttributionUnreliable) as raised:
         report(turns, summarize_speakers(turns), requested_speakers=4)
 
     message = str(raised.value)
-    assert "已指定 4 人" in message and "共 14 個" in message and "--speakers N" not in message
+    assert "已指定 4 人" in message and "共 25 個" in message and "--speakers N" not in message
 
 
 def test_too_many_participants_is_still_reported_as_that_and_not_as_too_many_voices():
