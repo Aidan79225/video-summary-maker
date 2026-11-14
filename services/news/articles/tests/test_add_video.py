@@ -79,10 +79,11 @@ class Gpu:
         self._jobs.pop(job_id, None)
 
     def submit(self, url, detailed=True, min_slides=None, max_slides=None, speech_hint=None,
-               speaker_mode=None, speaker_count=None):
+               speaker_mode=None, speaker_count=None, range_start=None, range_end=None):
         self.submits.append({"url": url, "detailed": detailed, "min_slides": min_slides,
                              "max_slides": max_slides, "speech_hint": speech_hint,
-                             "speaker_mode": speaker_mode, "speaker_count": speaker_count})
+                             "speaker_mode": speaker_mode, "speaker_count": speaker_count,
+                             "range_start": range_start, "range_end": range_end})
         if isinstance(self._error, GpuApiError):
             raise self._error
         return f"job-{len(self.submits)}"
@@ -379,10 +380,11 @@ class NewVideoTests(CommandTestCase):
                          ("Me at the zoo", "jawed", date(2005, 4, 24), 19, ""))
         self.assertEqual(article.attempts, 1)
         self.assertEqual(article.slides.count(), 2)
-        # 單人：說話者的兩個鍵都不帶（請求跟第一部分一模一樣）
+        # 單人：說話者的兩個鍵與範圍的兩個鍵都不帶（請求跟第一部分一模一樣）
         self.assertEqual(gpu.submits, [{"url": ZOO_URL, "detailed": True, "min_slides": 3, "max_slides": 6,
                                         "speech_hint": "jawed。Me at the zoo",
-                                        "speaker_mode": None, "speaker_count": None}])
+                                        "speaker_mode": None, "speaker_count": None,
+                                        "range_start": None, "range_end": None}])
         fetch.assert_called_once_with(ZOO)
 
     def test_the_output_prints_relative_paths_not_a_domain(self):

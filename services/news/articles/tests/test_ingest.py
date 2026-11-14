@@ -127,7 +127,7 @@ class FakeClient:
         self._known_jobs.pop(job_id, None)
 
     def submit(self, url, detailed=True, min_slides=None, max_slides=None, speech_hint=None,
-               speaker_mode=None, speaker_count=None):
+               speaker_mode=None, speaker_count=None, range_start=None, range_end=None):
         self.submitted.append((url, detailed))
         self.hints = getattr(self, "hints", []) + [speech_hint]
         if isinstance(self._error, GpuApiError):

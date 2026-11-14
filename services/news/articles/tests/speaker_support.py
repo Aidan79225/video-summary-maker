@@ -18,6 +18,8 @@ CONTRACT = json.loads((Path(__file__).parent / "fixtures" / "speaker_contract_v1
 CONTRACT_VIDEO = CONTRACT["result"]["video_id"]
 # 契約 v1 的 /capabilities 回應：GPU 已經更新、可以區分說話者
 READY_CAPABILITIES = CONTRACT["capabilities"]
+# 同一份加上 video_range：GPU 認得 range_start／range_end（契約檔本身不動，範圍是之後才加的能力旗標）
+RANGE_CAPABILITIES = {**READY_CAPABILITIES, "video_range": True}
 
 
 def run_with_deadline(function, *args, seconds: float = 5.0):
@@ -73,6 +75,44 @@ def diarized_result(video_id: str = CONTRACT_VIDEO, requested: int | None = None
     payload = copy.deepcopy(CONTRACT["result"])
     payload.update(video_keys(video_id))
     payload["diarization"]["requested_speakers"] = requested
+    return payload
+
+
+def _clock(seconds: int) -> str:
+    """跟 GPU 逐字稿的寫法一樣：分鐘兩位起、不封頂。"""
+    return f"{seconds // 60:02d}:{seconds % 60:02d}"
+
+
+def _later(line: str, offset: int) -> str:
+    """逐字稿的一行「mm:ss [[Sn]]：…」，時間往後挪 offset 秒。"""
+    stamp, rest = line.split(" ", 1)
+    minutes, seconds = stamp.split(":")
+    return f"{_clock(int(minutes) * 60 + int(seconds) + offset)} {rest}"
+
+
+def ranged_result(video_id: str = CONTRACT_VIDEO, start: int = 600, end: int | None = 1500,
+                  requested: int | None = None) -> dict:
+    """契約範例的多人結果，換成「只處理影片的 start～end 這一段」的版本。
+
+    GPU 的規矩：聲音區分與語音辨識只聽剪下來的那一段，量到的時間從那一段的開頭算起，存檔之前把起點加回去——
+    結果裡的每一個時間（說話者首末、代表的話、重點、頁、逐字稿）都是原影片的秒數；diarization 回報實際處理的
+    區間（range_start、range_end）。契約範例的內容從 0 秒一直到約 709 秒，所以 end 至少要是 start + 710
+    才放得下（end 就是回報的終點，不是請求的：沒有給終點的話 GPU 回報影片結尾）。
+    """
+    payload = diarized_result(video_id, requested=requested)
+    for speaker in payload["speakers"]:
+        speaker["first_seen"] += start
+        speaker["last_seen"] += start
+        for sample in speaker["samples"]:
+            sample["start"] += start
+    payload["transcript_text"] = "\n".join(_later(line, start) for line in payload["transcript_text"].split("\n"))
+    for slide in payload["slides"]:
+        if slide.get("timestamp") is not None:
+            slide["timestamp"] += start
+        for point in slide["points"]:
+            point["start"] += start
+    payload["diarization"]["range_start"] = start
+    payload["diarization"]["range_end"] = end
     return payload
 
 
