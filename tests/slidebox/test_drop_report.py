@@ -6,12 +6,17 @@
 """
 from __future__ import annotations
 
+import os
 import re
+import subprocess
+import sys
 from collections import Counter
+from pathlib import Path
 
 import pytest
 
 from slidebox.domain.entities import RawPoint, RawSlide
+from slidebox.usecases import conversation
 from slidebox.usecases import diarized_pipeline as dp
 from slidebox.usecases import drop_report as report
 from slidebox.usecases.conversation import RESCUE_REFUSED, Allocation, DroppedPoint, Window, chunk_turns
@@ -39,12 +44,12 @@ def whole(turn: int, text: str) -> RawPoint:
 GOOD = (whole(0, "詢問今年的預算編列有沒有增加"), whole(1, "今年的預算大約增加了兩成左右"))
 
 
-def run(points, turns=TURNS, speakers=SPEAKERS, budget=10**6):
-    """用真的檢查跑一遍：每個窗每次問模型都得到同一份回應（一頁、這些點）。"""
+def run(points, turns=TURNS, speakers=SPEAKERS, budget=10**6, quote_only=False, replies=()):
+    """用真的檢查跑一遍：每個窗每次問模型都得到同一份回應（一頁、這些點）；replies 是依序回答前幾次呼叫的回應。"""
     reply = (RawSlide("預算", tuple(points)),)
     allocations = tuple(Allocation(w, 1, 3) for w in chunk_turns(turns, speakers, budget))
-    return dp.summarize_windows(FakeConversation(default=lambda call: reply), allocations, turns, speakers,
-                                lambda frac, status: None, lambda: None, lambda: False)
+    return dp.summarize_windows(FakeConversation(replies, default=lambda call: reply), allocations, turns, speakers,
+                                lambda frac, status: None, lambda: None, lambda: False, quote_only)
 
 
 def real_outcomes(*dropped_points: RawPoint, **kwargs):
@@ -89,7 +94,7 @@ def test_each_window_gets_a_line_with_its_turn_range_asks_counts_and_codes():
     lines = text_of(outcomes).splitlines()
 
     (line,) = [l for l in lines if l.startswith("  第 1/1 段")]
-    assert line.startswith("  第 1/1 段（T0–T4，問了 2 次）：提出 6、留下 2、丟掉 4：")
+    assert line.startswith("  第 1/1 段（T0–T4，問了 2 次，採用第 1 次）：提出 6、留下 2、丟掉 4：")
     assert "bad_quote 3" in line and "leading_pronoun_or_title 1" in line
     assert line.index("bad_quote 3") < line.index("leading_pronoun_or_title 1")     # 多的在前
 
@@ -100,6 +105,18 @@ def test_the_asks_are_left_out_when_the_outcome_does_not_know_them():
                                dropped=outcome.dropped, dropped_by_code=outcome.dropped_by_code)     # attempts 預設 0
 
     assert "  第 1/1 段（T0–T4）：提出 3、留下 2、丟掉 1：leading_pronoun_or_title 1" in text_of((outcome,))
+
+
+def test_a_window_asked_twice_says_which_of_the_answers_its_numbers_are_from():
+    """攔的 bug：第一次的結果比重問的好、用的是第一次，卻只寫「問了 2 次：提出…」，讀的人會當成是重問的結果，
+    看不出「模型有沒有聽進重試的提示」。"""
+    first = (RawSlide("預算", (*GOOD, PRONOUN, FIRST_PERSON, PARTIAL)),)             # 5 個丟 3 個：要重問
+    second = (RawSlide("預算", GOOD),)                                                # 全部通過
+
+    (outcome,) = run((), replies=(first, second))
+
+    assert (outcome.attempts, outcome.adopted) == (2, 2)
+    assert "  第 1/1 段（T0–T4，問了 2 次，採用第 2 次）：提出 2、留下 2、丟掉 0\n" in text_of((outcome,)) + "\n"
 
 
 def test_the_totals_add_up_all_the_windows_and_all_the_codes():
@@ -147,6 +164,40 @@ def test_the_reasons_quotes_did_not_match_are_counted_with_a_plain_description()
     assert "  absent 1：幾乎不在這一窗的逐字稿裡" in text
 
 
+AMBIGUOUS_TURNS = make_turns(("S1", LINES[0][1]), ("S2", LINES[1][1]), ("S1", "預算要先公開，成效也要公開。"),
+                             ("S2", "我同意預算要先公開，成效也要公開。"), ("S1", "好的，我們繼續下一題吧"))
+
+# （原因, 例子, 這份對談, 說明文字）：每一種 quote 對不上的原因都用真的檢查產生一次，說明文字寫死在這裡
+DESCRIBED_REASONS = [
+    pytest.param("other_voice", OTHER_VOICE, TURNS, "一字不差，但出自其他聲音或無法判斷的輪（不能引用）", id="other_voice"),
+    pytest.param("across_turns", RawPoint(0, "詢問預算", quote="請問今年的預算編列有沒有增加今年的預算大約增加了兩成"), TURNS,
+                 "接了相鄰的兩、三輪才湊得齊", id="across_turns"),
+    pytest.param("reordered", RawPoint(0, "詢問預算", quote="有沒有增加，請問今年的預算編列"), TURNS,
+                 "每一片都在同一輪裡，但順序和 quote 不同", id="reordered"),
+    pytest.param("near_verbatim", RawPoint(0, "詢問預算", quote="請問今年的預算編列有沒有增減"), TURNS,
+                 "照抄得差不多，只差幾個字（同音字、數字寫法、少數簡繁體字）", id="near_verbatim"),
+    pytest.param("partial", PARTIAL, TURNS, "只有一部分對得上（跳過子句、改寫）", id="partial"),
+    pytest.param("absent", ABSENT, TURNS, "幾乎不在這一窗的逐字稿裡（編造或整段改寫）", id="absent"),
+    pytest.param("empty", RawPoint(0, "談論今年預算", quote=""), TURNS, "quote 是空的", id="empty"),
+    pytest.param("quote_too_short", RawPoint(1, "談論今年預算增加的幅度", quote="預算大約"), TURNS,
+                 "quote 太短，認不出是哪一輪", id="quote_too_short"),
+    pytest.param("short_fragments", RawPoint(0, "詢問預算", quote="今年，預算，編列，增加"), TURNS,       # 片段依序都在 T0 裡
+                 "quote 由太短的片段拼成，認不出是哪一輪", id="short_fragments"),
+    pytest.param("ambiguous", RawPoint(4, "談論公開", quote="預算要先公開，成效也要公開"), AMBIGUOUS_TURNS,
+                 "好幾輪都有這段話，無法確定是哪一輪", id="ambiguous"),
+]
+
+
+@pytest.mark.parametrize(("kind", "point", "turns", "description"), DESCRIBED_REASONS)
+def test_every_reason_a_quote_did_not_match_is_described_in_plain_words(kind, point, turns, description):
+    """攔的 bug：說明文字被改掉、清空，或某種原因被歸到別的名字底下，統計裡就只剩一個讀不懂的英文代號。
+    每一種原因都用真的檢查產生一次，才知道檢查真的會產生它。"""
+    text = text_of(real_outcomes(point, turns=turns))
+
+    assert f"quote 對不上的原因（bad_quote 共 1 個）：\n  {kind} 1：{description}\n" in text + "\n"
+    assert f"bad_quote／{kind}]" in text
+
+
 def test_the_most_common_reason_comes_first():
     text = text_of(real_outcomes(PARTIAL, ABSENT, absent(1)))
 
@@ -181,7 +232,7 @@ def test_a_cited_turn_outside_the_window_cannot_be_explained_and_is_counted_as_u
 
     text = text_of((outcome,))
 
-    assert "  unknown 1：" in text and "[第 1 段 T999 bad_quote／unknown]" in text
+    assert "  unknown 1：引用的輪不在這一窗裡，無法分類" in text and "[第 1 段 T999 bad_quote／unknown]" in text
 
 
 # --- unsupported：為什麼不能改用原話 ---
@@ -271,6 +322,17 @@ def test_a_quote_spliced_from_two_turns_shows_both():
     assert "     逐字稿 T0 S1：" in text and "     逐字稿 T1 S2：" in text
 
 
+def test_a_quote_with_its_pieces_in_the_wrong_order_shows_the_turn_that_has_them():
+    """模型引用 T1，quote 其實是 T0 裡兩段話顛倒過來：要看的是有這兩段話的 T0，不是沒有這些話的 T1。"""
+    swapped = RawPoint(1, "詢問預算", quote="有沒有增加，請問今年的預算編列")
+
+    text = text_of(real_outcomes(swapped))
+
+    assert "[第 1 段 T1 bad_quote／reordered]" in text
+    assert "     逐字稿 T0 S1：「請問今年的預算編列有沒有增加」" in text
+    assert "它引用的" not in text
+
+
 def test_the_characters_the_transcript_never_used_are_listed_in_the_example():
     simplified = RawPoint(0, "詢問預算", quote="请问今年的预算编列有没有增加")
 
@@ -286,6 +348,95 @@ def test_an_example_of_another_code_shows_what_the_model_wrote_and_the_turn_it_c
     assert "     模型寫的重點：「他認為預算增加了兩成」" in text
     assert "     模型的 quote：「今年的預算大約增加了兩成左右」" in text
     assert "     它引用的 T1 S2：「今年的預算大約增加了兩成左右」" in text
+
+
+# --- 例子要讓人看得出「檢查是對著哪一輪做的、為什麼丟」---
+
+
+def test_an_example_shows_where_the_quote_really_is_when_the_model_cited_another_turn():
+    """攔的 bug：模型把問題的編號（T0）填在答案的 quote（T1）上是最常見的錯。檢查是對著 quote 所在的 T1 做的，
+    例子卻只顯示它引用的 T0——那一輪連數字都沒有，讀的人會以為檢查壞了。"""
+    text = text_of(real_outcomes(RawPoint(0, "預算增加了五成", quote=LINES[1][1])))
+
+    assert "[第 1 段 T0 number_mismatch]" in text
+    assert "     quote 所在的 T1 S2（模型填的是 T0）：「今年的預算大約增加了兩成左右」" in text
+    assert "它引用的" not in text
+
+
+def test_an_example_shows_the_checks_own_reason():
+    """攔的 bug：只有 unsupported 看得到原因；數字對不上是哪一個、否定寫反了、歸屬衝突是哪一輪，一個字都沒說，
+    「被檢查丟掉的是檢查太嚴還是模型亂寫」就沒辦法判斷。"""
+    outcomes = real_outcomes(RawPoint(0, "預算增加了五成", quote=LINES[1][1]))
+    (dropped,) = [d for o in outcomes for d in o.dropped]
+
+    text = text_of(outcomes)
+
+    assert f"     原因：{dropped.message}" in text
+    assert "數字「五成」不在被引用的那段話裡" in text
+
+
+def test_an_anchor_conflict_shows_the_turn_the_content_came_from_too():
+    text = text_of(real_outcomes(RawPoint(2, "預算大約增加了兩成左右", quote=LINES[3][1])))
+
+    assert "[第 1 段 T2 anchor_conflict]" in text
+    assert "     原因：重點的內容出自別輪發言（T1），與 quote 所在的 T3 不一致" in text
+    assert "     quote 所在的 T3 S2（模型填的是 T2）：「明年預計再增加一成左右而已」" in text
+    assert "     原因裡提到的 T1 S2：「今年的預算大約增加了兩成左右」" in text
+
+
+def test_a_turn_the_reason_mentions_is_not_shown_twice():
+    """數字對不上的原因結尾是（T1）：那就是 quote 所在的那一輪，已經顯示過了。"""
+    text = text_of(real_outcomes(RawPoint(0, "預算增加了五成", quote=LINES[1][1])))
+
+    assert "原因裡提到的" not in text
+
+
+def test_a_bad_quote_example_leaves_the_reason_to_the_breakdown():
+    """quote 對不上的原因已經分類、統計裡也說明了；例子不再把同一段話（還含模型的 quote）重複一遍。"""
+    text = text_of(real_outcomes(ABSENT))
+
+    assert "     原因：" not in text
+
+
+def test_an_ambiguous_quote_shows_every_turn_that_has_it():
+    """攔的 bug：好幾輪都有這段話，例子卻只顯示模型引用的那一輪（它根本沒有這段話），
+    讀起來像是模型編造；要看的是「哪幾輪」都有。"""
+    text = text_of(real_outcomes(RawPoint(4, "談論公開", quote="預算要先公開，成效也要公開"), turns=AMBIGUOUS_TURNS))
+
+    assert "[第 1 段 T4 bad_quote／ambiguous]" in text
+    assert "     逐字稿 T2 S1：「預算要先公開，成效也要公開。」" in text
+    assert "     逐字稿 T3 S2：「我同意預算要先公開，成效也要公開。」" in text
+    assert "它引用的" not in text
+
+
+def test_an_ambiguous_quote_held_by_many_turns_shows_three_and_counts_the_rest():
+    shared = "預算要先公開，成效也要公開。"
+    turns = make_turns(("S1", LINES[0][1]), ("S2", LINES[1][1]), *(("S1" if i % 2 else "S2", shared) for i in range(5)),
+                       ("S1", "好的，我們繼續下一題吧"))
+
+    text = text_of(real_outcomes(RawPoint(7, "談論公開", quote="預算要先公開，成效也要公開"), turns=turns))
+
+    shown = re.findall(r"^     逐字稿 (T\d+ S\d)：", text, re.MULTILINE)
+    assert shown == ["T2 S2", "T3 S1", "T4 S2"]                      # 五輪都有這段話，只顯示前三輪
+    assert "     （另外還有 2 輪也有這段話）" in text
+
+
+def test_a_too_short_quote_is_not_confused_with_a_too_short_text():
+    """攔的 bug：quote 太短與重點的文字太短都叫 too_short；窗的計數行（文字）和原因統計（quote）會被讀成同一件事。"""
+    short_text = RawPoint(1, "談預", quote=LINES[1][1])
+    short_quote = RawPoint(1, "談論今年預算增加的幅度", quote="預算大約")                # 找得到，但只有四個字
+
+    text = text_of(real_outcomes(short_text, short_quote))
+
+    assert "bad_quote 1、too_short 1" in text                          # 計數行的 too_short 是文字太短
+    assert "  quote_too_short 1：quote 太短，認不出是哪一輪" in text
+    assert "[第 1 段 T1 bad_quote／quote_too_short]" in text
+
+
+def test_no_reason_a_quote_did_not_match_shares_its_name_with_a_code_a_point_is_dropped_for():
+    codes = {value for name, value in vars(conversation).items() if name.isupper() and isinstance(value, str)}
+
+    assert not set(report._KIND_TEXT) & codes
 
 
 def test_examples_are_numbered_and_the_biggest_group_comes_first():
@@ -336,7 +487,7 @@ def test_a_long_quote_and_a_long_turn_are_clipped_around_the_part_that_matches()
     text = text_of(real_outcomes(point, turns=turns))
 
     line = next(l for l in text.splitlines() if l.strip().startswith("逐字稿 T2"))
-    assert line.startswith("     逐字稿 T2 S1（相同約 81%）：「…") and line.endswith("…」")
+    assert line.startswith("     逐字稿 T2 S1（相同約 88%）：「…") and line.endswith("…」")       # 17 個字要改兩個字
     assert "預算大約要三千億比去年多了兩成" in line and len(line) < 140
 
 
@@ -347,6 +498,94 @@ def test_a_very_long_quote_is_clipped():
 
     quote_line = next(l for l in text.splitlines() if "模型的 quote：" in l)
     assert quote_line.endswith("…」") and len(quote_line) < 100
+
+
+# --- 安全模式（只顯示原話）---
+
+QUOTE_ONLY_TURNS = make_turns(("S1", LINES[0][1]), ("S2", LINES[1][1]), ("S1", "他們今年的預算大約增加了兩成左右"),
+                              ("S2", LINES[3][1]), ("S3", LINES[4][1]))
+PRONOUN_QUOTE = RawPoint(2, "談論預算", quote="他們今年的預算大約增加了兩成左右")
+
+
+def quote_only_outcomes(*points):
+    return real_outcomes(*points, turns=QUOTE_ONLY_TURNS, quote_only=True)
+
+
+def test_in_quote_only_mode_the_reasons_a_found_quote_cannot_be_shown_are_listed():
+    """攔的 bug：安全模式下 quote 找得到卻不能直接顯示，是最常見的丟法；診斷只說「找得到」，
+    看不出是哪一條顯示規則（代名詞、太長、太短、複述…）擋下來的。"""
+    outcomes = quote_only_outcomes(PRONOUN_QUOTE)
+    assert [d.code for o in outcomes for d in o.dropped] == ["bad_quote"]            # 找得到，只是不能顯示
+
+    text = text_of(outcomes)
+
+    assert "  located 1：quote 本身找得到，但不能直接當重點顯示（只顯示原話的模式）" in text
+    assert "quote 不能直接當重點顯示的原因（bad_quote／located 共 1 個）：" in text
+    assert "  1 個：原話裡有「…」（代名詞、稱謂或逐字稿裡用來稱呼人的名字）" in text
+
+
+def test_a_found_quote_that_could_not_be_shown_says_why_in_its_example():
+    text = text_of(quote_only_outcomes(PRONOUN_QUOTE))
+
+    assert "[第 1 段 T2 bad_quote／located]" in text
+    assert "     原因：原話裡有「他們」（代名詞、稱謂或逐字稿裡用來稱呼人的名字）" in text
+    assert "     逐字稿 T2 S1：「他們今年的預算大約增加了兩成左右」" in text
+    assert "請抄一個完整" not in text                      # 給模型看的建議，診斷裡不用重複
+
+
+def test_the_reasons_a_quote_could_not_be_shown_are_left_out_when_nothing_was_refused_for_that():
+    text = text_of(real_outcomes(PARTIAL, PRONOUN))
+
+    assert "不能直接當重點顯示的原因" not in text
+
+
+def test_a_refusal_without_the_known_wording_is_still_listed():
+    outcome = real_outcomes(PARTIAL)[0]
+    plain = DroppedPoint("bad_quote", "另一種說法（T3）", LINES[1][1], "重點", 1)       # quote 找得到，所以分在 located
+    outcome = dp.WindowOutcome(outcome.allocation, outcome.slides, 3, 2, dropped=(plain,),
+                               dropped_by_code=(("bad_quote", 1),), attempts=1)
+
+    assert "  1 個：另一種說法（T#）" in text_of((outcome,))
+
+
+# --- 例子的數量與標頭 ---
+
+
+def many_codes_outcome(count: int):
+    """count 種原因、各丟一個點（原因碼是手寫的）。"""
+    outcome = real_outcomes(PARTIAL)[0]
+    drops = tuple(DroppedPoint(f"code_{n:02d}", f"原因{n}", f"一句話在這裡出現{n}", f"寫的字{n}", 1) for n in range(count))
+    return dp.WindowOutcome(outcome.allocation, outcome.slides, 2 + count, 2, dropped=drops,
+                            dropped_by_code=tuple((d.code, 1) for d in drops), attempts=1)
+
+
+def test_the_header_of_the_examples_says_how_they_were_chosen():
+    text = text_of((many_codes_outcome(3),))
+
+    assert "例子（模型寫的和逐字稿對照；多的原因先給，每種原因先各給一個，最多 8 個）：" in text
+
+
+def test_the_reasons_that_got_no_example_are_named():
+    """攔的 bug：原因超過八種，標頭卻說「每一種原因先各給一個」，少見的原因沒有例子，讀的人不知道它存在。"""
+    text = text_of((many_codes_outcome(10),))
+
+    assert text.count("[第 ") == 8
+    assert "  沒有附例子的原因：code_08 1、code_09 1" in text
+
+
+def test_no_reason_is_named_as_left_out_when_every_one_has_an_example():
+    assert "沒有附例子" not in text_of((many_codes_outcome(8),))
+
+
+def test_a_reason_that_lost_its_example_to_the_length_limit_is_named_too(monkeypatch):
+    outcomes = (many_codes_outcome(3),)
+    full = text_of(outcomes)
+    monkeypatch.setattr(report, "MAX_CHARS", len(full) - 1)
+
+    cut = text_of(outcomes)
+
+    assert cut.count("[第 ") == 2
+    assert "  沒有附例子的原因：code_02 1" in cut
 
 
 # --- 長度 ---
@@ -365,6 +604,8 @@ def test_when_the_text_is_too_long_the_examples_are_what_gets_dropped_first(monk
     assert len(cut) <= len(full) - 1
     assert cut.count("[第 ") == shown - 1
     assert cut.split("例子")[0] == full.split("例子")[0]          # 每一段的計數、原因的統計，一個字都沒少
+    numbered = re.compile(r"^  \d+\. \[第 \d+ 段 T\S+ \S+\]$", re.MULTILINE)
+    assert numbered.findall(cut) == numbered.findall(full)[:-1]      # 省略的是排在最後的（最小的原因的）那一個
 
 
 def test_a_text_that_is_still_too_long_without_any_example_is_cut_and_says_so(monkeypatch):
@@ -395,10 +636,28 @@ def test_the_real_limit_holds_for_a_huge_run():
     assert len(text) <= report.MAX_CHARS
 
 
-def test_the_same_input_always_gives_the_same_text():
-    outcomes = real_outcomes(PARTIAL, OTHER_VOICE, ABSENT, PRONOUN)
+def test_the_text_does_not_depend_on_the_hash_seed_of_the_process():
+    """攔的 bug：用 set 排「逐字稿從沒出現過的字」之類的清單，同一份輸入在不同的行程裡排出不同的順序，
+    同一支影片重跑兩次的診斷就對不起來。同一個行程裡跑兩次看不出來，要換雜湊種子各跑一個行程。"""
+    root = Path(__file__).resolve().parents[2]
+    script = (
+        "import sys; sys.stdout.reconfigure(encoding='utf-8')\n"
+        "from tests.slidebox import test_drop_report as t\n"
+        "from slidebox.domain.entities import RawPoint\n"
+        "simplified = RawPoint(0, '詢問預算', quote='请问今年的预算编列有没有增加')\n"
+        "print(t.text_of(t.real_outcomes(t.PARTIAL, t.OTHER_VOICE, t.ABSENT, t.PRONOUN, simplified)))\n")
 
-    assert text_of(outcomes) == text_of(outcomes)
+    def printed(seed: str) -> str:
+        env = {**os.environ, "PYTHONHASHSEED": seed, "PYTHONPATH": os.pathsep.join([str(root / "src"), str(root)]),
+               "PYTHONDONTWRITEBYTECODE": "1"}
+        done = subprocess.run([sys.executable, "-c", script], cwd=root, env=env, capture_output=True,
+                              encoding="utf-8", check=True)
+        return done.stdout
+
+    texts = {seed: printed(seed) for seed in ("0", "1", "2")}
+
+    assert "逐字稿從沒出現過的字：请 问 预 编 没" in texts["0"]
+    assert len(set(texts.values())) == 1
 
 
 # --- 診斷不能讓失敗變成別的錯誤 ---
@@ -429,6 +688,15 @@ def test_an_empty_quote_is_shown_as_empty_rather_than_as_nothing():
     text = text_of(real_outcomes(RawPoint(0, "談論今年預算", quote="")))
 
     assert "     模型的 quote：（空的）" in text and "bad_quote／empty]" in text
+
+
+def test_an_empty_text_is_shown_as_empty_rather_than_as_nothing():
+    """攔的 bug：文字是空的，整行「模型寫的重點」就不見了，例子只剩一個看起來很正常的 quote，
+    看不出這個點是因為文字太短才被丟的。"""
+    text = text_of(real_outcomes(RawPoint(1, "", quote=LINES[1][1])))
+
+    assert "[第 1 段 T1 too_short]" in text
+    assert "     模型寫的重點：（空的）" in text
 
 
 def test_a_turn_without_text_does_not_break_the_excerpt():

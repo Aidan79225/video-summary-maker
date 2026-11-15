@@ -51,9 +51,10 @@ def _holds(squashed_turn: str, pieces: Sequence[str]) -> bool:
     return True
 
 
-# locate_quote 找不到時是在哪一關擋下來的（QuoteLocation.kind）。只給診斷看，沒有任何判斷依它而定
+# locate_quote 找不到時是在哪一關擋下來的（QuoteLocation.kind）。只給診斷看，沒有任何判斷依它而定。
+# 名字不能和丟掉的原因碼（conversation 的 TOO_SHORT = "too_short" 等）重複：診斷裡兩種都會出現，同名會被讀成同一件事
 QUOTE_EMPTY = "empty"                       # 空的，或一個字都沒有
-QUOTE_TOO_SHORT = "too_short"               # 每一片都不到 2 個字，或合計不到 MIN_QUOTE_CHARS
+QUOTE_TOO_SHORT = "quote_too_short"         # 每一片都不到 2 個字，或合計不到 MIN_QUOTE_CHARS
 QUOTE_SHORT_FRAGMENTS = "short_fragments"   # 夠長，但每一片都比 QUOTE_MIN_LONGEST 短
 QUOTE_NOT_FOUND = "not_found"               # 不在任何一個可以引用的輪裡
 QUOTE_AMBIGUOUS = "ambiguous"               # 好幾輪都有
@@ -113,93 +114,6 @@ def locate_quote(
     return QuoteLocation(None, (
         f"quote「{_shown(quote)}」在好幾輪發言裡都有，無法確定是哪一輪；請抄一段更長、只出現在一輪的原文"),
         QUOTE_AMBIGUOUS)
-
-
-# --- 診斷：找不到的 quote，為什麼找不到 ---
-
-# 「不在任何一個可以引用的輪裡」再分得更細（QuoteMiss.kind；另外還有 locate_quote 自己的 QUOTE_*）。
-# 只給人看：決定一個點留不留的是 locate_quote，沒有任何判斷依這裡的分類而定
-MISS_LOCATED = "located"                    # 其實找得到（安全模式會因為別的原因丟掉它）
-MISS_OTHER_VOICE = "other_voice"            # 一字不差，但在其他聲音／無法判斷的輪裡（不能引用）
-MISS_ACROSS_TURNS = "across_turns"          # 要接起相鄰的兩、三輪才湊得齊
-MISS_REORDERED = "reordered"                # 每一片都在同一個可以引用的輪裡，但順序和 quote 不同
-MISS_NEAR_VERBATIM = "near_verbatim"        # 照抄得差不多，只差幾個字（同音字、數字寫法、簡繁體）
-MISS_PARTIAL = "partial"                    # 只有一部分對得上（跳過子句、改寫）
-MISS_ABSENT = "absent"                      # 幾乎不在這一窗的逐字稿裡（編造、整段改寫）
-# 最接近的那一輪裡，quote 的相鄰兩字組有幾成也在那一輪裡（暫定值，要用實際影片校正）
-NEAR_VERBATIM_RATIO = 0.8
-PARTIAL_RATIO = 0.4
-# 連續幾輪湊起來看（橫跨兩輪、三輪）
-MAX_ACROSS_TURNS = 3
-
-
-@dataclass(frozen=True)
-class QuoteMiss:
-    """一個 quote 為什麼找不到：kind 是 QUOTE_*（locate_quote 自己給的原因）或 MISS_*；near 是最接近的那幾輪
-    （橫跨時是接起來的那幾輪；找不到任何一點相像的輪就是空的）；ratio 是最接近的那一輪裡有幾成相同；
-    unseen 是 quote 裡這一窗逐字稿從沒出現過的字（簡體字、編造的詞的線索），unseen_share 是這些字佔 quote 的比例。"""
-    kind: str
-    near: tuple[Turn, ...] = ()
-    ratio: float = 0.0
-    unseen: tuple[str, ...] = ()
-    unseen_share: float = 0.0
-
-
-def _bigrams(text: str) -> set[str]:
-    """相鄰兩個字的組合（不到兩個字就是空的）。"""
-    return {text[i:i + 2] for i in range(len(text) - 1)}
-
-
-def explain_quote_miss(
-    quote: object, cited: Turn, in_window: Sequence[Turn], citable: frozenset[str],
-) -> QuoteMiss:
-    """locate_quote 沒有留下的 quote 到底是怎麼回事：只給診斷用，不改變任何判斷。
-
-    先問 locate_quote：它自己說得出原因的（空的、太短、只有很短的片段、好幾輪都有）照它說的，附上被引用的那一輪；
-    找得到的（安全模式不能顯示的那種）回報 located。「不在任何一個可以引用的輪裡」才再分：一字不差卻在其他聲音
-    的輪裡、要接起相鄰的輪才湊得齊、片段都在同一輪但順序不同；其餘看最接近的那一輪有幾成相同（相鄰兩字組）：
-    差幾個字、一部分、幾乎沒有。
-    """
-    located = locate_quote(quote, cited, in_window, citable)
-    if located.turn is not None:
-        return QuoteMiss(MISS_LOCATED, (located.turn,))
-    if located.kind != QUOTE_NOT_FOUND:
-        return QuoteMiss(located.kind or "", (cited,))
-    pieces = fragments(quote)                                    # not_found：一定是字串，而且至少有一片
-    squashed = {t.index: squash(t.text) for t in in_window}
-    window_chars = set("".join(squashed.values()))
-    whole = squash(quote)
-    missing = [char for char in whole if char not in window_chars]
-    unseen = tuple(dict.fromkeys(missing))
-    share = len(missing) / len(whole)
-
-    def miss(kind: str, near: tuple[Turn, ...] = (), ratio: float = 0.0) -> QuoteMiss:
-        return QuoteMiss(kind, near, ratio, unseen, share)
-
-    for t in in_window:
-        if t.speaker not in citable and _holds(squashed[t.index], pieces):
-            return miss(MISS_OTHER_VOICE, (t,))
-    for size in range(2, MAX_ACROSS_TURNS + 1):
-        for start in range(len(in_window) - size + 1):
-            run = tuple(in_window[start:start + size])
-            if _holds("".join(squashed[t.index] for t in run), pieces):
-                return miss(MISS_ACROSS_TURNS, run)
-    for t in in_window:
-        if t.speaker in citable and all(piece in squashed[t.index] for piece in pieces):
-            return miss(MISS_REORDERED, (t,))
-    wanted = set().union(*(_bigrams(piece) for piece in pieces))
-    best: Turn | None = None
-    best_ratio = 0.0
-    for t in in_window:
-        ratio = len(wanted & _bigrams(squashed[t.index])) / len(wanted)
-        if ratio > best_ratio or (ratio > 0 and ratio == best_ratio and t.index == cited.index):
-            best, best_ratio = t, ratio
-    near = () if best is None else (best,)
-    if best_ratio >= NEAR_VERBATIM_RATIO:
-        return miss(MISS_NEAR_VERBATIM, near, best_ratio)
-    if best_ratio >= PARTIAL_RATIO:
-        return miss(MISS_PARTIAL, near, best_ratio)
-    return miss(MISS_ABSENT, near, best_ratio)
 
 
 # --- 原話：引文在那一輪裡的連續位置 ---

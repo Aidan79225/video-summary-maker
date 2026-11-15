@@ -67,6 +67,18 @@ def test_a_duplicate_on_the_same_page_is_recorded_as_a_duplicate():
     assert dropped.code == DUPLICATE_POINT and dropped.text == GOOD[0].text and dropped.quote == GOOD[0].quote
 
 
+def test_a_duplicate_in_quote_only_mode_is_recorded_with_the_text_that_was_shown():
+    """攔的 bug：安全模式顯示的是 quote 的原話。重複的點記下模型自己寫、根本沒有顯示的字，
+    看紀錄的人就對不上「是哪兩個點重複」。"""
+    again = RawPoint(GOOD[1].turn, "另一種寫法的現金補助重點", quote=GOOD[1].quote)
+
+    _, result = run(again, quote_only=True)
+
+    (dropped,) = result.dropped
+    assert dropped.code == DUPLICATE_POINT
+    assert dropped.text == f"「{GOOD[1].quote}」" and dropped.text != again.text
+
+
 def test_a_turn_that_is_not_a_number_is_recorded_as_none():
     _, result = run(RawPoint("第三段", "現金補助有幫助", quote="現金補助有幫助，但不能只靠現金"))
 

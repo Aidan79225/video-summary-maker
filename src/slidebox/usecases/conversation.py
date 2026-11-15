@@ -260,6 +260,8 @@ BAD_INLINE_QUOTE = "bad_inline_quote"
 DUPLICATE_POINT = "duplicate_point"
 DUPLICATE_MESSAGE = "與同一頁的另一點重複"
 RESCUE_REFUSED = "也不能改用原話："             # unsupported 的原因結尾：「…（也不能改用原話：{為什麼不行}）」
+QUOTE_ONLY_REFUSED = "quote 不能直接當重點顯示："   # 安全模式的 bad_quote 原因：「{這個}{為什麼不行}{下面那個}」
+QUOTE_ONLY_ADVICE = "；請抄一個完整、連續、不含稱呼與代名詞的子句"
 SLIDE_TOO_SMALL = "slide_too_small"
 
 # 丟掉的點分三類，報告與記錄分開列（FINAL 的 contradicted／unverifiable／slide rule）：
@@ -623,8 +625,7 @@ def _check_point(
     if quote_only:
         shown = _quote_to_show(turn, raw.quote, names)
         if isinstance(shown, str):
-            return PointCheck(problem=Problem(
-                BAD_QUOTE, f"quote 不能直接當重點顯示：{shown}；請抄一個完整、連續、不含稱呼與代名詞的子句"))
+            return PointCheck(problem=Problem(BAD_QUOTE, f"{QUOTE_ONLY_REFUSED}{shown}{QUOTE_ONLY_ADVICE}"))
         return PointCheck(point=_quoted_point(turn, shown), note=note, rescued=True)
 
     claim = _grams(text)

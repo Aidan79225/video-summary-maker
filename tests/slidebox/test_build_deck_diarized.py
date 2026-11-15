@@ -865,7 +865,7 @@ def test_an_unreliable_run_ends_with_the_diagnostics_of_every_window_as_its_last
 
     last = seen[-1]
     assert last.startswith("診斷：被丟掉的重點")
-    assert f"  第 1/2 段（T0–T{SPLIT_AT - 1}，問了 2 次）：提出 5、留下 2、丟掉 3：" in last
+    assert f"  第 1/2 段（T0–T{SPLIT_AT - 1}，問了 2 次，採用第 1 次）：提出 5、留下 2、丟掉 3：" in last
     assert f"  第 2/2 段（T{SPLIT_AT}–T{TURNS[-1].index}，問了 1 次）：提出 3、留下 3、丟掉 0" in last
     assert "合計：提出 8、留下 5、丟掉 3：leading_pronoun_or_title 2、bad_quote 1" in last
     assert "quote 對不上的原因（bad_quote 共 1 個）：" in last and "  absent 1：" in last
@@ -873,6 +873,17 @@ def test_an_unreliable_run_ends_with_the_diagnostics_of_every_window_as_its_last
     assert "它引用的 T1 S2：「現金補助有幫助，但不能只靠現金，托育資源更重要。」" in last
     summary = "對談重點：模型提出 8 個，留下 5 個；丟掉 3 個（有問題 2、查不出來 1、同頁規則 0）"
     assert seen.index(summary) < len(seen) - 1                       # 照舊的一行還在，診斷接在後面
+
+
+def test_the_diagnostics_are_a_status_only_message_that_does_not_move_the_progress_bar():
+    """攔的 bug：診斷夾了一個進度比例，失敗之前進度條會跳到那個位置；它只是一則狀態，比例是 None。"""
+    seen = []
+    with pytest.raises(AttributionUnreliable):
+        run(unreliable_parts(), progress=lambda frac, status: seen.append((frac, status)))
+
+    frac, status = seen[-1]
+
+    assert status.startswith("診斷：被丟掉的重點") and frac is None
 
 
 def test_the_diagnostics_change_neither_the_failure_nor_what_is_kept():
