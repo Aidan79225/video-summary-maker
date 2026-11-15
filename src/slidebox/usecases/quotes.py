@@ -51,11 +51,22 @@ def _holds(squashed_turn: str, pieces: Sequence[str]) -> bool:
     return True
 
 
+# locate_quote 找不到時是在哪一關擋下來的（QuoteLocation.kind）。只給診斷看，沒有任何判斷依它而定。
+# 名字不能和丟掉的原因碼（conversation 的 TOO_SHORT = "too_short" 等）重複：診斷裡兩種都會出現，同名會被讀成同一件事
+QUOTE_EMPTY = "empty"                       # 空的，或一個字都沒有
+QUOTE_TOO_SHORT = "quote_too_short"         # 每一片都不到 2 個字，或合計不到 MIN_QUOTE_CHARS
+QUOTE_SHORT_FRAGMENTS = "short_fragments"   # 夠長，但每一片都比 QUOTE_MIN_LONGEST 短
+QUOTE_NOT_FOUND = "not_found"               # 不在任何一個可以引用的輪裡
+QUOTE_AMBIGUOUS = "ambiguous"               # 好幾輪都有
+
+
 @dataclass(frozen=True)
 class QuoteLocation:
-    """locate_quote 的結果：turn 是真正有這段引文的那一輪；找不到時 turn 是 None、problem 說明原因。"""
+    """locate_quote 的結果：turn 是真正有這段引文的那一輪；找不到時 turn 是 None、problem 說明原因，
+    kind 是原因的分類（QUOTE_*，給診斷用；找到了就是 None）。"""
     turn: Turn | None
     problem: str | None = None
+    kind: str | None = None
 
 
 def _shown(quote: object, limit: int = 24) -> str:
@@ -80,27 +91,29 @@ def locate_quote(
         if isinstance(quote, str) and squash(quote):          # 有字，但每一段都不到 2 個字（單字的「對」「嗯」…）
             return QuoteLocation(None, (
                 f"quote「{_shown(quote)}」太短，無法核對出處；請抄一整個子句（約 8 到 20 個字），"
-                f"單字的回答（對、嗯）不能當 quote"))
-        return QuoteLocation(None, "quote 是空的；每個重點都要先從逐字稿照抄一小段原文放進 quote")
+                f"單字的回答（對、嗯）不能當 quote"), QUOTE_TOO_SHORT)
+        return QuoteLocation(None, "quote 是空的；每個重點都要先從逐字稿照抄一小段原文放進 quote", QUOTE_EMPTY)
     holders = [t for t in in_window if t.speaker in citable and _holds(squash(t.text), pieces)]
     if not holders:
         return QuoteLocation(None, (
             f"quote「{_shown(quote)}」不是 T{cited.index} 或任何一輪發言裡連續照抄的原文"
-            f"（可能把兩輪接在一起、改了字或跳過了子句）；請只從單一輪發言照抄一小段"))
+            f"（可能把兩輪接在一起、改了字或跳過了子句）；請只從單一輪發言照抄一小段"), QUOTE_NOT_FOUND)
     total = sum(len(piece) for piece in pieces)
     if total < MIN_QUOTE_CHARS and "".join(pieces) != squash(cited.text):
         return QuoteLocation(None, (
             f"quote「{_shown(quote)}」不到 {MIN_QUOTE_CHARS} 個字，太短無法核對出處；"
-            f"請抄一整個子句（約 8 到 20 個字）"))
+            f"請抄一整個子句（約 8 到 20 個字）"), QUOTE_TOO_SHORT)
     if total >= MIN_QUOTE_CHARS and max(len(piece) for piece in pieces) < QUOTE_MIN_LONGEST:
         return QuoteLocation(None, (
-            f"quote「{_shown(quote)}」是由太短的片段拼起來的，無法確認出處；請抄一段連續的原文"))
+            f"quote「{_shown(quote)}」是由太短的片段拼起來的，無法確認出處；請抄一段連續的原文"),
+            QUOTE_SHORT_FRAGMENTS)
     if any(t.index == cited.index for t in holders):
         return QuoteLocation(cited)
     if len(holders) == 1:
         return QuoteLocation(holders[0])
     return QuoteLocation(None, (
-        f"quote「{_shown(quote)}」在好幾輪發言裡都有，無法確定是哪一輪；請抄一段更長、只出現在一輪的原文"))
+        f"quote「{_shown(quote)}」在好幾輪發言裡都有，無法確定是哪一輪；請抄一段更長、只出現在一輪的原文"),
+        QUOTE_AMBIGUOUS)
 
 
 # --- 原話：引文在那一輪裡的連續位置 ---

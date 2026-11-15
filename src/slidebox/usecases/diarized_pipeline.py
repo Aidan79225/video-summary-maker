@@ -23,6 +23,7 @@ from .conversation import (
     PROMPT_VERSION,
     Allocation,
     CheckedSlide,
+    DroppedPoint,
     ValidationResult,
     citable_turn_ids,
     format_window,
@@ -146,6 +147,11 @@ class WindowOutcome:
     rescued 是留下的點裡顯示原話的點數；contradicted／unverifiable／slide_rule 是丟掉的點的三類
     （和 ValidationResult 一樣，proposed − kept 是三類的和）；anchor_conflicts 是 contradicted 裡
     「內容出自別輪」的點數；dropped_by_code 是每個原因碼丟了幾個。
+
+    dropped 是被一個一個丟掉的點的紀錄、attempts 是這個窗問了模型幾次（沒送出去的窗是 0）、adopted 是
+    採用的是第幾次的結果（從 1 算；沒送出去的窗是 0）：三個都只給診斷用（歸屬不可靠而失敗時，讓人看得到
+    每一段是怎麼回事），不影響任何判斷。dropped 與所有計數都是採用的那一次的；attempts 數的是呼叫次數，
+    回應壞掉的那一次也算。
     """
     allocation: Allocation
     slides: tuple[CheckedSlide, ...]
@@ -159,6 +165,9 @@ class WindowOutcome:
     slide_rule: int = 0
     anchor_conflicts: int = 0
     dropped_by_code: tuple[tuple[str, int], ...] = ()
+    dropped: tuple[DroppedPoint, ...] = ()
+    attempts: int = 0
+    adopted: int = 0
 
 
 def dropped_ratio(proposed: int, kept: int) -> float:
@@ -241,10 +250,13 @@ def summarize_windows(
         best: ValidationResult | None = None
         trimmed = 0
         hint = ""
+        asked = 0
+        adopted = 0
         for attempt in range(1, ATTEMPTS + 1):
             check()
             progress((number - 1) / total,
                      f"整理{where}對談…" if attempt == 1 else f"{where}不合要求，重試一次…")
+            asked = attempt
             try:
                 raw = conversation.summarize_window(
                     text, window.first_turn, window.last_turn, citable_turns, allocation.min_slides,
@@ -258,7 +270,7 @@ def summarize_windows(
             result, cut = fit_to_range(
                 validate_points(raw, turns, speakers, window, quote_only), allocation.max_slides)
             if best is None or _quality(result) > _quality(best):
-                best, trimmed = result, cut
+                best, trimmed, adopted = result, cut, attempt
             if _acceptable(result):
                 break
             hint = retry_hint(result.problems)
@@ -267,7 +279,7 @@ def summarize_windows(
             allocation, best.slides, best.proposed, best.kept, trimmed_pages=trimmed,
             rescued=best.rescued, contradicted=best.contradicted, unverifiable=best.unverifiable,
             slide_rule=best.slide_rule, anchor_conflicts=best.anchor_conflicts,
-            dropped_by_code=best.dropped_by_code))
+            dropped_by_code=best.dropped_by_code, dropped=best.dropped, attempts=asked, adopted=adopted))
     return tuple(outcomes)
 
 

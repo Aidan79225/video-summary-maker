@@ -837,3 +837,90 @@ def test_a_diarizer_that_finds_a_different_count_than_asked_publishes_with_a_war
     assert deck.diarization.requested_speakers == 3
     assert deck.source_note.startswith(diarized_pipeline.SOURCE_NOTE)
     assert "指定 3 人，實際找到 2 位主要發言者" in deck.source_note
+
+
+# --- 歸屬不可靠而失敗時：把每一段被丟掉的原因記進進度（診斷，不改變任何判斷）---
+
+
+def unreliable_parts():
+    """第一個窗兩次都是 5 個點丟掉 3 個（兩個代名詞、一個編造的 quote），第二個窗全數通過：
+    整份 8 個點丟掉 3 個（38%），超過上限。"""
+    invented = RawPoint(at("現金補助"), "詢問預算的編列方式", quote="這是一句逐字稿裡根本沒有的話啊啊啊")
+    window_one = (RawSlide("補助與托育", (*good_points(0, 1), bad(2), bad(3), invented)),)
+    return make(TWO_WINDOWS, conversation=FakeConversation([window_one, window_one, good_reply]))
+
+
+def failing_run(parts):
+    """跑到歸屬不可靠而失敗為止；回傳（失敗訊息，進度裡所有的狀態）。"""
+    seen = []
+    with pytest.raises(AttributionUnreliable) as raised:
+        run(parts, progress=lambda frac, status: seen.append(status))
+    return str(raised.value), seen
+
+
+def test_an_unreliable_run_ends_with_the_diagnostics_of_every_window_as_its_last_status():
+    """攔的 bug：丟掉 135 個，卻只知道「有問題 25、查不出來 61」，看不出每一段到底是怎麼回事。
+    診斷是最後一則狀態：新聞服務每 3 秒讀一次狀態、看到失敗時還會再記一次，所以它一定進得了工作紀錄。"""
+    _, seen = failing_run(unreliable_parts())
+
+    last = seen[-1]
+    assert last.startswith("診斷：被丟掉的重點")
+    assert f"  第 1/2 段（T0–T{SPLIT_AT - 1}，問了 2 次，採用第 1 次）：提出 5、留下 2、丟掉 3：" in last
+    assert f"  第 2/2 段（T{SPLIT_AT}–T{TURNS[-1].index}，問了 1 次）：提出 3、留下 3、丟掉 0" in last
+    assert "合計：提出 8、留下 5、丟掉 3：leading_pronoun_or_title 2、bad_quote 1" in last
+    assert "quote 對不上的原因（bad_quote 共 1 個）：" in last and "  absent 1：" in last
+    assert "模型的 quote：「這是一句逐字稿裡根本沒有的話啊啊啊」" in last
+    assert "它引用的 T1 S2：「現金補助有幫助，但不能只靠現金，托育資源更重要。」" in last
+    summary = "對談重點：模型提出 8 個，留下 5 個；丟掉 3 個（有問題 2、查不出來 1、同頁規則 0）"
+    assert seen.index(summary) < len(seen) - 1                       # 照舊的一行還在，診斷接在後面
+
+
+def test_the_diagnostics_are_a_status_only_message_that_does_not_move_the_progress_bar():
+    """攔的 bug：診斷夾了一個進度比例，失敗之前進度條會跳到那個位置；它只是一則狀態，比例是 None。"""
+    seen = []
+    with pytest.raises(AttributionUnreliable):
+        run(unreliable_parts(), progress=lambda frac, status: seen.append((frac, status)))
+
+    frac, status = seen[-1]
+
+    assert status.startswith("診斷：被丟掉的重點") and frac is None
+
+
+def test_the_diagnostics_change_neither_the_failure_nor_what_is_kept():
+    parts = unreliable_parts()
+
+    message, _ = failing_run(parts)
+
+    assert "8 個重點" in message and "3 個沒有通過" in message and "38%" in message and "診斷" not in message
+    assert parts.renderer.rendered == [] and "conversation" not in stored(parts)
+    assert parts.checkpoints.cleared == []
+
+
+def test_a_window_that_keeps_no_page_gets_the_diagnostics_too():
+    nothing = (RawSlide("亂寫", (RawPoint(999, "不存在的段落"), bad(at("現金補助")))),)
+    parts = make(TWO_WINDOWS, conversation=FakeConversation([good_reply, nothing, nothing]))
+
+    message, seen = failing_run(parts)
+
+    assert "第 2/2 段" in message and seen[-1].startswith("診斷：被丟掉的重點")
+    assert "turn_out_of_window 1" in seen[-1] and "[第 2 段 T999 turn_out_of_window]" in seen[-1]
+
+
+def test_a_reliable_run_has_no_diagnostics():
+    seen = []
+    run(make(conversation=FakeConversation([mixed_reply])), progress=lambda frac, status: seen.append(status))
+
+    assert not any("診斷" in status for status in seen)
+
+
+def test_diagnostics_that_break_never_hide_the_real_failure(monkeypatch):
+    """診斷只是輔助：它自己出了任何錯，原本的 AttributionUnreliable 照樣往上丟，狀態裡說明沒能產生。"""
+    def boom(outcomes, speakers):
+        raise RuntimeError("壞掉了")
+
+    monkeypatch.setattr("slidebox.usecases.build_deck.drop_diagnostics", boom)
+
+    message, seen = failing_run(unreliable_parts())
+
+    assert "8 個重點" in message and "3 個沒有通過" in message
+    assert seen[-1] == "（沒能產生診斷：RuntimeError）"

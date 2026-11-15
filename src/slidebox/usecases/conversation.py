@@ -258,6 +258,10 @@ ROLE_NOT_SAID = "role_not_said"
 POLARITY_FLIP = "polarity_flip"
 BAD_INLINE_QUOTE = "bad_inline_quote"
 DUPLICATE_POINT = "duplicate_point"
+DUPLICATE_MESSAGE = "與同一頁的另一點重複"
+RESCUE_REFUSED = "也不能改用原話："             # unsupported 的原因結尾：「…（也不能改用原話：{為什麼不行}）」
+QUOTE_ONLY_REFUSED = "quote 不能直接當重點顯示："   # 安全模式的 bad_quote 原因：「{這個}{為什麼不行}{下面那個}」
+QUOTE_ONLY_ADVICE = "；請抄一個完整、連續、不含稱呼與代名詞的子句"
 SLIDE_TOO_SMALL = "slide_too_small"
 
 # 丟掉的點分三類，報告與記錄分開列（FINAL 的 contradicted／unverifiable／slide rule）：
@@ -282,6 +286,26 @@ class Problem:
     """一個點為什麼被丟掉：code 是穩定的碼，message 是繁體中文的原因（可以原樣放進重試提示）。"""
     code: str
     message: str
+
+
+@dataclass(frozen=True)
+class DroppedPoint:
+    """被檢查丟掉的一個點（診斷用：記下來，不影響任何判斷）：原因碼與原因（Problem 的 code 與 message）、
+    模型寫的 quote 與文字、它引用的 turn 編號（模型填的不是整數就是 None）。
+
+    整頁因為留下的點太少而被丟掉的點不在這裡：它們自己沒有問題，沒有原因可記。
+    """
+    code: str
+    message: str
+    quote: str
+    text: str
+    turn: int | None
+
+
+def _dropped(code: str, message: str, raw: RawPoint, text: str) -> DroppedPoint:
+    turn = raw.turn if isinstance(raw.turn, int) and not isinstance(raw.turn, bool) else None
+    quote = raw.quote if isinstance(raw.quote, str) else ""
+    return DroppedPoint(code, message, quote, text, turn)
 
 
 @dataclass(frozen=True)
@@ -313,7 +337,8 @@ class ValidationResult:
     丟掉的點分三類：contradicted（檢查發現有問題）、unverifiable（查不出來）、slide_rule（同頁重複或整頁
     留不下來），proposed − kept 永遠等於三類的和（超過每頁 MAX_BULLETS 的點在計數前就已經扣掉）。
     anchor_conflicts 是 contradicted 裡「內容出自別輪，與 quote 所在的輪不一致」的點數；
-    rescued 是留下的點裡顯示原話的點數；dropped_by_code 是每個原因碼丟了幾個。
+    rescued 是留下的點裡顯示原話的點數；dropped_by_code 是每個原因碼丟了幾個；
+    dropped 是被一個一個丟掉的點的紀錄（診斷用，見 DroppedPoint）。
     """
     slides: tuple[CheckedSlide, ...]
     proposed: int
@@ -325,6 +350,7 @@ class ValidationResult:
     slide_rule: int = 0
     anchor_conflicts: int = 0
     dropped_by_code: tuple[tuple[str, int], ...] = ()
+    dropped: tuple[DroppedPoint, ...] = ()
 
 
 # 程式用的標記與角色字眼
@@ -493,6 +519,7 @@ def validate_points(
     lead_in = [by_index[i] for i in range(first - ANCHOR_RADIUS, first) if i in by_index]   # 窗不重疊：窗頭的複述要看前一窗的尾巴
 
     problems: list[str] = []
+    dropped: list[DroppedPoint] = []
     codes: Counter[str] = Counter()
     slides: list[CheckedSlide] = []
     proposed = 0
@@ -507,13 +534,16 @@ def validate_points(
                 assert check.problem is not None                 # 沒有點就一定有原因
                 codes[check.problem.code] += 1
                 problems.append(f"{where}：{check.problem.message}")
+                dropped.append(_dropped(check.problem.code, check.problem.message, raw_point,
+                                        _clean_text(raw_point.text)))
                 continue
             if check.note:
                 problems.append(f"{where}：{check.note}")
             key = (check.point.speaker, squash(check.point.text))
             if key in seen:
                 codes[DUPLICATE_POINT] += 1
-                problems.append(f"{where}：與同一頁的另一點重複")
+                problems.append(f"{where}：{DUPLICATE_MESSAGE}")
+                dropped.append(_dropped(DUPLICATE_POINT, DUPLICATE_MESSAGE, raw_point, check.point.text))
                 continue
             seen.add(key)
             kept.append((check.point, check.rescued))
@@ -545,7 +575,8 @@ def validate_points(
         rescued=sum(s.rescued for s in slides),
         contradicted=classes[CONTRADICTED], unverifiable=classes[UNVERIFIABLE], slide_rule=classes[SLIDE_RULE],
         anchor_conflicts=codes[ANCHOR_CONFLICT],
-        dropped_by_code=tuple(sorted(codes.items(), key=lambda item: (-item[1], item[0]))))
+        dropped_by_code=tuple(sorted(codes.items(), key=lambda item: (-item[1], item[0]))),
+        dropped=tuple(dropped))
 
 
 def _cap(problems: list[str]) -> tuple[str, ...]:
@@ -594,8 +625,7 @@ def _check_point(
     if quote_only:
         shown = _quote_to_show(turn, raw.quote, names)
         if isinstance(shown, str):
-            return PointCheck(problem=Problem(
-                BAD_QUOTE, f"quote 不能直接當重點顯示：{shown}；請抄一個完整、連續、不含稱呼與代名詞的子句"))
+            return PointCheck(problem=Problem(BAD_QUOTE, f"{QUOTE_ONLY_REFUSED}{shown}{QUOTE_ONLY_ADVICE}"))
         return PointCheck(point=_quoted_point(turn, shown), note=note, rescued=True)
 
     claim = _grams(text)
@@ -692,7 +722,7 @@ def _rescue_quote(turn: Turn, quote: str, names: frozenset[str], note: str | Non
     """
     shown = _quote_to_show(turn, quote, names)
     if isinstance(shown, str):
-        return PointCheck(problem=Problem(UNSUPPORTED, f"{unsupported.message}（也不能改用原話：{shown}）"))
+        return PointCheck(problem=Problem(UNSUPPORTED, f"{unsupported.message}（{RESCUE_REFUSED}{shown}）"))
     return PointCheck(point=_quoted_point(turn, shown), note=note, rescued=True)
 
 

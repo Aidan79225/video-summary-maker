@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import ast
 import dataclasses
+import importlib
 
 import pytest
 
@@ -174,6 +175,19 @@ def test_editing_any_rule_module_changes_the_conversation_fingerprint(monkeypatc
 def test_a_module_that_is_not_a_rule_module_does_not_change_the_fingerprint(monkeypatch):
     base = dp.conversation_fingerprint(SETTINGS, 6000, PLAN)
     _edited(monkeypatch, "slidebox.usecases.brief")
+    assert dp.conversation_fingerprint(SETTINGS, 6000, PLAN) == base
+
+
+@pytest.mark.parametrize("module", ["slidebox.usecases.quote_misses", "slidebox.usecases.drop_report"])
+def test_the_diagnostic_modules_are_outside_the_rules_and_editing_them_keeps_saved_summaries(monkeypatch, module):
+    """攔的 bug：診斷用的分類與門檻（暫定值，要用真實影片校正）放在規則模組裡，之後每調一次門檻，
+    就讓所有還沒用完的摘要存檔作廢、白白重跑一次模型。診斷只讀、不決定任何一個點的去留，不該算進指紋。"""
+    assert importlib.import_module(module) is not None            # 它們真的存在
+    assert module not in dp.RULE_MODULES
+    base = dp.conversation_fingerprint(SETTINGS, 6000, PLAN)
+
+    _edited(monkeypatch, module)
+
     assert dp.conversation_fingerprint(SETTINGS, 6000, PLAN) == base
 
 
@@ -778,3 +792,59 @@ def test_the_safe_mode_switch_reaches_the_checks(quote_only):
     else:
         assert shown == [GOOD[0][1], GOOD[1][1]] and only.rescued == 0
     assert (only.proposed, only.kept) == (2, 2)
+
+
+# --- 診斷用的紀錄：被丟掉的點、一個窗問了幾次 ---
+
+
+def test_the_outcome_keeps_the_points_the_checks_dropped_and_says_it_asked_once():
+    turns, speakers, allocations = _setup(*LINES)
+    reply = (RawSlide("預算", (whole(0, GOOD[0][1]), whole(1, GOOD[1][1]), whole(2, FOUR_GOOD[2][1]), invented())),)
+
+    (only,), _ = run_windows(FakeConversation([reply]), turns, speakers, allocations)
+
+    (dropped,) = only.dropped
+    assert (dropped.code, dropped.quote, dropped.turn) == ("bad_quote", NOT_IN_THE_TRANSCRIPT, 2)
+    assert only.attempts == 1 and only.adopted == 1  # 4 個點丟 1 個，剛好 25%：不重問，用的就是第一次
+
+
+def test_the_dropped_points_are_those_of_the_attempt_that_was_used():
+    turns, speakers, allocations = _setup(*LINES)
+    first = (RawSlide("預算", (whole(1, GOOD[1][1]), invented(), invented(), invented())),)    # 丟掉 3 個，整頁也不用
+    conversation = FakeConversation([first, reply_citing(*GOOD)])
+
+    (only,), _ = run_windows(conversation, turns, speakers, allocations)
+
+    assert only.attempts == 2 and only.dropped == ()                  # 用的是第二次：它一個點也沒丟
+    assert only.adopted == 2
+
+
+def test_when_neither_attempt_passes_the_dropped_points_are_those_of_the_one_with_more_kept_points():
+    turns, speakers, allocations = _setup(*LINES)
+    first = (RawSlide("預算", (whole(0, GOOD[0][1]), whole(1, GOOD[1][1]), invented(), invented(), invented())),)
+    second = (RawSlide("預算", (whole(1, GOOD[1][1]), invented(), invented(), invented(), invented())),)
+
+    (only,), _ = run_windows(FakeConversation([first, second]), turns, speakers, allocations)
+
+    assert only.attempts == 2 and len(only.dropped) == 3              # 第一次留 2 個、丟 3 個，用的是它
+    assert only.adopted == 1                                          # 問了兩次，採用的是第一次：診斷要說得出來
+
+
+def test_a_malformed_first_reply_still_counts_as_an_ask():
+    turns, speakers, allocations = _setup(*LINES)
+    conversation = FakeConversation([SummarizerOutputInvalid("壞掉的回應"), reply_citing(*GOOD)])
+
+    (only,), _ = run_windows(conversation, turns, speakers, allocations)
+
+    assert only.attempts == 2 and only.dropped == () and only.adopted == 2
+
+
+def test_a_window_that_was_never_sent_to_the_model_was_asked_zero_times():
+    turns, speakers, allocations = _setup(*LINES, ("S3", "我是打電話進來的聽眾想問一件事"),
+                                          ("S3", "請問這個政策什麼時候開始實施呢"), budget=100)
+
+    outcomes, _ = run_windows(FakeConversation(default=reply_citing(*GOOD)), turns, speakers, allocations)
+
+    skipped = [o for o in outcomes if o.skipped]
+    assert skipped and all(o.attempts == 0 and o.adopted == 0 and o.dropped == () for o in skipped)
+    assert all(o.attempts == 1 and o.adopted == 1 for o in outcomes if not o.skipped)

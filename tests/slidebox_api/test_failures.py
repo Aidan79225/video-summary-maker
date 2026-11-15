@@ -240,3 +240,25 @@ def test_cancelling_still_stores_no_error():
     job = store.submit("https://example.com/v")
     worker.run_once()
     assert job.status == JobStatus.CANCELLED and job.error == ""
+
+
+def test_a_long_multi_line_status_survives_a_failure_whole_and_scrubbed():
+    """歸屬不可靠而失敗時，每一段被丟掉的原因（好幾行、好幾千字）是最後一則進度狀態，新聞服務靠它把原因記進
+    工作紀錄。失敗收尾不能蓋掉它、也不能把它截成 job.error 那麼短（800 字）；機密與路徑照樣被遮掉。"""
+    diagnostic = "診斷：被丟掉的重點\n" + "\n".join(f"  第 {n}/40 段：提出 5、留下 2、丟掉 3" for n in range(1, 41))
+    diagnostic += f"\n     模型的 quote：「路徑 {OUT}/x/slides.html 與 {PLAIN_SECRET}」"
+    assert len(diagnostic) > 2 * 400
+
+    def fail(job, progress, is_cancelled):
+        progress(None, diagnostic)
+        raise AttributionUnreliable("模型提出的 8 個重點裡，有 3 個沒有通過程式檢查")
+
+    store, worker = _worker(fail, failures=reporter())
+    job = store.submit("https://example.com/v")
+    worker.run_once()
+
+    assert job.status == JobStatus.FAILED and "8 個重點" in job.error
+    assert job.progress_status.startswith("診斷：被丟掉的重點\n  第 1/40 段：") and job.progress_status.count("\n") == 41
+    assert "  第 40/40 段：提出 5、留下 2、丟掉 3" in job.progress_status
+    assert OUT not in job.progress_status and PLAIN_SECRET not in job.progress_status
+    assert len(job.progress_status) > 800
