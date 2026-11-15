@@ -9,6 +9,7 @@ import hashlib
 import json
 import os
 import re
+from collections.abc import Sequence
 from dataclasses import replace
 
 from ..domain.entities import (
@@ -20,11 +21,13 @@ from ..domain.entities import (
     SectionClips,
     Settings,
     Slide,
+    SpeakerInfo,
     TimeRange,
     Transcript,
     WordTranscript,
 )
 from ..domain.errors import (
+    AttributionUnreliable,
     DiarizationUnavailable,
     NoSubtitlesAvailable,
     OperationCancelled,
@@ -62,6 +65,7 @@ from .chapters import (
 )
 from .conversation import DEFAULT_CHUNK_CHARS, allocate_slides, chunk_turns, format_window
 from .diarized_pipeline import (
+    WindowOutcome,
     adapter_fingerprint,
     assemble,
     attribution_counts,
@@ -74,6 +78,7 @@ from .diarized_pipeline import (
     timeline_fingerprint,
     words_fingerprint,
 )
+from .drop_report import drop_diagnostics
 from .naming import deck_folder_name
 from .speakers import (
     assign_speakers,
@@ -112,6 +117,19 @@ _P_SUBTITLES = 0.05
 _P_SUMMARY = 0.40
 _P_DOWNLOAD = 0.75
 _P_FRAMES = 0.90
+
+
+def _report_drops(cb: ProgressCallback, outcomes: Sequence[WindowOutcome], speakers: Sequence[SpeakerInfo]) -> None:
+    """歸屬不可靠而失敗之前，把每一段被丟掉的原因（見 drop_report）記成最後一則進度狀態：
+    新聞服務每次輪詢都把狀態記進工作紀錄，連看到失敗的那一次也是。
+
+    診斷只是輔助：它自己出了任何錯，都不能蓋掉原本的 AttributionUnreliable，只在狀態裡說明沒能產生。
+    """
+    try:
+        text = drop_diagnostics(outcomes, speakers)
+    except Exception as e:  # noqa: BLE001 診斷壞了也要讓原本的失敗照常往上丟
+        text = f"（沒能產生診斷：{type(e).__name__}）"
+    cb(None, text)
 
 
 class BuildDeckUseCase:
@@ -343,7 +361,11 @@ class BuildDeckUseCase:
                 self._scaled(cb, _P_SUBTITLES, _P_SUMMARY), check, cancelled, self._quote_only)
             counts = attribution_counts(outcomes)
             cb(None, summary_line(counts))               # 提出／留下／原話／丟掉的分類，記在工作的進度紀錄裡
-            check_reliability(outcomes)
+            try:
+                check_reliability(outcomes)
+            except AttributionUnreliable:
+                _report_drops(cb, outcomes, speakers)    # 失敗訊息只有總數；每一段是怎麼回事，記在最後一則狀態
+                raise
             slides = assemble(outcomes)
             proposed = counts.proposed
             trimmed = sum(o.trimmed_pages for o in outcomes)

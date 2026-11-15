@@ -778,3 +778,57 @@ def test_the_safe_mode_switch_reaches_the_checks(quote_only):
     else:
         assert shown == [GOOD[0][1], GOOD[1][1]] and only.rescued == 0
     assert (only.proposed, only.kept) == (2, 2)
+
+
+# --- 診斷用的紀錄：被丟掉的點、一個窗問了幾次 ---
+
+
+def test_the_outcome_keeps_the_points_the_checks_dropped_and_says_it_asked_once():
+    turns, speakers, allocations = _setup(*LINES)
+    reply = (RawSlide("預算", (whole(0, GOOD[0][1]), whole(1, GOOD[1][1]), whole(2, FOUR_GOOD[2][1]), invented())),)
+
+    (only,), _ = run_windows(FakeConversation([reply]), turns, speakers, allocations)
+
+    (dropped,) = only.dropped
+    assert (dropped.code, dropped.quote, dropped.turn) == ("bad_quote", NOT_IN_THE_TRANSCRIPT, 2)
+    assert only.attempts == 1                       # 4 個點丟 1 個，剛好 25%：不重問
+
+
+def test_the_dropped_points_are_those_of_the_attempt_that_was_used():
+    turns, speakers, allocations = _setup(*LINES)
+    first = (RawSlide("預算", (whole(1, GOOD[1][1]), invented(), invented(), invented())),)    # 丟掉 3 個，整頁也不用
+    conversation = FakeConversation([first, reply_citing(*GOOD)])
+
+    (only,), _ = run_windows(conversation, turns, speakers, allocations)
+
+    assert only.attempts == 2 and only.dropped == ()                  # 用的是第二次：它一個點也沒丟
+
+
+def test_when_neither_attempt_passes_the_dropped_points_are_those_of_the_one_with_more_kept_points():
+    turns, speakers, allocations = _setup(*LINES)
+    first = (RawSlide("預算", (whole(0, GOOD[0][1]), whole(1, GOOD[1][1]), invented(), invented(), invented())),)
+    second = (RawSlide("預算", (whole(1, GOOD[1][1]), invented(), invented(), invented(), invented())),)
+
+    (only,), _ = run_windows(FakeConversation([first, second]), turns, speakers, allocations)
+
+    assert only.attempts == 2 and len(only.dropped) == 3              # 第一次留 2 個、丟 3 個，用的是它
+
+
+def test_a_malformed_first_reply_still_counts_as_an_ask():
+    turns, speakers, allocations = _setup(*LINES)
+    conversation = FakeConversation([SummarizerOutputInvalid("壞掉的回應"), reply_citing(*GOOD)])
+
+    (only,), _ = run_windows(conversation, turns, speakers, allocations)
+
+    assert only.attempts == 2 and only.dropped == ()
+
+
+def test_a_window_that_was_never_sent_to_the_model_was_asked_zero_times():
+    turns, speakers, allocations = _setup(*LINES, ("S3", "我是打電話進來的聽眾想問一件事"),
+                                          ("S3", "請問這個政策什麼時候開始實施呢"), budget=100)
+
+    outcomes, _ = run_windows(FakeConversation(default=reply_citing(*GOOD)), turns, speakers, allocations)
+
+    skipped = [o for o in outcomes if o.skipped]
+    assert skipped and all(o.attempts == 0 and o.dropped == () for o in skipped)
+    assert all(o.attempts == 1 for o in outcomes if not o.skipped)
