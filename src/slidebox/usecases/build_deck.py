@@ -119,14 +119,17 @@ _P_DOWNLOAD = 0.75
 _P_FRAMES = 0.90
 
 
-def _report_drops(cb: ProgressCallback, outcomes: Sequence[WindowOutcome], speakers: Sequence[SpeakerInfo]) -> None:
+def _report_drops(
+    cb: ProgressCallback, outcomes: Sequence[WindowOutcome], speakers: Sequence[SpeakerInfo], quote_only: bool = False,
+) -> None:
     """歸屬不可靠而失敗之前，把每一段被丟掉的原因（見 drop_report）記成最後一則進度狀態：
     新聞服務每次輪詢都把狀態記進工作紀錄，連看到失敗的那一次也是。
 
     診斷只是輔助：它自己出了任何錯，都不能蓋掉原本的 AttributionUnreliable，只在狀態裡說明沒能產生。
+    quote_only 是這次跑的模式：診斷裡「換一種做法重跑」要照同一個模式，才和真的檢查一樣。
     """
     try:
-        text = drop_diagnostics(outcomes, speakers)
+        text = drop_diagnostics(outcomes, speakers, quote_only)
     except Exception as e:  # noqa: BLE001 診斷壞了也要讓原本的失敗照常往上丟
         text = f"（沒能產生診斷：{type(e).__name__}）"
     cb(None, text)
@@ -364,7 +367,7 @@ class BuildDeckUseCase:
             try:
                 check_reliability(outcomes)
             except AttributionUnreliable:
-                _report_drops(cb, outcomes, speakers)    # 失敗訊息只有總數；每一段是怎麼回事，記在最後一則狀態
+                _report_drops(cb, outcomes, speakers, self._quote_only)    # 失敗訊息只有總數；每一段是怎麼回事，記在最後一則狀態
                 raise
             slides = assemble(outcomes)
             proposed = counts.proposed

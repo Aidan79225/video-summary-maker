@@ -454,17 +454,23 @@ def test_every_group_gets_an_example_before_any_group_gets_a_second_one():
     assert order == ["bad_quote／absent", "bad_quote／partial", "leading_pronoun_or_title", "bad_quote／absent"]
 
 
-def test_there_are_at_most_eight_examples_and_at_most_two_per_group():
+def test_there_are_at_most_the_limit_of_examples_and_at_most_two_per_group():
     many = [p for point in (PARTIAL, OTHER_VOICE, PRONOUN, FIRST_PERSON) for p in (point,) * 3]
     many += [absent(n) for n in range(3)]
 
-    text = text_of(real_outcomes(*many))
+    labels = example_labels(text_of(real_outcomes(*many)))
 
-    labels = example_labels(text)
     assert set(labels) == {"bad_quote／partial", "bad_quote／other_voice", "bad_quote／absent",
                            "leading_pronoun_or_title", "first_person"}
-    assert sum(labels.values()) == report.MAX_EXAMPLES == 8
-    assert max(labels.values()) == 2
+    assert max(labels.values()) == 2                                  # 五種原因，每種最多兩個：沒有超過上限
+
+
+def test_the_examples_stop_at_the_limit_even_when_there_are_more_reasons_than_that():
+    """每種原因兩個、共 7 種：14 個要給，只給上限那麼多（多的原因先給，每種原因先各給一個）。"""
+    labels = example_labels(text_of((many_codes_outcome(7), many_codes_outcome(7))))
+
+    assert sum(labels.values()) == report.MAX_EXAMPLES
+    assert max(labels.values()) == 2 and len(labels) == 7
 
 
 def test_the_second_example_of_a_group_comes_from_another_window_when_there_is_one():
@@ -562,19 +568,20 @@ def many_codes_outcome(count: int):
 def test_the_header_of_the_examples_says_how_they_were_chosen():
     text = text_of((many_codes_outcome(3),))
 
-    assert "例子（模型寫的和逐字稿對照；多的原因先給，每種原因先各給一個，最多 8 個）：" in text
+    assert f"例子（模型寫的和逐字稿對照；多的原因先給，每種原因先各給一個，最多 {report.MAX_EXAMPLES} 個）：" in text
 
 
 def test_the_reasons_that_got_no_example_are_named():
-    """攔的 bug：原因超過八種，標頭卻說「每一種原因先各給一個」，少見的原因沒有例子，讀的人不知道它存在。"""
-    text = text_of((many_codes_outcome(10),))
+    """攔的 bug：原因超過例子的上限，標頭卻說「每一種原因先各給一個」，少見的原因沒有例子，讀的人不知道它存在。"""
+    limit = report.MAX_EXAMPLES
+    text = text_of((many_codes_outcome(limit + 2),))
 
-    assert text.count("[第 ") == 8
-    assert "  沒有附例子的原因：code_08 1、code_09 1" in text
+    assert text.count("[第 ") == limit
+    assert f"  沒有附例子的原因：code_{limit:02d} 1、code_{limit + 1:02d} 1" in text
 
 
 def test_no_reason_is_named_as_left_out_when_every_one_has_an_example():
-    assert "沒有附例子" not in text_of((many_codes_outcome(8),))
+    assert "沒有附例子" not in text_of((many_codes_outcome(report.MAX_EXAMPLES),))
 
 
 def test_a_reason_that_lost_its_example_to_the_length_limit_is_named_too(monkeypatch):
@@ -613,7 +620,7 @@ def test_a_text_that_is_still_too_long_without_any_example_is_cut_and_says_so(mo
 
     text = text_of(real_outcomes(PARTIAL, OTHER_VOICE, ABSENT, PRONOUN))
 
-    assert len(text) <= 200 and text.endswith(report.TRUNCATED_NOTE)
+    assert len(text) <= 200 and text.splitlines()[-2:] == [report.TRUNCATED_NOTE, report.END_LINE]
     assert text.startswith("診斷：被丟掉的重點")
 
 
