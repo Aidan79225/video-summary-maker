@@ -191,13 +191,33 @@ def test_a_strict_holder_is_never_replaced_by_a_closer_looking_turn():
     assert found.turn is turns[0] and found.excerpt is None         # 一字不差的在 T0；容許只在沒有一字不差的時候才用
 
 
-def test_a_quote_longer_than_the_comparison_limit_is_not_tolerated():
-    base = distinct_text(40) * 8
-    quote = base[:MAX_TOLERANT_QUOTE_CHARS + 20]
-    turns = [turn(0, "S1", "今天討論這件事"), turn(1, "S2", base)]
+UNIQUE_LONG = "".join(distinct_text(60, seed=seed) for seed in range(1, 6))                # 300 個字，沒有重複的一段
 
-    assert locate_quote(substituted(quote, 1), turns[0], turns, CITABLE).turn is None
+
+@pytest.mark.parametrize("length, found", [
+    (MAX_TOLERANT_QUOTE_CHARS - 1, True),
+    (MAX_TOLERANT_QUOTE_CHARS, True),               # 剛好是上限：還比
+    (MAX_TOLERANT_QUOTE_CHARS + 1, False),          # 多一個字：不比
+    (MAX_TOLERANT_QUOTE_CHARS + 20, False),
+])
+def test_a_quote_longer_than_the_comparison_limit_is_not_tolerated(length, found):
+    turns = [turn(0, "S1", "今天討論這件事"), turn(1, "S2", UNIQUE_LONG)]
+    quote = UNIQUE_LONG[:length]
+
+    assert (locate_quote(substituted(quote, 1), turns[0], turns, CITABLE).turn is turns[1]) is found
     assert locate_quote(quote, turns[0], turns, CITABLE).turn is turns[1]                    # 一字不差還是可以
+
+
+def test_a_turn_whose_characters_cannot_be_mapped_back_to_its_text_is_not_compared():
+    """標音符號分開寫的字（e 加上重音符號）在比對時會合成一個字，位置就對不回逐字稿的原文：寧可不比，也不顯示位置錯的原文。"""
+    said = "今年的預算大約增加了兩成左右而且還有咖啡的補助"
+    quote = "今年的預算大約增加了兩成佐右"
+    plain = [turn(0, "S1", "今天討論這件事"), turn(1, "S2", said)]
+    accented = [turn(0, "S1", "今天討論這件事"), turn(1, "S2", said + "cafe\u0301")]
+
+    found = locate_quote(quote, plain[0], plain, CITABLE)
+    assert found.turn is plain[1] and (found.excerpt, found.edits) == ("今年的預算大約增加了兩成左右", 1)
+    assert locate_quote(quote, accented[0], accented, CITABLE).turn is None
 
 
 def test_a_tolerated_match_is_always_close_unique_and_inside_the_turn():
@@ -243,6 +263,38 @@ def test_a_point_whose_quote_has_a_typo_is_kept_and_counted_as_tolerated():
     assert any("逐字稿不同" in problem and "T1" in problem for problem in result.problems)
 
 
+def test_a_lead_in_is_looked_up_with_the_transcripts_words_and_not_the_typo_in_the_quote():
+    """引言（「我引用…的說法：」）是靠 quote 在這一輪裡的位置往前找的；用模型寫錯的字找不到位置，轉述就當成他自己的主張。"""
+    said = "我引用市場上的說法：預算要增加三千億才夠而且要盡快執行，但這不是我的立場。"
+    point = "指出預算要增加三千億才夠"
+    exact, _ = tolerated_run(point, "預算要增加三千億才夠而且要盡快執行", said)
+    extra, result = tolerated_run(point, "預算要增加三千億才夠而且要儘快執行", said)           # 盡 → 儘
+
+    assert exact == []
+    assert extra == [] and dict(result.dropped_by_code) == {c.REPORTED_SPEECH: 1}
+
+
+# 局長回答時先複述了一句（你說一個便當只有兩樣青菜），接著講自己的做法；quote 只引自己的做法那一半
+RAISED = "局長，備援便當的品質也要談，有家長拍照給我，說一個便當只有兩樣青菜，雞肉也沒看到，孩子根本吃不飽。"
+REPLY = ("你說一個便當只有兩樣青菜，這個我們有看到照片，是第一天備援業者趕工的狀況，我們已經要求每餐至少三樣青菜，"
+         "熱量不得低於六百五十大卡，稽查員到現場抽看，不合格的當場退回。")
+OWN_PART = "我們已經要求每餐至少三樣青菜，熱量不得低於六百五十大卡，稽查員到現場抽看"
+
+
+def reply_run(quote):
+    turns, good = with_anchors(("S2", RAISED), ("S1", REPLY))
+    return run(RawPoint(1, "規範備援便當青菜數量及熱量標準並加強稽查", (), quote), turns=turns, speakers=TWO, good=good)
+
+
+def test_the_restating_clause_outside_the_quoted_part_stays_outside_when_the_quote_has_a_typo():
+    """quote 的範圍是用 quote 在這一輪裡的位置找的；用模型寫錯的字找不到位置，那句複述就被算進來，自己的做法被當成複述丟掉。"""
+    exact, _ = reply_run(OWN_PART)
+    extra, result = reply_run(OWN_PART.replace("要求", "要球"))                                  # 求 → 球
+
+    assert [p.speaker for p in exact] == ["S1"]
+    assert [p.speaker for p in extra] == ["S1"] and result.tolerated == 1 and dict(result.dropped_by_code) == {}
+
+
 # 只差一、兩個字，但那幾個字有意思（否定、數字的數值、意思相反的說法）：不算照抄，和以前一樣丟掉（bad_quote）
 MEANING_SAID = "這個預算我們不能再增加了因為財政壓力真的很大"
 
@@ -253,6 +305,8 @@ MEANING_SAID = "這個預算我們不能再增加了因為財政壓力真的很�
     ("這個預算我們今年增加了三十億元因為財政壓力很大", "這個預算我們今年增加了二十億元因為財政壓力很大", "指出預算增加二十億元"),   # 三十 → 二十
     ("這個預算我們今年增加了三成因為財政壓力很大真的", "這個預算我們今年減少了三成因為財政壓力很大真的", "指出預算減少三成"),       # 增加 → 減少
     ("我們明年的預算要編三個月的因為財政壓力很大喔", "我們去年的預算要編三個月的因為財政壓力很大喔", "指出去年的預算編三個月"),       # 明年 → 去年
+    ("我們每隔3週就會重新檢討一次預算執行的情況", "我們每隔3個月就會重新檢討一次預算執行的情況", "指出每隔3個月檢討預算執行"),     # 3週 → 3個月：數字一樣、單位不同
+    ("預算增加了但是沒有增加太多", "預算增加了但是沒有說增加太多", "指出預算增加了"),                                  # 沒有增加 → 沒有說增加：否定管不到了
 ])
 def test_a_difference_in_a_negation_a_number_or_an_opposite_is_not_tolerated(said, quote, point):
     extra, result = tolerated_run(point, quote, said)
@@ -269,10 +323,13 @@ def test_the_same_number_written_another_way_is_tolerated():
     assert [p.turn for p in extra] == [1] and result.tolerated == 1
 
 
-def test_a_yes_no_form_is_not_a_negation_when_the_wording_changes():
-    said = "這個預算今年有沒有增加我們還在討論因為財政很緊張啊"
-    extra, result = tolerated_run("詢問今年的預算有沒有增加", "這個預算今年有沒有增加我們還在討論因為財政很緊張啊啊", said)
+def test_a_yes_no_form_is_not_a_negation_when_the_wording_of_it_changes():
+    """「是不是」「是否」都是在問：不是否定。把「不」「否」當成否定的話，兩邊的否定數目對不上，就被當成改了意思丟掉。"""
+    said = "我想知道這個預算今年是不是有增加我們還在討論因為財政很緊張"
+    quote = "我想知道這個預算今年是否有增加我們還在討論因為財政很緊張"
+    extra, result = tolerated_run("詢問今年的預算是不是有增加", quote, said)
 
+    assert [p.text for p in extra] == ["詢問今年的預算是不是有增加"]
     assert result.tolerated == 1
 
 

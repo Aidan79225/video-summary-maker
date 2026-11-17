@@ -12,6 +12,8 @@
 唯一的例外是照抄得差不多的引文：同音字、數字寫法、多一個「也」這種只差幾個字的，且整份逐字稿裡只有一輪（不論
 是誰）和它這麼接近，就用那一輪，並且改用逐字稿的原文（excerpt）往下檢查與顯示，不用模型寫的字。容許的字數很少
 （每 TOLERATED_EDIT_CHARS 個字 1 個、最多 TOLERATED_EDITS_MAX 個）；一字不差的永遠優先。
+找到的那一段的起點與終點也要只有一種可能：同樣少的字數也能對上別的起點或終點（頭尾寫錯一個字、同一輪裡有兩段一樣接近），
+就不知道模型指的是哪一段，不用；猜錯一個字，轉述的字眼（「網友說」）與前面的引言就可能被切到範圍外。
 
 改用原話（literal_span／rescue 的條件）：模型的改寫對不上那一輪時，如果引文本身是那一輪裡「連續」的
 一段，就顯示那一段原話（取自逐字稿，不是模型寫的字）。這裡放的是不依賴詞彙表的部分：連續的位置、
@@ -96,7 +98,8 @@ def locate_quote(
 
     - 引文的片段要全部依序出現在同一輪裡。
     - 沒有任何一輪一字不差時，才看「照抄得差不多」：整段引文最多差 tolerated_edits 個字就是逐字稿裡連續的
-      一段，而且全部的輪（不論說話者）只有一輪這麼接近，那一輪是可以引用的說話者，就用它（見 _near_verbatim）。
+      一段，而且全部的輪（不論說話者）只有一輪這麼接近、那一輪裡也只有一種對法，那一輪是可以引用的說話者，
+      就用它（見 _near_verbatim、_align）。
       tolerant 是 False 就不看（診斷要分析「為什麼不是一字不差」，見 quote_misses）。
     - 引文太短（片段合計不到 MIN_QUOTE_CHARS，除非剛好是整輪）、或只由很短的片段拼成（最長的片段
       不到 QUOTE_MIN_LONGEST），都不足以認出是哪一輪。
@@ -159,11 +162,16 @@ def _near_verbatim(quote: str, in_window: Sequence[Turn], citable: frozenset[str
     if len(matches) != 1 or matches[0][0].speaker not in citable:
         return None
     holder, (edits, span) = matches[0]
+    if span is None:                                  # 起點或終點不只一種可能（見 _align）：不用
+        return None
     return QuoteLocation(holder, excerpt=span.text, edits=edits)
 
 
-def _close_excerpt(whole: str, turn_text: str, limit: int) -> tuple[int, QuoteSpan] | None:
-    """whole（squash 過的引文）最多改 limit 個字就會變成這一輪裡連續的一段：回傳（改幾個字, 那一段的位置）。"""
+def _close_excerpt(whole: str, turn_text: str, limit: int) -> tuple[int, QuoteSpan | None] | None:
+    """whole（squash 過的引文）最多改 limit 個字就會變成這一輪裡連續的一段：回傳（改幾個字, 那一段的位置）。
+
+    對得上、但起點或終點不只一種可能時，位置是 None：這一輪還是算「這麼接近」（別輪不能因此被當成沒有競爭者），
+    只是不能用它的位置。"""
     flat = " ".join(turn_text.split())
     squashed, positions = squash_positions(flat)
     if squashed != squash(flat):                      # 位置對不上（組合字之類少見的狀況）：不比
@@ -172,29 +180,46 @@ def _close_excerpt(whole: str, turn_text: str, limit: int) -> tuple[int, QuoteSp
     shared = sum(1 for i in range(len(whole) - 1) if whole[i:i + 2] in grams)
     if shared < len(whole) - 1 - 2 * limit:           # 改一個字最多弄壞兩個相鄰字組：對不上這麼多就不可能在 limit 之內
         return None
-    edits, begin, end = _align(whole, squashed)
+    edits, begin, end, unique = _align(whole, squashed)
     if edits > limit or end <= begin:
         return None
+    if not unique:
+        return edits, None
     return edits, QuoteSpan(flat, positions[begin], positions[end - 1] + 1)
 
 
-def _align(quote: str, text: str) -> tuple[int, int, int]:
+def _align(quote: str, text: str) -> tuple[int, int, int, bool]:
     """quote 最少要改幾個字（換一個字、多一個字、少一個字各算一個），才會變成 text 裡連續的一段：
-    回傳（改幾個字, 那一段的起點, 終點（不含））。同樣少的話選長度最接近 quote 的、再選最前面的。"""
+    回傳（改幾個字, 那一段的起點, 終點（不含）, 起點與終點是不是只有這一種可能）。
+
+    同樣少的字數也能對上別的起點或終點就不是只有一種可能（頭尾寫錯一個字：可以當成多了一個字、從隔壁的字開始，也可以
+    當成寫錯了；同一輪裡有兩段一樣接近）：不知道指的是哪一段，往下看轉述與引言的檢查會依那一段的位置，猜錯就看不出來。
+    """
     width = len(text)
     cost = [0] * (width + 1)                          # 從 text 的哪裡開始都不用付出
-    begin = list(range(width + 1))
+    first = list(range(width + 1))                    # 到這一格為止，同樣少的各種對法裡最前面的起點
+    last = list(range(width + 1))                     # …與最後面的起點
     for row, wanted in enumerate(quote, 1):
-        new_cost, new_begin = [row], [0]
+        new_cost, new_first, new_last = [row], [0], [0]
         for column in range(1, width + 1):
-            best = min(((cost[column - 1] + (wanted != text[column - 1]), begin[column - 1]),
-                        (cost[column] + 1, begin[column]),
-                        (new_cost[column - 1] + 1, new_begin[column - 1])), key=lambda option: option[0])
-            new_cost.append(best[0])
-            new_begin.append(best[1])
-        cost, begin = new_cost, new_begin
-    end = min(range(width + 1), key=lambda column: (cost[column], abs(column - begin[column] - len(quote)), column))
-    return cost[end], begin[end], end
+            replaced = cost[column - 1] + (wanted != text[column - 1])
+            left_out = cost[column] + 1
+            added = new_cost[column - 1] + 1
+            best = min(replaced, left_out, added)
+            lowest, highest = width + 1, -1
+            if replaced == best:
+                lowest, highest = first[column - 1], last[column - 1]
+            if left_out == best:
+                lowest, highest = min(lowest, first[column]), max(highest, last[column])
+            if added == best:
+                lowest, highest = min(lowest, new_first[column - 1]), max(highest, new_last[column - 1])
+            new_cost.append(best)
+            new_first.append(lowest)
+            new_last.append(highest)
+        cost, first, last = new_cost, new_first, new_last
+    best = min(cost)
+    ends = [column for column in range(width + 1) if cost[column] == best]
+    return best, first[ends[0]], ends[0], len(ends) == 1 and first[ends[0]] == last[ends[0]]
 
 
 # --- 原話：引文在那一輪裡的連續位置 ---
