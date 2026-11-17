@@ -28,6 +28,9 @@ _NOT_A_NAME_CHAR = frozenset("的是這那個位請謝跟和與及讓給對向�
 _ENDS_A_WORD = frozenset("看找問當做叫聘約見告天得校")
 # 「任」是姓氏（任委員），但前面接這些字就是任期的意思：前任、現任、歷任、新任、卸任、接任、擔任局長
 _TENURE_BEFORE = frozenset("前現歷繼新卸上下接出擔升兼調就改轉派")
+# 職稱其實是別的詞的一部分：職稱後面接這些字，就不是在稱呼人（實測：「推動委員會」被抓成「動委員」）
+_AFTER_CHANG = frozenset("期久遠度途輩假相")                   # 地區長期、城市長久、里長遠…：職稱的「長」是長短的長
+_BEFORE_ASSISTANT = frozenset("協幫輔資援贊求救補有無互")        # 協助理解、有助理解、資助理事會…：「X助」是一個詞
 _NICKNAME_RE = re.compile(
     r"(?:^|[\s，。！？、：「])((?:阿|小|老)[一-鿿])(?=你|您|妳|好|，|。|！|？|\s|$|大哥|大姊|哥|姐)")
 _THANKS_RE = re.compile(r"(?:謝謝|感謝|謝|請)((?:阿|小|老)[一-鿿])")
@@ -47,11 +50,28 @@ _NOT_A_NICKNAME = frozenset([
 ])
 
 
+def _is_part_of_a_word(char: str, title: str, after: str) -> bool:
+    """「字＋職稱」其實是別的詞的一部分：委員會（不是委員）、地區長期（不是區長）、協助理解（不是助理）。
+
+    after 是職稱後面緊接的那一個字（已經到結尾就是空字串）。只擋這幾種已經看到、結構也很清楚的詞；
+    其餘仍然照「字＋職稱」抓（誤抓的代價是丟掉一個重點，漏抓的代價是顯示一個稱呼）。
+    """
+    if title == "委員":
+        return after == "會"
+    if title.endswith("長"):
+        return after in _AFTER_CHANG
+    if title == "助理":
+        return char in _BEFORE_ASSISTANT
+    return False
+
+
 def detect_names(text: str) -> frozenset[str]:
     """這段逐字稿裡用來稱呼人的名字與稱謂（見模組說明）。"""
     found: set[str] = set()
     for match in _TITLED_RE.finditer(text):
         char, before = match.group(1), text[max(0, match.start() - 1):match.start()]
+        if _is_part_of_a_word(char, match.group(2), text[match.end():match.end() + 1]):
+            continue
         if char == "告" and before == "報":
             found.add("報告" + match.group(2))              # 「報告委員，…」是對人說話的稱呼，文字裡不要有
         elif char in _NOT_A_NAME_CHAR or char in _ENDS_A_WORD:

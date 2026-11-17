@@ -146,3 +146,47 @@ def test_a_given_name_used_as_address_before_you_is_a_name(text, expected):
 ])
 def test_a_connector_or_a_phrase_before_you_is_not_a_name(text):
     assert detect_names(text) == frozenset()
+
+
+# --- 真實逐字稿（ReXUCiDCbl8）裡誤抓的：職稱只是別的詞的一部分，那一個字也不是姓 ---
+
+CHANG_TITLES = [t for t in TITLES + ["署長", "執行長", "理事長", "董事長"] if t.endswith("長")]
+
+
+@pytest.mark.parametrize("text", [
+    "我要做主権我會在府籍的都間成立我們推動委員會改管我們所有心災的問題",     # 真實逐字稿：被抓成「動委員」
+    "市府成立審查委員會來處理", "我們組成籌備委員會", "由監督委員會每月檢視", "選舉委員會已經公告",
+    "都市計畫委員會審議通過", "向大會報告委員會的決議",
+])
+def test_a_committee_is_not_a_person_with_a_title(text):
+    assert detect_names(text) == frozenset()
+
+
+@pytest.mark.parametrize("title", sorted(set(CHANG_TITLES)))
+@pytest.mark.parametrize("follower", list("期久遠度途輩假相"))
+def test_a_title_ending_in_chang_that_a_word_continues_is_not_a_title(title, follower):
+    assert detect_names(f"今天王{title}{follower}說明") == frozenset()
+
+
+@pytest.mark.parametrize("text", [
+    "這個地區長期缺乏公共設施", "整個城市長期發展不平衡", "里辦事處長期沒有人力", "學科長期以來都是這樣",
+])
+def test_long_term_after_a_place_word_is_not_a_title(text):
+    assert detect_names(text) == frozenset()
+
+
+@pytest.mark.parametrize("text", ["我們用圖表協助理解", "這有助理解整個流程", "幫助理解這個問題", "輔助理解的資料", "資助理事會運作"])
+def test_assist_words_before_understand_are_not_an_assistant(text):
+    assert detect_names(text) == frozenset()
+
+
+@pytest.mark.parametrize("text, expected", [
+    ("請李助理說明", {"李助理"}),
+    ("陳市長處理得很好", {"陳市長"}),                 # 處不在「長…」的後綴清單裡：「陳市長處理」是一句話
+    ("王委員說明預算", {"王委員"}),
+    ("請林委員，也請王委員說明", {"林委員", "王委員"}),
+    ("邱教授的長期研究", {"邱教授"}),
+    ("謝謝王主任", {"王主任"}),
+])
+def test_a_real_name_next_to_those_words_is_still_a_name(text, expected):
+    assert detect_names(text) == expected
