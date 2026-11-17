@@ -6,7 +6,9 @@
 只比文字本身的檢查（數字、問句、名字、代名詞…）。
 
 產品故意比實驗室更嚴的地方，與只是檢查順序不同的地方，各寫在 STRICTER 與 CODE_ORDER：每一項都有原因。
-絕不接受實驗室丟掉的點（反過來才會發生）：這是整個歸屬機制的底線。
+絕不接受實驗室丟掉的點：這是整個歸屬機制的底線。唯一的例外是 RECOVERED：實驗室的問句檢查把「問句字眼在沒有標點的
+長話裡」一律當成整輪都是問句；產品只看字眼附近，所以留下了五個實驗室丟掉的點。每一個都要寫原因，
+而且實驗室自己的評分不能是歸錯人、捏造或合併。
 """
 from __future__ import annotations
 
@@ -52,6 +54,23 @@ STRICTER = {
         "reported_speech", "quote 是「他們說想續約但是要砍價」：說話者在轉述客戶的話。產品一律擋下「他們說、有人說、"
                           "根據報導」這類轉述（審查用模型的寫法試過：「有人說…，我認為這是誇大的」會被寫成說話者自己的"
                           "主張，意思整個反過來），實驗室的參考沒有這道檢查；這一點的文字雖然只是「說明」，產品仍不冒險"),
+}
+# 產品比實驗室的參考寬鬆：實驗室因為問句字眼丟掉、產品留下（原因）。只有一種情況：那一輪話很長又沒有標點，問句字眼在別處，
+# 帶著重點的那一小段不是問句（對照 test_question_in_unpunctuated_turns.py）。實驗室自己的評分（scorer_category）要是
+# correct 或 unmatched（找不到對應的參考重點，不代表錯）；歸錯人（misattributed）的那個點（F10 的 3-12）仍然丟掉：
+# 它複述了對方剛提的數字 2980，問句字眼照最嚴格的算。
+RECOVERED = {
+    ("F07_p4_asr_numbers_and_false_flags", 2, 3): (
+        "S3 說「現在好幾個客戶都在問有沒有便宜一點的」：「有沒有」是客戶的問題，不是這一輪在問；"
+        "S3 自己說的是「我覺得要出一個輕量版 月費2980」（實驗室評分 correct）"),
+    ("F10_gemma4_overlong_slide", 1, 1): (
+        "開場白「今天主要三件事 第一個是工程進度…」，後面的「好不好」是在要求不要講太久（人工對照原文）"),
+    ("F10_gemma4_overlong_slide", 1, 2): (
+        "「一個小時內要結束拜託大家 不要講太久好不好」：客氣的請求，重點寫成「提醒」，對得上（人工對照原文）"),
+    ("F10_gemma4_overlong_slide", 3, 11): (
+        "和 F07 的 2-3 同一句話（實驗室評分 correct）"),
+    ("F10_gemma4_overlong_slide", 3, 15): (
+        "「我不想讓客戶有一種被我們拆開賣的感覺」是 S1 自己的擔心，同一輪裡別處的問句不是它（人工對照原文）"),
 }
 # 兩邊都丟，但原因碼不同：產品先看文字（名字）、再看出處（anchor），最後才看數字、問句
 CODE_ORDER = {
@@ -144,6 +163,9 @@ def test_every_point_gets_the_verdict_the_lab_reached_except_where_the_product_i
         if key in STRICTER:
             code, _reason = STRICTER[key]
             assert decision.startswith("kept") and check.point is None and check.problem.code == code, key
+        elif key in RECOVERED:
+            assert decision == f"dropped:{conv.QUESTION_STATED_AS_FACT}", (key, decision)
+            assert check.point is not None and not check.rescued, (key, check.problem)
         elif decision.startswith("dropped"):
             lab = lab_code(decision)
             expected = CODE_ORDER[key][1] if key in CODE_ORDER else lab
@@ -170,8 +192,23 @@ def test_the_product_never_keeps_a_point_the_lab_dropped(name):
         else:
             decision = row["hybrid_decision"]
             lab_dropped = decision is not None and decision.startswith("dropped")
-        if lab_dropped:
+        if lab_dropped and (name, *position) in RECOVERED:
+            assert row["scorer_category"] in ("correct", "unmatched"), (name, position, row["scorer_category"])
+        elif lab_dropped:
             assert replay.checks[position].point is None, (name, position, row["text"])
+
+
+def test_the_recovered_points_are_exactly_the_ones_the_product_keeps_against_the_lab():
+    """RECOVERED 不能多也不能少：每一個真的被留下，而且除了它們以外，實驗室丟掉的點產品都丟。"""
+    kept_against_the_lab = set()
+    for name in P4:
+        replay = replay_of(name)
+        for row in replay.expect["points"]:
+            decision = row["hybrid_decision"]
+            position = (row["page"], row["number"])
+            if decision is not None and decision.startswith("dropped") and replay.checks[position].point is not None:
+                kept_against_the_lab.add((name, *position))
+    assert kept_against_the_lab == set(RECOVERED)
 
 
 @pytest.mark.parametrize("name, call_file, expect_file", [
@@ -249,7 +286,7 @@ def test_the_counts_of_a_whole_window_add_up(name):
 
 # 每份的整窗數字：(提出, 留下, 其中顯示原話, 有問題, 查不出來, 同頁規則)，砍頁之後、進整份的比例檢查之前。
 # 和實驗室比：留下的點少的，只有 F01（兩個單字的回答）、F03（一個數字：三分鐘 ≠ 三十分鐘）與 F10（一個代名詞、
-# 一個轉述）；F10 提出的 26 個比模型寫的 48 個少 22 個：
+# 一個轉述）；留下的點多的是 RECOVERED：F07 多 1 個、F10 多 4 個（超出每頁上限的不算在留下的數字裡）。F10 提出的 24 個比模型寫的 48 個少 24 個：
 # 留下的點超過每頁 4 個的部分不算提出，也不算丟掉；F09 少的 4 個是被砍掉的第 6 頁。
 WINDOW_TOTALS = {
     "F01_prod_qa_official_names": (45, 5, 0, 36, 2, 2),
@@ -258,10 +295,10 @@ WINDOW_TOTALS = {
     "F04_p4_debate_stitched_quote": (16, 11, 0, 3, 2, 0),
     "F05_p4_qa_restatement_and_rescue": (16, 13, 3, 1, 2, 0),
     "F06_p4f_panel_percent_to_minutes": (16, 14, 0, 1, 1, 0),
-    "F07_p4_asr_numbers_and_false_flags": (16, 13, 2, 2, 1, 0),
+    "F07_p4_asr_numbers_and_false_flags": (16, 14, 2, 1, 1, 0),
     "F08_p4f_press_wrong_speaker_reanchor": (16, 14, 1, 1, 1, 0),
     "F09_p4f_monologue_percent_to_cheng": (20, 17, 1, 3, 0, 0),
-    "F10_gemma4_overlong_slide": (26, 9, 0, 15, 2, 0),
+    "F10_gemma4_overlong_slide": (24, 11, 0, 11, 2, 0),
 }
 # 這些窗在管線的比例檢查（被丟掉的不超過 25%）會過關；沒過關的，管線會帶著原因再問一次。
 # F01 的舊提示詞、F04 的接合引文、F10 的長頁都在這裡被擋下來，F02 的第一次也是（見下面）。
@@ -292,9 +329,9 @@ def test_f10_a_slide_of_thirty_nine_points_shows_four_and_its_other_points_are_n
     result, _, _ = totals(replay)
 
     assert [len(slide.points) for slide in replay.raw] == [4, 5, 39]
-    assert [len(slide.points) for slide in result.slides] == [2, 3, conv.MAX_BULLETS]
-    assert sum(len(slide.points) for slide in replay.raw) - result.proposed == 22       # 留下卻超出每頁 4 點的
-    assert result.proposed - result.kept == 17 == sum(n for _, n in result.dropped_by_code)
+    assert [len(slide.points) for slide in result.slides] == [4, 3, conv.MAX_BULLETS]
+    assert sum(len(slide.points) for slide in replay.raw) - result.proposed == 24       # 留下卻超出每頁 4 點的
+    assert result.proposed - result.kept == 13 == sum(n for _, n in result.dropped_by_code)
 
 
 # --- 這幾份各自要釘住的事（manifest.json 的 why）---

@@ -419,6 +419,16 @@ _QUESTION_RE = re.compile(
 _ASK_RE = re.compile(
     r"詢問|追問|請教|請問|提問|質疑|質問|質詢|反問|想知道|想了解|問(?!題)|是否|能否|可否|有沒有|是不是|對不對|"
     r"如何|怎麼|怎樣|為何|為什麼|什麼|哪|多少|嗎|呢")
+# 問句字眼只代表它附近的幾個字是問句。語音辨識常常完全不加標點，一整輪講話就是一個子句，
+# 其中任何一處的「為什麼」都不能讓整輪的每個重點變成問句（實測：184 個重點有 22 個因此被丟掉）。
+# 子句超過 LONG_CLAUSE_CHARS 個字、又沒有問號時，問句字眼只算它前後 QUESTION_REACH 個字：
+# 重點的內容要落在這個範圍裡（至少 MIN_SHARED_GRAMS 個相鄰兩字組相同）才算在說那句問句。暫定值，用實際影片校正。
+LONG_CLAUSE_CHARS = 24
+QUESTION_REACH = {"lead": (4, 14), "tail": (14, 2), "mid": (8, 10)}       # 問句字眼前、後各算幾個字
+_LEADING_QUESTION_WORDS = frozenset(
+    {"請問", "請教", "想問", "為什麼", "為何", "難道", "何必", "怎麼可能", "您怎麼", "你怎麼", "怎麼看"})   # 問的內容在後面
+_TAIL_QUESTION_WORDS = frozenset({"嗎", "呢", "對吧", "是吧"})                                        # 問的內容在前面
+_QUESTION_MARKS = "？?"
 _RESTATING_RE = re.compile(
     r"[？?]|嗎|呢|是不是|對不對|對吧|是吧|是否|有沒有|"
     r"剛才|剛剛|方才|您說|你說|妳說|您提到|你提到|他說|她說|他們說|所說|意思是|也就是說|換句話說|"
@@ -660,7 +670,8 @@ def _check_point(
     if problem:
         return PointCheck(problem=_at(problem, anchor))
 
-    evidence, is_question = _evidence(anchor.text, claim)
+    evidence, is_question = _evidence(
+        anchor.text, claim, strict_question=_repeats_number_just_said(anchor, claim, earlier))
     problem = _reported_speech_problem(text, raw.quote, anchor.text) or _polarity_flip_problem(
         text, f"{raw.quote} {evidence}")
     if problem:
@@ -983,6 +994,23 @@ def _echo_source(anchor: Turn, claim: frozenset[str], earlier: Sequence[Turn],
     return None
 
 
+def _repeats_number_just_said(anchor: Turn, claim: frozenset[str], earlier: Sequence[Turn]) -> bool:
+    """重點裡的數字，是不是最近幾段別人的發言（ECHO_NEAR_TURNS 段）剛說過的。
+
+    是的話，分不出這個重點是這位說話者自己的，還是他一邊複述對方剛提的數字、一邊反問（「月費2980喔 …你不怕…嗎」）：
+    問句字眼要照最嚴格的算，不管離重點多遠（_evidence 的 strict_question）。沒有的話，內容是這位說話者自己的，
+    問句字眼要落在重點附近才算（QUESTION_REACH）。
+
+    只看數字：普通的詞（高地、自來水）幾乎每一段討論都會互相重複，拿它們比對會把一般的回答也當成複述。
+    不用數字以外的特徵，是因為其他種複述有 _echo_source 在擋。
+    """
+    numbers = {gram for gram in claim if any(ch.isdigit() for ch in gram)}
+    if not numbers:
+        return False
+    others = [t for t in reversed(earlier) if t.speaker != anchor.speaker][:ECHO_NEAR_TURNS]
+    return any(numbers & _grams(t.text) for t in others)
+
+
 def _carrier_region(text: str, claim: frozenset[str], quote: object = None) -> str:
     """這段話裡帶著重點的那一小段：和重點共用的字最多的那個子句，加上它前面緊接著的兩個子句（「您剛才提到，」這類引言）。
 
@@ -1211,12 +1239,13 @@ def _answer_problem(polarity: str, text: str, claim: frozenset[str], context: Se
 # --- 證據與引文 ---
 
 
-def _evidence(turn_text: str, claim: frozenset[str]) -> tuple[str, bool]:
+def _evidence(turn_text: str, claim: frozenset[str], strict_question: bool = False) -> tuple[str, bool]:
     """被引用的那段話裡最貼近重點的原文（<= 80 字），以及重點是不是在說一句問句。
 
     「是不是問句」只看帶著重點的句子（和重點共用字的數量不到最多的那句一半的不算）：整段對談裡的一句
     反問（「這樣公平嗎？」）不能讓同一段話裡其他陳述被當成問句。這個判斷只會把「是問句」改成「不是」，
-    不會反過來。
+    不會反過來。strict_question 是真的就不看問句字眼離重點多遠（沒有標點的長話裡，字眼在別處也算）；
+    重點可能是複述別人剛說的事時用，見 _repeats_number_just_said。
     """
     flat = " ".join(turn_text.split())
     clauses = [(body, punct) for body, punct in _CLAUSE_RE.findall(flat) if body.strip()]
@@ -1231,16 +1260,37 @@ def _evidence(turn_text: str, claim: frozenset[str]) -> tuple[str, bool]:
     evidence = _clip(span.strip().rstrip(_TRAILING_PUNCT), MAX_EVIDENCE_CHARS)
     if not _QUESTION_RE.search(span):
         return evidence, False
-    return evidence, _carries_question(clauses, scores)
+    return evidence, _carries_question(clauses, scores, None if strict_question else claim)
 
 
-def _carries_question(clauses: Sequence[tuple[str, str]], scores: Sequence[int]) -> bool:
-    """帶著重點的句子裡有沒有問句（和重點共用字的數量不到最多那句一半的句子不算）。"""
+def _carries_question(clauses: Sequence[tuple[str, str]], scores: Sequence[int],
+                      claim: frozenset[str] | None = None) -> bool:
+    """帶著重點的句子裡有沒有問句（和重點共用字的數量不到最多那句一半的句子不算）。
+    claim 是重點的特徵；沒給（None）就是每個問句字眼都算，和以前一樣。"""
     best = max(scores)
     if best <= 0:                                       # 沒有任何一句和重點共用字：照舊看整段
         return True
     carriers = [i for i, s in enumerate(scores) if s * 2 >= best]
-    return any(_QUESTION_RE.search(clauses[i][0] + clauses[i][1]) for i in carriers)
+    return any(_is_question_clause(*clauses[i], claim) for i in carriers)
+
+
+def _is_question_clause(body: str, punct: str, claim: frozenset[str] | None) -> bool:
+    """這個子句是不是問句。短的子句、或結尾真的有問號：有問句字眼就是（和以前一樣）；
+    很長又沒有問號的子句（沒有標點的一整輪講話）：重點的內容要落在某個問句字眼附近才是。"""
+    if not _QUESTION_RE.search(body + punct):
+        return False
+    if claim is None or len(body.strip()) <= LONG_CLAUSE_CHARS or any(mark in punct for mark in _QUESTION_MARKS):
+        return True
+    return any(_asks_about(body, match, claim) for match in _QUESTION_RE.finditer(body))
+
+
+def _asks_about(body: str, match: re.Match[str], claim: frozenset[str]) -> bool:
+    """重點的內容有沒有落在這個問句字眼附近（前後各 QUESTION_REACH 個字，依字眼是開頭型、結尾型還是中間型）。"""
+    word = match.group(0)
+    kind = "lead" if word in _LEADING_QUESTION_WORDS else "tail" if word in _TAIL_QUESTION_WORDS else "mid"
+    before, after = QUESTION_REACH[kind]
+    nearby = body[max(0, match.start() - before):match.end() + after]
+    return len(claim & _grams(nearby)) >= MIN_SHARED_GRAMS
 
 
 def _join(clauses: Sequence[tuple[str, str]], low: int, high: int) -> str:
