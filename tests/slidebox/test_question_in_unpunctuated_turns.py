@@ -101,6 +101,25 @@ def test_a_point_that_shares_nothing_with_the_turn_still_looks_at_the_whole_turn
     assert is_question(f"{FILLER}為什麼{FILLER}", "預算增加兩成") is True                    # 沒有任何子句共用字：照舊看整段
 
 
+def test_a_clause_of_exactly_the_short_limit_is_still_a_short_clause():
+    """攔的 bug：門檻差一個字（剛好 LONG_CLAUSE_CHARS 個字的子句被當成「很長」）。
+    重點的內容在「為什麼」往後的範圍之外，兩段話只差一個字：24 個字照舊整段看（是問句），25 個字才只看附近（不是）。"""
+    at_limit = "為什麼" + FILLER[:c.LONG_CLAUSE_CHARS - 10] + "預算增加了兩成"
+    one_more = "為什麼" + FILLER[:c.LONG_CLAUSE_CHARS - 9] + "預算增加了兩成"
+
+    assert (len(at_limit), len(one_more)) == (c.LONG_CLAUSE_CHARS, c.LONG_CLAUSE_CHARS + 1)
+    assert is_question(at_limit, "預算增加兩成") is True
+    assert is_question(one_more, "預算增加兩成") is False
+
+
+def test_one_question_word_next_to_the_point_is_enough_when_another_one_is_far_from_it():
+    """攔的 bug：要每一個問句字眼都靠近重點才算（all 而不是 any）：開頭那個「嗎」離重點很遠，結尾的「為什麼」就在重點旁邊。"""
+    point = "追究過去為什麼沒有人做這件事"
+
+    assert is_question(EX3_TURN, point) is True                                  # 只有結尾那個字眼：算
+    assert is_question("你覺得這樣可以嗎" + EX3_TURN, point) is True               # 前面多一個離得遠的：還是算
+
+
 # --- 經過整個檢查 ---
 
 
@@ -133,10 +152,14 @@ RESTATE_QUOTE = "月費2980喔 比標準版的4800便宜快四成"
 UNRELATED = ("S1", "好 那今天先討論到這裡 大家有什麼想補充的 山水花草鳥魚蟲獸石海雨雪雲風雷電星月光影")
 
 
-def restated(*before):
-    turns, good = with_anchors(*before, RESTATE_TURN)
-    extra, result = run(RawPoint(len(before), RESTATE_POINT, (), RESTATE_QUOTE), turns=turns, speakers=TWO, good=good)
+def restated_in(turn_line, point, quote, *before):
+    turns, good = with_anchors(*before, turn_line)
+    extra, result = run(RawPoint(len(before), point, (), quote), turns=turns, speakers=TWO, good=good)
     return extra, result
+
+
+def restated(*before):
+    return restated_in(RESTATE_TURN, RESTATE_POINT, RESTATE_QUOTE, *before)
 
 
 def test_the_restating_turn_is_a_long_clause_with_a_question_far_from_the_point():
@@ -196,3 +219,19 @@ def test_words_the_other_speaker_shares_with_the_point_are_not_an_echo_only_numb
 def test_a_different_number_is_not_an_echo():
     extra, result = restated(("S1", "我覺得要出一個便宜的輕量版 月費3980 這樣可以把小店拉進來"))
     assert [p.text for p in extra] == [RESTATE_POINT]
+
+
+def test_a_number_with_letters_the_other_speaker_just_said_counts_too():
+    """攔的 bug：只算「整個字組都是數字」的（2980），「5G」「4K」這種數字夾著字母的就算不出來。"""
+    proposal = ("S1", "我覺得要出一個便宜的輕量版 搭配5G方案 這樣可以把小店拉進來")
+    turn = ("S2", "搭配5G方案喔 比標準版的便宜很多 你不怕大客戶全部跳過來嗎 這個我真的有點擔心 一旦跳過來我們收入反而會掉")
+    point, quote = "指出搭配5G方案比標準版便宜很多", "搭配5G方案喔 比標準版的便宜很多"
+    shared = c._grams(proposal[1]) & c._grams(point)
+
+    assert "5g" in shared and not any(gram.isdigit() for gram in shared)           # 共用的數字是「5g」，不是純數字
+    assert len(turn[1]) > c.LONG_CLAUSE_CHARS and is_question(turn[1], point) is False   # 光看這一輪：問句問的是別的事
+
+    extra, result = restated_in(turn, point, quote, proposal)
+    assert extra == [] and dict(result.dropped_by_code).get(c.QUESTION_STATED_AS_FACT) == 1
+    extra, result = restated_in(turn, point, quote, UNRELATED)
+    assert [p.text for p in extra] == [point]
