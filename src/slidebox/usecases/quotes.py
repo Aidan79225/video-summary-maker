@@ -9,6 +9,10 @@
 依序出現在「同一輪」裡：模型常把中間的語助詞或贅詞跳過，這樣不算錯；但接了兩輪的話、改了字、
 倒過來的順序都不行。
 
+唯一的例外是照抄得差不多的引文：同音字、數字寫法、多一個「也」這種只差幾個字的，且整份逐字稿裡只有一輪（不論
+是誰）和它這麼接近，就用那一輪，並且改用逐字稿的原文（excerpt）往下檢查與顯示，不用模型寫的字。容許的字數很少
+（每 TOLERATED_EDIT_CHARS 個字 1 個、最多 TOLERATED_EDITS_MAX 個）；一字不差的永遠優先。
+
 改用原話（literal_span／rescue 的條件）：模型的改寫對不上那一輪時，如果引文本身是那一輪裡「連續」的
 一段，就顯示那一段原話（取自逐字稿，不是模型寫的字）。這裡放的是不依賴詞彙表的部分：連續的位置、
 複述（對方說的話被當成自己的主張）的判斷、「你剛才說…」這種開頭。
@@ -28,6 +32,11 @@ MIN_QUOTE_CHARS = 8                 # 引文（忽略標點空白）至少幾個
 QUOTE_MIN_FRAGMENT = 2              # 比這短的片段（單字的語助詞）不算
 QUOTE_MIN_LONGEST = 5               # 至少要有一個這麼長的片段，才足以認出是哪一輪
 MAX_RESCUED_QUOTE_CHARS = 100       # 改用原話時，顯示的原話最長幾個字（連標點；要小於 MAX_POINT_CHARS）
+# 照抄得差不多的引文：每 TOLERATED_EDIT_CHARS 個字容許 1 個字不同（換、多、少各算一個），最多 TOLERATED_EDITS_MAX 個。
+# 比對的成本和 quote 長度成正比，所以超過 MAX_TOLERANT_QUOTE_CHARS 個字的 quote 不比。暫定值，用實際影片校正。
+TOLERATED_EDIT_CHARS = 10
+TOLERATED_EDITS_MAX = 3
+MAX_TOLERANT_QUOTE_CHARS = 200
 
 _FRAGMENT_SPLIT_RE = re.compile(r"[\s，,。.；;：:！!？?、…—\-]+")
 
@@ -63,10 +72,16 @@ QUOTE_AMBIGUOUS = "ambiguous"               # 好幾輪都有
 @dataclass(frozen=True)
 class QuoteLocation:
     """locate_quote 的結果：turn 是真正有這段引文的那一輪；找不到時 turn 是 None、problem 說明原因，
-    kind 是原因的分類（QUOTE_*，給診斷用；找到了就是 None）。"""
+    kind 是原因的分類（QUOTE_*，給診斷用；找到了就是 None）。
+
+    引文是容許了幾個字不同才找到的：excerpt 是那一輪裡對上的逐字稿原文（往下一律用它，不用模型寫的字）、
+    edits 是差幾個字。一字不差找到的 excerpt 是 None、edits 是 0。
+    """
     turn: Turn | None
     problem: str | None = None
     kind: str | None = None
+    excerpt: str | None = None
+    edits: int = 0
 
 
 def _shown(quote: object, limit: int = 24) -> str:
@@ -75,11 +90,14 @@ def _shown(quote: object, limit: int = 24) -> str:
 
 
 def locate_quote(
-    quote: object, cited: Turn, in_window: Sequence[Turn], citable: frozenset[str],
+    quote: object, cited: Turn, in_window: Sequence[Turn], citable: frozenset[str], tolerant: bool = True,
 ) -> QuoteLocation:
     """找出真正有這段引文的那一輪（只看可以引用的說話者）。
 
     - 引文的片段要全部依序出現在同一輪裡。
+    - 沒有任何一輪一字不差時，才看「照抄得差不多」：整段引文最多差 tolerated_edits 個字就是逐字稿裡連續的
+      一段，而且全部的輪（不論說話者）只有一輪這麼接近，那一輪是可以引用的說話者，就用它（見 _near_verbatim）。
+      tolerant 是 False 就不看（診斷要分析「為什麼不是一字不差」，見 quote_misses）。
     - 引文太短（片段合計不到 MIN_QUOTE_CHARS，除非剛好是整輪）、或只由很短的片段拼成（最長的片段
       不到 QUOTE_MIN_LONGEST），都不足以認出是哪一輪。
     - 模型引用的那一輪（cited）有就用它；它沒有、剛好只有一個別輪有，就用那一輪
@@ -95,6 +113,9 @@ def locate_quote(
         return QuoteLocation(None, "quote 是空的；每個重點都要先從逐字稿照抄一小段原文放進 quote", QUOTE_EMPTY)
     holders = [t for t in in_window if t.speaker in citable and _holds(squash(t.text), pieces)]
     if not holders:
+        near = _near_verbatim(str(quote), in_window, citable) if tolerant else None     # 有 pieces 就一定是字串
+        if near is not None:
+            return near
         return QuoteLocation(None, (
             f"quote「{_shown(quote)}」不是 T{cited.index} 或任何一輪發言裡連續照抄的原文"
             f"（可能把兩輪接在一起、改了字或跳過了子句）；請只從單一輪發言照抄一小段"), QUOTE_NOT_FOUND)
@@ -114,6 +135,66 @@ def locate_quote(
     return QuoteLocation(None, (
         f"quote「{_shown(quote)}」在好幾輪發言裡都有，無法確定是哪一輪；請抄一段更長、只出現在一輪的原文"),
         QUOTE_AMBIGUOUS)
+
+
+# --- 照抄得差不多的引文 ---
+
+
+def tolerated_edits(length: int) -> int:
+    """長度 length（忽略標點空白）的引文，最多可以和逐字稿差幾個字。"""
+    return min(TOLERATED_EDITS_MAX, max(0, length) // TOLERATED_EDIT_CHARS)
+
+
+def _near_verbatim(quote: str, in_window: Sequence[Turn], citable: frozenset[str]) -> QuoteLocation | None:
+    """引文和哪一輪只差幾個字：全部的輪裡只有一輪這麼接近、而且那一輪可以引用才算；否則 None。
+
+    不論說話者都比：其他聲音的輪（不能引用）一樣接近，就分不出是誰說的，不能挑可以引用的那一個。
+    找到的話回傳逐字稿的原文，不是模型寫的字。
+    """
+    whole = squash(quote)
+    limit = tolerated_edits(len(whole))
+    if limit < 1 or len(whole) > MAX_TOLERANT_QUOTE_CHARS:
+        return None
+    matches = [(t, close) for t in in_window if (close := _close_excerpt(whole, t.text, limit)) is not None]
+    if len(matches) != 1 or matches[0][0].speaker not in citable:
+        return None
+    holder, (edits, span) = matches[0]
+    return QuoteLocation(holder, excerpt=span.text, edits=edits)
+
+
+def _close_excerpt(whole: str, turn_text: str, limit: int) -> tuple[int, QuoteSpan] | None:
+    """whole（squash 過的引文）最多改 limit 個字就會變成這一輪裡連續的一段：回傳（改幾個字, 那一段的位置）。"""
+    flat = " ".join(turn_text.split())
+    squashed, positions = squash_positions(flat)
+    if squashed != squash(flat):                      # 位置對不上（組合字之類少見的狀況）：不比
+        return None
+    grams = {squashed[i:i + 2] for i in range(len(squashed) - 1)}
+    shared = sum(1 for i in range(len(whole) - 1) if whole[i:i + 2] in grams)
+    if shared < len(whole) - 1 - 2 * limit:           # 改一個字最多弄壞兩個相鄰字組：對不上這麼多就不可能在 limit 之內
+        return None
+    edits, begin, end = _align(whole, squashed)
+    if edits > limit or end <= begin:
+        return None
+    return edits, QuoteSpan(flat, positions[begin], positions[end - 1] + 1)
+
+
+def _align(quote: str, text: str) -> tuple[int, int, int]:
+    """quote 最少要改幾個字（換一個字、多一個字、少一個字各算一個），才會變成 text 裡連續的一段：
+    回傳（改幾個字, 那一段的起點, 終點（不含））。同樣少的話選長度最接近 quote 的、再選最前面的。"""
+    width = len(text)
+    cost = [0] * (width + 1)                          # 從 text 的哪裡開始都不用付出
+    begin = list(range(width + 1))
+    for row, wanted in enumerate(quote, 1):
+        new_cost, new_begin = [row], [0]
+        for column in range(1, width + 1):
+            best = min(((cost[column - 1] + (wanted != text[column - 1]), begin[column - 1]),
+                        (cost[column] + 1, begin[column]),
+                        (new_cost[column - 1] + 1, new_begin[column - 1])), key=lambda option: option[0])
+            new_cost.append(best[0])
+            new_begin.append(best[1])
+        cost, begin = new_cost, new_begin
+    end = min(range(width + 1), key=lambda column: (cost[column], abs(column - begin[column] - len(quote)), column))
+    return cost[end], begin[end], end
 
 
 # --- 原話：引文在那一輪裡的連續位置 ---
