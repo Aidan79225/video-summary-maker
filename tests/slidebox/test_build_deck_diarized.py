@@ -842,12 +842,12 @@ def test_a_diarizer_that_finds_a_different_count_than_asked_publishes_with_a_war
 # --- 歸屬不可靠而失敗時：把每一段被丟掉的原因記進進度（診斷，不改變任何判斷）---
 
 
-def unreliable_parts():
+def unreliable_parts(quote_only: bool = False):
     """第一個窗兩次都是 5 個點丟掉 3 個（兩個代名詞、一個編造的 quote），第二個窗全數通過：
-    整份 8 個點丟掉 3 個（38%），超過上限。"""
+    整份 8 個點丟掉 3 個（38%），超過上限。（安全模式：兩個沒有 quote 的點也丟掉，一樣是 3 個。）"""
     invented = RawPoint(at("現金補助"), "詢問預算的編列方式", quote="這是一句逐字稿裡根本沒有的話啊啊啊")
     window_one = (RawSlide("補助與托育", (*good_points(0, 1), bad(2), bad(3), invented)),)
-    return make(TWO_WINDOWS, conversation=FakeConversation([window_one, window_one, good_reply]))
+    return make(TWO_WINDOWS, quote_only=quote_only, conversation=FakeConversation([window_one, window_one, good_reply]))
 
 
 def failing_run(parts):
@@ -913,9 +913,26 @@ def test_a_reliable_run_has_no_diagnostics():
     assert not any("診斷" in status for status in seen)
 
 
+@pytest.mark.parametrize("safe", [False, True])
+def test_the_diagnostics_are_told_which_mode_the_run_was_in(monkeypatch, safe):
+    """攔的 bug：安全模式只顯示原話，診斷的「假設的做法」卻照普通模式重跑，會說某個點「會通過」，
+    其實安全模式不能直接顯示它。"""
+    modes = []
+
+    def spy(outcomes, speakers, quote_only=False):
+        modes.append(quote_only)
+        return "診斷"
+
+    monkeypatch.setattr("slidebox.usecases.build_deck.drop_diagnostics", spy)
+
+    failing_run(unreliable_parts(quote_only=safe))
+
+    assert modes == [safe]
+
+
 def test_diagnostics_that_break_never_hide_the_real_failure(monkeypatch):
     """診斷只是輔助：它自己出了任何錯，原本的 AttributionUnreliable 照樣往上丟，狀態裡說明沒能產生。"""
-    def boom(outcomes, speakers):
+    def boom(outcomes, speakers, quote_only=False):
         raise RuntimeError("壞掉了")
 
     monkeypatch.setattr("slidebox.usecases.build_deck.drop_diagnostics", boom)

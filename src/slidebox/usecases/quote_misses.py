@@ -58,7 +58,7 @@ def explain_quote_miss(
     一字不差卻在其他聲音的輪裡、要接起相鄰的輪才湊得齊、片段都在同一輪但順序不同；其餘看最接近的那一輪
     要改幾個字：差幾個字、一部分、幾乎沒有。
     """
-    located = locate_quote(quote, cited, in_window, citable)
+    located = locate_quote(quote, cited, in_window, citable, tolerant=False)      # 分析的是「為什麼不是一字不差」
     if located.turn is not None:
         return QuoteMiss(MISS_LOCATED, (located.turn,))
     if located.kind == QUOTE_AMBIGUOUS:

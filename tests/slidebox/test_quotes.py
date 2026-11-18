@@ -240,6 +240,9 @@ def test_the_returned_turn_always_holds_every_piece_and_belongs_to_a_citable_spe
 
         if found.turn is not None:
             assert found.turn.speaker in CITABLE
+            if found.excerpt is not None:                      # 容許了幾個字不同才找到的（test_quote_tolerance.py）
+                assert squash(found.excerpt) in squash(found.turn.text)
+                continue
             squashed = squash(found.turn.text)
             position = 0
             for piece in fragments(quote):

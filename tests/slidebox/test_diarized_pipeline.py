@@ -178,7 +178,8 @@ def test_a_module_that_is_not_a_rule_module_does_not_change_the_fingerprint(monk
     assert dp.conversation_fingerprint(SETTINGS, 6000, PLAN) == base
 
 
-@pytest.mark.parametrize("module", ["slidebox.usecases.quote_misses", "slidebox.usecases.drop_report"])
+@pytest.mark.parametrize("module", ["slidebox.usecases.quote_misses", "slidebox.usecases.drop_report",
+                                    "slidebox.usecases.drop_analysis"])
 def test_the_diagnostic_modules_are_outside_the_rules_and_editing_them_keeps_saved_summaries(monkeypatch, module):
     """攔的 bug：診斷用的分類與門檻（暫定值，要用真實影片校正）放在規則模組裡，之後每調一次門檻，
     就讓所有還沒用完的摘要存檔作廢、白白重跑一次模型。診斷只讀、不決定任何一個點的去留，不該算進指紋。"""
