@@ -77,6 +77,8 @@ CODE_ORDER = {
     ("F04_p4_debate_stitched_quote", 3, 1): ("number_mismatch", "anchor_conflict"),
     ("F10_gemma4_overlong_slide", 2, 4): ("number_mismatch", "anchor_conflict"),
     ("F10_gemma4_overlong_slide", 3, 18): ("question_stated_as_fact", "name_in_text"),
+    # 實驗室因為 quote 不是單一輪的原文丟掉；產品改用 quote 裡最長的一段找到出處，所以往下看到內容的問題（anchoring.longest_run）
+    ("F08_p4f_press_wrong_speaker_reanchor", 3, 2): ("bad_quote", "unsupported"),
 }
 # 舊提示詞的輸出裡，被引用的那一輪只有一個字（「有。」）：單字的回答不能當 quote，產品一律丟掉
 SINGLE_CHARACTER_ANSWERS = {("F01_prod_qa_official_names", 2, 6), ("F01_prod_qa_official_names", 6, 2)}

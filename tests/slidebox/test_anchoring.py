@@ -9,7 +9,9 @@ from __future__ import annotations
 import pytest
 
 from slidebox.domain.entities import RawPoint, Turn
-from slidebox.usecases.anchoring import JOIN_GAP_CHARS, join_for_quote
+from slidebox.usecases.anchoring import (
+    JOIN_GAP_CHARS, MIN_REST_CHARS, OTHER_SPEAKER_RUN_CHARS, RUN_MARGIN, RUN_MIN_CHARS, join_for_quote, longest_run,
+)
 from slidebox.usecases.diarized_pipeline import AttributionCounts, summary_line
 from slidebox.usecases.quotes import QUOTE_NOT_FOUND, locate_quote
 
@@ -105,6 +107,83 @@ def test_a_quote_too_short_to_tell_apart_is_not_merged():
     assert join_for_quote("好的知道了", turns[0], turns, CITABLE) is None
 
 
+# --- C：只取最長一段 ---
+
+LONG = "我們今年編了三千萬元的預算來補助偏鄉的托育服務"           # 逐字稿裡有的一段（23 個字）
+TAIL = "模型多寫了一段逐字稿裡沒有的話"                            # 15 個字，不在任何一輪
+
+
+def test_the_longest_run_that_one_turn_holds_is_used_and_the_transcripts_own_text_comes_back():
+    turns = [turn(0, "S1", OTHER), turn(1, "S2", f"好的，{LONG}，大家都知道。")]
+
+    run_ = longest_run(LONG + TAIL, turns[1], turns, CITABLE)
+
+    assert run_ is not None and run_.turn is turns[1] and run_.text == LONG
+
+
+def test_a_run_shorter_than_the_minimum_is_not_used():
+    short = LONG[:RUN_MIN_CHARS - 1]
+    turns = [turn(0, "S1", OTHER), turn(1, "S2", short)]
+
+    assert longest_run(short + TAIL + TAIL, turns[1], turns, CITABLE) is None
+
+
+def test_a_run_that_is_not_clearly_longer_than_the_next_best_turn_is_not_used():
+    near = LONG[:len(LONG) - RUN_MARGIN + 1]                       # 比最長的一段只短 RUN_MARGIN - 1 個字
+    turns = [turn(0, "S2", LONG), turn(1, "S2", near + "，其他的話")]
+
+    assert longest_run(LONG + TAIL, turns[0], turns, CITABLE) is None
+
+
+def test_a_run_clearly_longer_than_the_next_best_turn_is_used():
+    shorter = LONG[:len(LONG) - RUN_MARGIN]
+    turns = [turn(0, "S2", LONG), turn(1, "S2", shorter + "，其他的話")]
+
+    run_ = longest_run(LONG + TAIL, turns[0], turns, CITABLE)
+
+    assert run_ is not None and run_.turn is turns[0]
+
+
+def test_a_run_in_a_turn_nobody_may_be_cited_for_is_not_used():
+    turns = [turn(0, "S1", OTHER), turn(1, "X", LONG)]
+
+    assert longest_run(LONG + TAIL, turns[0], turns, CITABLE) is None
+
+
+def test_the_cited_turn_must_be_the_same_speaker_as_the_run():
+    turns = [turn(0, "S1", OTHER), turn(1, "S2", LONG)]
+
+    assert longest_run(LONG + TAIL, turns[0], turns, CITABLE) is None
+
+
+def test_a_rest_that_matches_another_speakers_turn_means_two_peoples_words_were_stitched():
+    stitched = "另一位說的這段話在這裡"[:OTHER_SPEAKER_RUN_CHARS + 1]
+    turns = [turn(0, "S1", "對對，" + stitched), turn(1, "S2", LONG)]
+
+    assert longest_run(LONG + stitched + TAIL, turns[1], turns, CITABLE) is None
+
+
+def test_a_rest_that_also_appears_in_a_non_citable_turn_does_not_block_the_run():
+    heard = "旁邊的人也說了這句話好"
+    turns = [turn(0, "X", heard), turn(1, "S2", LONG)]
+
+    assert longest_run(LONG + heard + TAIL, turns[1], turns, CITABLE) is not None
+
+
+def test_a_rest_shorter_than_the_minimum_is_the_near_verbatim_rules_business_not_this_ones():
+    turns = [turn(0, "S1", OTHER), turn(1, "S2", f"前面，{LONG}，後面")]
+    rest = "。" + "多" * (MIN_REST_CHARS - 1)
+
+    assert longest_run(LONG + rest, turns[1], turns, CITABLE) is None
+    assert longest_run(LONG + "多" * MIN_REST_CHARS, turns[1], turns, CITABLE) is not None
+
+
+def test_a_quote_no_longer_than_the_minimum_run_is_not_cut_down():
+    turns = [turn(0, "S2", "我們今年編了三千萬元")]
+
+    assert longest_run("我們今年編了三千萬元", turns[0], turns, CITABLE) is None
+
+
 # --- 端到端：找到之後，往下的檢查一個都沒少 ---
 
 SAID = "我們今年編了三千萬元的預算來補助偏鄉的托育服務"
@@ -115,6 +194,19 @@ def one_point(quote, lines, cited, text="說明今年預算補助托育"):
     turns, good = with_anchors(*lines)
     extra, result = run(RawPoint(cited, text, quote=quote), turns=turns, good=good)
     return extra, result
+
+
+def test_a_quote_with_one_matching_run_keeps_the_point_and_counts_it_as_anchored():
+    extra, result = one_point(SAID + PADDING, [("S1", OTHER), ("S2", f"好的，{SAID}，大家都知道。")], 1)
+
+    assert len(extra) == 1 and result.anchored == 1
+
+
+def test_the_point_is_kept_with_the_transcripts_run_in_quote_only_mode():
+    turns, good = with_anchors(("S1", OTHER), ("S2", f"好的，{SAID}，大家都知道。"))
+    extra, result = run(RawPoint(1, "說明今年預算補助托育", quote=SAID + PADDING), turns=turns, good=good, quote_only=True)
+
+    assert [p.text for p in extra] == [f"「{SAID}」"] and result.anchored == 1
 
 
 def test_a_quote_across_two_turns_keeps_the_point_and_counts_it_as_anchored():
@@ -144,6 +236,17 @@ def test_a_question_in_the_merged_turn_is_still_a_question():
     assert not extra and "問" in problems_of(result)
 
 
+def test_a_stitched_quote_of_two_speakers_is_still_dropped():
+    extra, _ = one_point(FIRST + "，" + OTHER, [("S2", FIRST), ("S1", OTHER)], 0)
+
+    assert not extra
+
+
+@pytest.mark.parametrize("constant", [JOIN_GAP_CHARS, RUN_MIN_CHARS, RUN_MARGIN, OTHER_SPEAKER_RUN_CHARS, MIN_REST_CHARS])
+def test_the_provisional_values_are_positive_integers(constant):
+    assert isinstance(constant, int) and constant > 0
+
+
 # --- 補上變異測試找到的邊界 ---
 
 def test_noises_between_turns_add_up_across_the_whole_gap():
@@ -168,6 +271,32 @@ def test_a_turn_before_the_span_that_the_quote_does_not_need_is_left_out():
 
     assert joined is not None and (joined.first, joined.last) == (1, 2)
     assert [t.index for t in joined.window] == [0, 1]
+
+
+def test_a_run_in_the_cited_turn_that_may_not_be_cited_is_not_used():
+    turns = [turn(0, "S1", OTHER), turn(1, "X", LONG)]
+
+    assert longest_run(LONG + TAIL, turns[1], turns, CITABLE) is None
+
+
+@pytest.mark.parametrize("stitched, usable", [
+    ("甲乙丙丁戊己庚辛", False),                           # OTHER_SPEAKER_RUN_CHARS 個字：夠長，算拼接
+    ("甲乙丙丁戊己庚", True),                              # 少一個字：還算巧合
+])
+def test_a_run_of_another_speakers_words_in_the_rest_blocks_at_exactly_the_threshold(stitched, usable):
+    assert len(stitched) == OTHER_SPEAKER_RUN_CHARS - (0 if not usable else 1)
+    turns = [turn(0, "S1", stitched), turn(1, "S2", LONG)]
+
+    found = longest_run(LONG + stitched + TAIL, turns[1], turns, CITABLE)
+
+    assert (found is not None) is usable
+
+
+def test_another_speakers_words_before_the_run_block_it_too():
+    stitched = "甲乙丙丁戊己庚辛壬"
+    turns = [turn(0, "S1", stitched), turn(1, "S2", LONG)]
+
+    assert longest_run(stitched + LONG + TAIL, turns[1], turns, CITABLE) is None
 
 
 def test_a_quote_that_one_turn_already_holds_is_never_merged_with_its_neighbour():

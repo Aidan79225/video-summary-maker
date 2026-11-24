@@ -110,3 +110,4 @@ def without_anchoring(monkeypatch):
     """診斷的「再算一次」比的是「沒有保護的 C、D」會多救幾個：這幾份測試要的是產品自己救不了的點，
     所以把產品裡有保護的 C、D（anchoring）關掉，才造得出被丟掉的點。"""
     monkeypatch.setattr(c, "join_for_quote", lambda *args, **kwargs: None)
+    monkeypatch.setattr(c, "longest_run", lambda *args, **kwargs: None)

@@ -478,6 +478,7 @@ def _whatif_lines(drops: Sequence[_Drop], failures: dict[str, str]) -> list[str]
         by_c = {n for n, (_, run) in enumerate(c_runs) if run is not None and run.kept}
         by_d = {n for n, (_, run) in enumerate(d_runs) if run is not None and run.kept}
         lines.append(f"    兩種都會通過 {len(by_c & by_d)} 個；至少一種會通過 {len(by_c | by_d)} 個")
+    lines.append("    （這裡的 C、D 沒有保護；正式的檢查已經用了有保護的版本，所以會通過的是「保護擋下來的」那些，不是新增的）")
     return lines
 
 
