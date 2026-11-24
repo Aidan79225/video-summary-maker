@@ -90,7 +90,7 @@ def words_fingerprint(whisper_model: str, speech_hint: str | None, adapter: str 
 # 這一組必須涵蓋驗證規則在 usecases 底下 import 的所有模組，
 # tests/slidebox/test_diarized_pipeline.py 會比對，新增 import 卻漏列會失敗。
 RULE_MODULES = tuple(f"{__package__}.{name}" for name in (
-    "code_fingerprint", "conversation", "diarized_pipeline", "names", "numerals", "quotes", "speakers"))
+    "anchoring", "code_fingerprint", "conversation", "diarized_pipeline", "names", "numerals", "quotes", "speakers"))
 
 
 def rules_fingerprint() -> str:
@@ -148,7 +148,8 @@ class WindowOutcome:
     （和 ValidationResult 一樣，proposed − kept 是三類的和）；anchor_conflicts 是 contradicted 裡
     「內容出自別輪」的點數；dropped_by_code 是每個原因碼丟了幾個。
 
-    tolerated 是留下的點裡 quote 容許了幾個字不同才對上的點數（見 quotes.locate_quote；診斷用）。
+    tolerated 是留下的點裡 quote 容許了幾個字不同才對上的點數（見 quotes.locate_quote；診斷用）；
+    anchored 是留下的點裡 quote 靠 anchoring（合併同一位說話者的輪、或只取最長一段）找到出處的點數。
 
     dropped 是被一個一個丟掉的點的紀錄、attempts 是這個窗問了模型幾次（沒送出去的窗是 0）、adopted 是
     採用的是第幾次的結果（從 1 算；沒送出去的窗是 0）：三個都只給診斷用（歸屬不可靠而失敗時，讓人看得到
@@ -171,6 +172,7 @@ class WindowOutcome:
     attempts: int = 0
     adopted: int = 0
     tolerated: int = 0
+    anchored: int = 0
 
 
 def dropped_ratio(proposed: int, kept: int) -> float:
@@ -201,7 +203,8 @@ def fit_to_range(result: ValidationResult, max_slides: int) -> tuple[ValidationR
     return (replace(result, slides=result.slides[:max_slides],
                     proposed=result.proposed - removed, kept=result.kept - removed,
                     rescued=result.rescued - sum(s.rescued for s in cut),
-                    tolerated=result.tolerated - sum(s.tolerated for s in cut)),
+                    tolerated=result.tolerated - sum(s.tolerated for s in cut),
+                    anchored=result.anchored - sum(s.anchored for s in cut)),
             len(cut))
 
 
@@ -285,7 +288,7 @@ def summarize_windows(
             rescued=best.rescued, contradicted=best.contradicted, unverifiable=best.unverifiable,
             slide_rule=best.slide_rule, anchor_conflicts=best.anchor_conflicts,
             dropped_by_code=best.dropped_by_code, dropped=best.dropped, attempts=asked, adopted=adopted,
-            tolerated=best.tolerated))
+            tolerated=best.tolerated, anchored=best.anchored))
     return tuple(outcomes)
 
 
@@ -306,6 +309,7 @@ class AttributionCounts:
     slide_rule: int
     anchor_conflicts: int
     tolerated: int = 0
+    anchored: int = 0
 
 
 def attribution_counts(outcomes: Sequence[WindowOutcome]) -> AttributionCounts:
@@ -313,7 +317,8 @@ def attribution_counts(outcomes: Sequence[WindowOutcome]) -> AttributionCounts:
         proposed=sum(o.proposed for o in outcomes), kept=sum(o.kept for o in outcomes),
         rescued=sum(o.rescued for o in outcomes), contradicted=sum(o.contradicted for o in outcomes),
         unverifiable=sum(o.unverifiable for o in outcomes), slide_rule=sum(o.slide_rule for o in outcomes),
-        anchor_conflicts=sum(o.anchor_conflicts for o in outcomes), tolerated=sum(o.tolerated for o in outcomes))
+        anchor_conflicts=sum(o.anchor_conflicts for o in outcomes), tolerated=sum(o.tolerated for o in outcomes),
+        anchored=sum(o.anchored for o in outcomes))
 
 
 def describe_drops(contradicted: int, unverifiable: int, slide_rule: int, anchor_conflicts: int = 0) -> str:
@@ -333,6 +338,8 @@ def summary_line(counts: AttributionCounts) -> str:
         text += f"（其中 {counts.rescued} 個直接引用原話）"
     if counts.tolerated:
         text += f"（其中 {counts.tolerated} 個的 quote 和逐字稿差了幾個字，已改用逐字稿的原文）"
+    if counts.anchored:
+        text += f"（其中 {counts.anchored} 個的 quote 太長或跨了同一位說話者的幾輪，合併那幾輪或只取對得上的那一段才找到出處）"
     dropped = counts.proposed - counts.kept
     if dropped > 0:
         text += f"；丟掉 {dropped} 個"

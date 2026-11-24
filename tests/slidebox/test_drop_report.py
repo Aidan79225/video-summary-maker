@@ -24,6 +24,11 @@ from slidebox.usecases.conversation import RESCUE_REFUSED, Allocation, DroppedPo
 from .diarized_support import FakeConversation
 from .speaker_fixtures import make_speakers, make_turns
 
+from .drop_support import without_anchoring  # noqa: F401  (pytest fixture)
+
+pytestmark = pytest.mark.usefixtures("without_anchoring")
+
+
 SPEAKERS = make_speakers("participant", "participant", "minor")          # S1、S2 主要發言者；S3 其他聲音
 
 LINES = (

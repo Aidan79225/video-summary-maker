@@ -42,6 +42,11 @@ from .drop_support import (
 )
 from .speaker_fixtures import make_turns
 
+from .drop_support import without_anchoring  # noqa: F401  (pytest fixture)
+
+pytestmark = pytest.mark.usefixtures("without_anchoring")
+
+
 SECTION = "再算一次（只是計算，沒有改變任何判斷）："
 INVENTED = RawPoint(1, C_TEXT, quote="這一句話完全是模型自己編出來的內容啊")             # 編造：C 與 D 都救不回來
 
