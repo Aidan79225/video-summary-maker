@@ -23,6 +23,7 @@ from dataclasses import dataclass, replace
 from functools import lru_cache
 
 from ..domain.entities import Point, RawPoint, RawSlide, Slide, SpeakerInfo, Turn
+from .anchoring import join_for_quote, longest_run
 from .names import detect_names
 from .numerals import PERCENT, mentions, number_problem
 from .quotes import (
@@ -33,6 +34,8 @@ from .quotes import (
     contiguous_span,
     is_restatement,
     locate_quote,
+    QUOTE_NOT_FOUND,
+    QuoteLocation,
 )
 from .speakers import FILLER_CHARS, PARTICIPANT, UNDECIDED, clock, squash
 
@@ -321,6 +324,7 @@ class PointCheck:
     note: str | None = None
     rescued: bool = False
     tolerated: bool = False
+    anchored: bool = False
 
 
 @dataclass(frozen=True)
@@ -331,6 +335,7 @@ class CheckedSlide:
     points: tuple[Point, ...]
     rescued: int = 0
     tolerated: int = 0
+    anchored: int = 0
 
 
 @dataclass(frozen=True)
@@ -357,6 +362,7 @@ class ValidationResult:
     dropped_by_code: tuple[tuple[str, int], ...] = ()
     dropped: tuple[DroppedPoint, ...] = ()
     tolerated: int = 0
+    anchored: int = 0
 
 
 # 程式用的標記與角色字眼
@@ -540,7 +546,7 @@ def validate_points(
     slides: list[CheckedSlide] = []
     proposed = 0
     for page, raw in enumerate(raw_slides, 1):
-        kept: list[tuple[Point, bool, bool]] = []                 # （點, 顯示原話, quote 容許了幾個字不同）
+        kept: list[tuple[Point, bool, bool, bool]] = []           # （點, 顯示原話, quote 容許了幾個字不同, 用 anchoring 找到出處）
         seen: set[tuple[str, str]] = set()
         for number, raw_point in enumerate(raw.points, 1):
             proposed += 1
@@ -562,7 +568,7 @@ def validate_points(
                 dropped.append(_dropped(DUPLICATE_POINT, DUPLICATE_MESSAGE, raw_point, check.point.text))
                 continue
             seen.add(key)
-            kept.append((check.point, check.rescued, check.tolerated))
+            kept.append((check.point, check.rescued, check.tolerated, check.anchored))
         if len(kept) < MIN_POINTS_PER_SLIDE:
             codes[SLIDE_TOO_SMALL] += len(kept)
             problems.append(f"第 {page} 頁只剩 {len(kept)} 個通過檢查的重點，至少要 {MIN_POINTS_PER_SLIDE} 個，整頁不用")
@@ -571,16 +577,17 @@ def validate_points(
         if len(kept) > MAX_BULLETS:                              # 多出來的點不會顯示，也不算提出過
             proposed -= len(kept) - MAX_BULLETS
             kept = kept[:MAX_BULLETS]
-        cited_text = " ".join(by_index[point.turn].text for point, _, _ in kept)
+        cited_text = " ".join(by_index[point.turn].text for point, *_ in kept)
         title_problem = _title_problem(raw.title, names, cited_text)
         if title_problem:
             problems.append(f"第 {page} 頁的標題{title_problem}，改用中性標題")
             title = f"{clock(kept[0][0].start)} 起的討論"
         else:
             title = " ".join(raw.title.split())
-        slides.append(CheckedSlide(title, tuple(point for point, _, _ in kept),
-                                   rescued=sum(1 for _, rescued, _ in kept if rescued),
-                                   tolerated=sum(1 for _, _, tolerated in kept if tolerated)))
+        slides.append(CheckedSlide(title, tuple(point for point, *_ in kept),
+                                   rescued=sum(1 for _, rescued, _, _ in kept if rescued),
+                                   tolerated=sum(1 for _, _, tolerated, _ in kept if tolerated),
+                                   anchored=sum(1 for _, _, _, anchored in kept if anchored)))
     if not raw_slides:
         problems.append("沒有提出任何一頁")
     classes: Counter[str] = Counter()
@@ -593,7 +600,8 @@ def validate_points(
         contradicted=classes[CONTRADICTED], unverifiable=classes[UNVERIFIABLE], slide_rule=classes[SLIDE_RULE],
         anchor_conflicts=codes[ANCHOR_CONFLICT],
         dropped_by_code=tuple(sorted(codes.items(), key=lambda item: (-item[1], item[0]))),
-        dropped=tuple(dropped), tolerated=sum(s.tolerated for s in slides))
+        dropped=tuple(dropped), tolerated=sum(s.tolerated for s in slides),
+        anchored=sum(s.anchored for s in slides))
 
 
 def _cap(problems: list[str]) -> tuple[str, ...]:
@@ -633,26 +641,44 @@ def _check_point(
         return PointCheck(problem=problem)
 
     located = locate_quote(raw.quote, cited, in_window, citable)
+    run = None
+    if located.turn is None and located.kind == QUOTE_NOT_FOUND:
+        joined = join_for_quote(raw.quote, cited, in_window, citable)         # D：同一位說話者被切成幾輪
+        if joined is not None:
+            merged = {i: t for i, t in by_index.items() if not joined.first < i <= joined.last}
+            merged[joined.turn.index] = joined.turn
+            check = _check_point(replace(raw, turn=joined.turn.index), merged, joined.window, citable, first, last,
+                                 names, quote_only, lead_in)
+            if check.point is None:
+                return check
+            note = f"quote 跨了同一位說話者的 T{joined.first}–T{joined.last}，已合起來核對"
+            return replace(check, anchored=True, note="；".join(n for n in (note, check.note) if n))
+        run = longest_run(raw.quote, cited, in_window, citable)                # C：只取最長的一段逐字吻合
+        if run is not None:
+            located = QuoteLocation(run.turn, excerpt=run.text)
     if located.turn is None:
         return PointCheck(problem=Problem(BAD_QUOTE, located.problem or "quote 核對不過"))
     turn = located.turn                     # 說話者從這一輪查，不從模型填的編號查
-    tolerated = located.excerpt is not None
+    tolerated = located.excerpt is not None and run is None
     if tolerated:
         problem = _tolerance_problem(raw.quote, located.excerpt, turn)
         if problem:
             return PointCheck(problem=problem)
-    quote = located.excerpt if tolerated else raw.quote       # 容許了幾個字不同：往下一律用逐字稿的原文，不用模型寫的字
+    quote = located.excerpt if located.excerpt is not None else raw.quote   # 往下一律用逐字稿的原文，不用模型寫的字
     notes = []
     if turn.index != cited.index:
         notes.append(f"引用的 T{cited.index} 沒有 quote 的原文，已改引有這段原文的 T{turn.index}")
     if tolerated:
         notes.append(f"quote 有 {located.edits} 個字和 T{turn.index} 的逐字稿不同，已改用逐字稿的原文")
+    if run is not None:
+        notes.append(f"quote 只有一段對得上 T{turn.index} 的逐字稿，已改用那一段")
     note = "；".join(notes) or None
     if quote_only:
         shown = _quote_to_show(turn, quote, names)
         if isinstance(shown, str):
             return PointCheck(problem=Problem(BAD_QUOTE, f"{QUOTE_ONLY_REFUSED}{shown}{QUOTE_ONLY_ADVICE}"))
-        return PointCheck(point=_quoted_point(turn, shown), note=note, rescued=True, tolerated=tolerated)
+        return PointCheck(point=_quoted_point(turn, shown), note=note, rescued=True, tolerated=tolerated,
+                              anchored=run is not None)
 
     claim = _grams(text)
     polarity = _answer_polarity(turn.text)
@@ -672,7 +698,8 @@ def _check_point(
         picked = _pick_anchor(turn, claim, radius, citable)
         if isinstance(picked, Problem):
             if picked.code == UNSUPPORTED:
-                return replace(_rescue_quote(turn, quote, names, note, picked), tolerated=tolerated)
+                return replace(_rescue_quote(turn, quote, names, note, picked), tolerated=tolerated,
+                               anchored=run is not None)
             return PointCheck(problem=picked)
         anchor = picked
         problem = _anchor_problem(anchor, turn)
@@ -707,7 +734,7 @@ def _check_point(
 
     point = Point(speaker=anchor.speaker, turn=anchor.index, start=anchor.start,
                   text=text, evidence=evidence)
-    return PointCheck(point=point, note=note, tolerated=tolerated)
+    return PointCheck(point=point, note=note, tolerated=tolerated, anchored=run is not None)
 
 
 def _tolerance_problem(quote: str, excerpt: str, turn: Turn) -> Problem | None:

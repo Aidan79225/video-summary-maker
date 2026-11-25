@@ -48,6 +48,11 @@ from .speaker_fixtures import make_turns
 # --- 併輪：同一位說話者相鄰的輪（中間可以夾著很短的其他聲音）---
 
 
+from .drop_support import without_anchoring  # noqa: F401  (pytest fixture)
+
+pytestmark = pytest.mark.usefixtures("without_anchoring")
+
+
 def test_adjacent_turns_of_one_speaker_become_one_turn():
     turns = make_turns(("S1", "我們今年的預算"), ("S1", "大約增加了兩成"), ("S2", "好的謝謝"))
 

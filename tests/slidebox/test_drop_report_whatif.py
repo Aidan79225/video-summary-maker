@@ -42,6 +42,11 @@ from .drop_support import (
 )
 from .speaker_fixtures import make_turns
 
+from .drop_support import without_anchoring  # noqa: F401  (pytest fixture)
+
+pytestmark = pytest.mark.usefixtures("without_anchoring")
+
+
 SECTION = "再算一次（只是計算，沒有改變任何判斷）："
 INVENTED = RawPoint(1, C_TEXT, quote="這一句話完全是模型自己編出來的內容啊")             # 編造：C 與 D 都救不回來
 
@@ -279,6 +284,7 @@ def test_the_two_alternatives_say_how_many_would_pass():
     assert (f"    D 把同一位說話者相鄰的輪併成一輪（中間夾著不超過 {analysis.JOIN_GAP_CHARS} 個字的其他聲音不算）：能算 1 個，"
             f"會通過 1 個（原本是 across_turns 1）") in lines
     assert "    兩種都會通過 0 個；至少一種會通過 2 個" in lines
+    assert any("沒有保護" in line and "正式的檢查已經用了有保護的版本" in line for line in lines)
 
 
 def test_a_point_that_would_still_be_dropped_says_for_what():

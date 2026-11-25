@@ -5,6 +5,8 @@ D_*：同一位說話者的話被 diarizer 切成相鄰的兩輪、模型的 quo
 """
 from __future__ import annotations
 
+import pytest
+
 from slidebox.domain.entities import RawPoint, RawSlide
 from slidebox.usecases import conversation as c
 from slidebox.usecases import diarized_pipeline as dp
@@ -101,3 +103,11 @@ BOTH_TURNS = make_turns(
     ("S2", "好的謝謝您的說明"),
 )
 BOTH_POINT = RawPoint(1, "優先處理淡水捷運延伸線的規劃工作", quote="優先處理淡水捷運延伸線的規劃工作預計三年內完成")
+
+
+@pytest.fixture
+def without_anchoring(monkeypatch):
+    """診斷的「再算一次」比的是「沒有保護的 C、D」會多救幾個：這幾份測試要的是產品自己救不了的點，
+    所以把產品裡有保護的 C、D（anchoring）關掉，才造得出被丟掉的點。"""
+    monkeypatch.setattr(c, "join_for_quote", lambda *args, **kwargs: None)
+    monkeypatch.setattr(c, "longest_run", lambda *args, **kwargs: None)
