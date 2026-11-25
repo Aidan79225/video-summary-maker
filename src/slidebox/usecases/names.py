@@ -35,6 +35,8 @@ _BEFORE_ASSISTANT = frozenset("協幫輔資援贊求救補有無互")        # �
 # 只有前面是「稱呼人的人在說話的樣子」（句首、標點、或請謝問對這類字）才當成「姓＋職稱」。
 _LOCAL_HEAD_TITLES = frozenset({"市長", "縣長", "區長", "里長"})
 _BEFORE_A_NAME = frozenset("的是這那請謝問向跟和與及讓給對被把將於在到從由為各本位會稱找訪邀拜見告說講叫喊")
+# 機關、政黨名字的最後一個字：民進黨主席、教育部部長、行政院院長——不是姓氏，是「機關＋職稱」
+_ORGANISATION_ENDINGS = frozenset("會黨部府院")
 _NICKNAME_RE = re.compile(
     r"(?:^|[\s，。！？、：「])((?:阿|小|老)[一-鿿])(?=你|您|妳|好|，|。|！|？|\s|$|大哥|大姊|哥|姐)")
 _THANKS_RE = re.compile(r"(?:謝謝|感謝|謝|請)((?:阿|小|老)[一-鿿])")
@@ -60,7 +62,7 @@ def _is_part_of_a_word(char: str, title: str, after: str) -> bool:
     after 是職稱後面緊接的那一個字（已經到結尾就是空字串）。只擋這幾種已經看到、結構也很清楚的詞；
     其餘仍然照「字＋職稱」抓（誤抓的代價是丟掉一個重點，漏抓的代價是顯示一個稱呼）。
     """
-    if char == "會":
+    if char in _ORGANISATION_ENDINGS:
         return True                                       # 代表會主席、議會議員、委員會主席：機關的名字，不是「會＋職稱」
     if title == "委員":
         return after == "會"
