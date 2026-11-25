@@ -27,6 +27,8 @@ from . import drop_analysis as analysis
 from .conversation import (
     BAD_QUOTE,
     OPAQUE_TAG,
+    NAME_IN_TEXT,
+    NUMBER_MISMATCH,
     QUESTION_STATED_AS_FACT,
     QUOTE_ONLY_ADVICE,
     QUOTE_ONLY_REFUSED,
@@ -370,7 +372,9 @@ def _counted(pairs: Sequence[tuple[str, int]]) -> str:
 
 
 def _analysis_section(drops: Sequence[_Drop], failures: dict[str, str]) -> list[str]:
-    lines = [*_splice_lines(drops, failures), *_question_lines(drops, failures), *_whatif_lines(drops, failures)]
+    lines = [*_splice_lines(drops, failures), *_question_lines(drops, failures),
+             *_quoted_word_lines(drops, NAME_IN_TEXT, "名字或稱謂被丟", "字眼"),
+             *_quoted_word_lines(drops, NUMBER_MISMATCH, "數字被丟", "數字"), *_whatif_lines(drops, failures)]
     return [_SECTION, *lines] if lines else []
 
 
@@ -432,6 +436,20 @@ def _question_lines(drops: Sequence[_Drop], failures: dict[str, str]) -> list[st
     if unexplained:
         parts.append(f"{unexplained} 個沒找到觸發的字眼（這裡的算法和檢查對不上）")
     return [head + "；".join(parts)]
+
+
+def _quoted_word_lines(drops: Sequence[_Drop], code: str, title: str, what: str) -> list[str]:
+    """某一種原因被丟的點：檢查自己說的原因裡，用「」框起來的那個字眼（名字、數字）各出現幾次。"""
+    hit = [drop for drop in drops if drop.point.code == code]
+    if not hit:
+        return []
+    words = Counter(match.group(1) for drop in hit
+                    if (match := re.search(r"「([^」]+)」", drop.point.message)))
+    parts = [f"{what} " + _counted(sorted(words.items(), key=lambda item: -item[1]))] if words else []
+    missing = len(hit) - sum(words.values())
+    if missing:
+        parts.append(f"{missing} 個原因裡沒有框起來的字眼")
+    return [f"  {title}（{code} 共 {len(hit)} 個）：" + "；".join(parts)]
 
 
 def _c_label() -> str:
