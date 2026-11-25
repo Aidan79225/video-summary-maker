@@ -151,6 +151,7 @@ class _Drop:
     splice: str = ""               # across_turns 才有：拼自哪幾輪（analysis.SPLICE_*）
     gap: int = 0                   # 其中頭尾之間夾著的其他聲音合計幾個字
     triggers: tuple[analysis.QuestionTrigger, ...] | None = None      # question_stated_as_fact 才有；None 是沒算出來
+    hints: tuple[str, ...] = ()    # triggers 是空的時候：那一輪裡的問句字眼（只給診斷看）
     whatif: _WhatIf | None = None  # 有重跑的才有
 
 
@@ -242,6 +243,8 @@ def _analysed(
                 extra["splice"], extra["gap"] = found
         if drop.point.code == QUESTION_STATED_AS_FACT and ctx is not None and drop.where is not None:
             extra["triggers"] = _guarded(failures, _QUESTION, lambda: analysis.question_cause(ctx, drop.point, drop.where))
+            if not extra["triggers"]:
+                extra["hints"] = _guarded(failures, _QUESTION, lambda: analysis.question_hints(drop.where, drop.point)) or ()
         if _rerunnable(drop) and budget > 0:
             budget -= 1
             extra["whatif"] = _whatif(drop, ctx, failures)
@@ -420,10 +423,12 @@ def _question_lines(drops: Sequence[_Drop], failures: dict[str, str]) -> list[st
     words: Counter[str] = Counter()
     forms: Counter[str] = Counter()
     unexplained = 0
+    hinted: Counter[str] = Counter()
     for drop in asked:
         found = drop.triggers or ()
         if not found:
             unexplained += 1
+            hinted.update(drop.hints)
             continue
         words.update(list(dict.fromkeys(_trigger_word(trigger.word) for trigger in found)))      # 同一個點的同一個字眼只算一次
         forms.update(list(dict.fromkeys(trigger.form for trigger in found)))
@@ -434,7 +439,8 @@ def _question_lines(drops: Sequence[_Drop], failures: dict[str, str]) -> list[st
         parts.append("觸發的字眼 " + _counted(by_count))
         parts.append("條件 " + _counted([(_FORM_TEXT.get(form, form), count) for form, count in by_form]))
     if unexplained:
-        parts.append(f"{unexplained} 個沒找到觸發的字眼（這裡的算法和檢查對不上）")
+        seen = f"；那幾輪裡有的問句字眼 {_counted(hinted.most_common())}" if hinted else ""
+        parts.append(f"{unexplained} 個沒找到觸發的字眼（這裡的算法和檢查對不上）{seen}")
     return [head + "；".join(parts)]
 
 

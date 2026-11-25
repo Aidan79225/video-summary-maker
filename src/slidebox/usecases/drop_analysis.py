@@ -204,6 +204,16 @@ def question_cause(ctx: WindowContext, point: c.DroppedPoint, anchor: Turn) -> t
     return question_triggers(anchor.text, point.text, strict)
 
 
+def question_hints(anchor: Turn, point: c.DroppedPoint) -> tuple[str, ...]:
+    """question_cause 找不到觸發字眼時（真的檢查用的重點可能是 quote、或合併過的輪）：換幾種算法再找，找不到就列出那一輪
+    所有的問句字眼。只給診斷看，不當成原因。"""
+    for text, hard in ((point.text, True), (point.quote, False), (point.quote, True)):
+        found = question_triggers(anchor.text, text, hard) if isinstance(text, str) and text else ()
+        if found:
+            return tuple(dict.fromkeys(trigger.word for trigger in found))
+    return tuple(dict.fromkeys(m.group(0) for m in c._QUESTION_RE.finditer(anchor.text)))
+
+
 # --- 最長的一段逐字吻合（C）---
 
 
