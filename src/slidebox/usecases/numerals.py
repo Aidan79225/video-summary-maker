@@ -247,6 +247,25 @@ def _label_swapped(mention: NumberMention, support: list[NumberMention]) -> str 
     return "、".join(sorted(labels))
 
 
+# 「11月28日」「5月5號」：語音辨識常把日期聽成一串數字（1128、0505）
+_DATE_RE = re.compile(r"(?<!\d)(\d{1,2})月(\d{1,2})(?:日|號)?")
+
+
+def _supported_dates(flat: str, support_text: str) -> list[tuple[int, int]]:
+    """重點裡「M月D日」的位置，而且那段話裡有同一個日期的數字寫法（1128，或 0505 這種補零的）。
+
+    只有月和日兩個數字都對得上才算：11月29日 對 1128 不算，照舊逐個數字核對、找不到就丟掉。
+    """
+    spans = []
+    for match in _DATE_RE.finditer(flat):
+        month, day = int(match.group(1)), int(match.group(2))
+        if not (1 <= month <= 12 and 1 <= day <= 31):
+            continue
+        if any(_copied_whole(spelled, support_text) for spelled in (f"{month}{day}", f"{month:02d}{day:02d}")):
+            spans.append((match.start(), match.end()))
+    return spans
+
+
 def number_problem(text: str, support_text: str) -> str | None:
     """重點 text 裡的數字有沒有哪一個在 support_text（被引用的那段話）裡找不到「同值同種類」的對應。
 
@@ -262,7 +281,10 @@ def number_problem(text: str, support_text: str) -> str | None:
     support_plain = {m.value for m in support if m.kind == PLAIN}
     support_bare = {m.value for m in support if m.kind == PLAIN and not m.unit}
     flat = _prepare(text)
+    dates = _supported_dates(flat, support_text)
     for mention in _mentions(flat):
+        if any(start <= mention.start < end for start, end in dates):
+            continue
         if mention.kind == PERCENT:
             if mention.value in support_percent or mention.value in support_bare:
                 continue

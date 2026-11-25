@@ -32,29 +32,33 @@ OTHER_SPEAKER_RUN_CHARS = 8
 MIN_REST_CHARS = 10
 
 
-def _chains(in_window: Sequence[Turn], citable: frozenset[str]) -> list[list[Turn]]:
+def _chains(in_window: Sequence[Turn], citable: frozenset[str]) -> list[tuple[list[Turn], list[list[Turn]]]]:
     """同一位說話者相鄰的輪連成一串（中間夾著的其他聲音合計不超過 JOIN_GAP_CHARS 個字就跳過）；不同的可以引用的說話者
-    永遠隔開。只回傳兩輪以上的串。"""
-    chains: list[list[Turn]] = []
+    永遠隔開。只回傳兩輪以上的串；每一串附上「每一輪前面夾著的其他聲音」（第一輪前面沒有）。"""
+    chains: list[tuple[list[Turn], list[list[Turn]]]] = []
     run: list[Turn] = []
-    pending = 0                                       # run 後面夾著的其他聲音合計幾個字
+    gaps: list[list[Turn]] = []
+    pending: list[Turn] = []                          # run 後面夾著的其他聲音
+    pending_chars = 0
 
     def flush() -> None:
-        nonlocal run, pending
+        nonlocal run, gaps, pending, pending_chars
         if len(run) >= 2:
-            chains.append(run)
-        run, pending = [], 0
+            chains.append((run, gaps))
+        run, gaps, pending, pending_chars = [], [], [], 0
 
     for turn in in_window:
         if turn.speaker in citable:
             if run and run[-1].speaker == turn.speaker:
                 run.append(turn)
-                pending = 0
+                gaps.append(pending)
+                pending, pending_chars = [], 0
                 continue
             flush()
-            run = [turn]
-        elif run and pending + len(squash(turn.text)) <= JOIN_GAP_CHARS:
-            pending += len(squash(turn.text))
+            run, gaps = [turn], [[]]
+        elif run and pending_chars + len(squash(turn.text)) <= JOIN_GAP_CHARS:
+            pending.append(turn)
+            pending_chars += len(squash(turn.text))
         else:
             flush()
     flush()
@@ -71,29 +75,39 @@ class Joined:
     last: int
 
 
+def _span(members: list[Turn], gaps: list[list[Turn]], i: int, j: int, with_gaps: bool) -> list[Turn]:
+    """members[i..j] 照順序排；with_gaps 時，中間夾著的其他聲音也照順序放進去（quote 可能就包含那一兩個字）。"""
+    out = [members[i]]
+    for k in range(i + 1, j + 1):
+        if with_gaps:
+            out.extend(gaps[k])
+        out.append(members[k])
+    return out
+
+
 def join_for_quote(quote: object, cited: Turn, in_window: Sequence[Turn], citable: frozenset[str]) -> Joined | None:
     pieces = fragments(quote)
     total = sum(len(piece) for piece in pieces)
     if not pieces or total < MIN_QUOTE_CHARS or max(len(piece) for piece in pieces) < QUOTE_MIN_LONGEST:
         return None
-    found: list[tuple[list[Turn], int, int]] = []
-    for members in _chains(in_window, citable):
+    found: dict[tuple[int, int, int], tuple[list[Turn], list[Turn]]] = {}
+    for chain_id, (members, gaps) in enumerate(_chains(in_window, citable)):
         if members[0].speaker != cited.speaker:
             continue
-        flat = [squash(t.text) for t in members]
         size = len(members)
-        for i in range(size - 1):
-            for j in range(i + 1, size):
-                if (_holds("".join(flat[i:j + 1]), pieces)
-                        and not _holds("".join(flat[i + 1:j + 1]), pieces)
-                        and not _holds("".join(flat[i:j]), pieces)):
-                    found.append((members, i, j))
-                    break                             # 再往後的 j 都不是最短的
+        for with_gaps in (False, True):                  # 先不含夾著的聲音；quote 若包含那一兩個字，再含著找
+            for i in range(size - 1):
+                for j in range(i + 1, size):
+                    def holds(a: int, b: int) -> bool:
+                        return _holds("".join(squash(t.text) for t in _span(members, gaps, a, b, with_gaps)), pieces)
+                    if holds(i, j) and not holds(i + 1, j) and not holds(i, j - 1):
+                        found.setdefault((chain_id, i, j), (members, _span(members, gaps, i, j, with_gaps)))
+                        break                             # 再往後的 j 都不是最短的
     if len(found) != 1:
         return None
-    members, i, j = found[0]
+    (_, i, j), (members, parts) = next(iter(found.items()))
     first, last = members[i], members[j]
-    merged = Turn(first.index, first.start, last.end, first.speaker, " ".join(t.text for t in members[i:j + 1]))
+    merged = Turn(first.index, first.start, last.end, first.speaker, " ".join(t.text for t in parts))
     window: list[Turn] = []
     for turn in in_window:
         if turn.index == first.index:
