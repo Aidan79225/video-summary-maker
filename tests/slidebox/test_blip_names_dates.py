@@ -67,6 +67,11 @@ def test_an_organisation_name_before_a_title_is_not_a_name(text):
     assert detect_names(text) == frozenset()
 
 
+@pytest.mark.parametrize("text", ["民進黨主席說明", "國民黨主席表示", "教育部部長答詢", "立法院院長裁示", "行政院院長宣布"])
+def test_a_party_or_ministry_name_before_a_title_is_not_a_name(text):
+    assert detect_names(text) == frozenset()
+
+
 @pytest.mark.parametrize("text, name", [("謝謝李主席的說明", "李主席"), ("請教邱教授", "邱教授")])
 def test_a_real_title_after_a_family_name_is_still_a_name(text, name):
     assert name in detect_names(text)
