@@ -10,7 +10,8 @@ import pytest
 
 from slidebox.domain.entities import RawPoint, Turn
 from slidebox.usecases.anchoring import (
-    JOIN_GAP_CHARS, MIN_REST_CHARS, OTHER_SPEAKER_RUN_CHARS, RUN_MARGIN, RUN_MIN_CHARS, join_for_quote, longest_run,
+    EDGE_REST_CHARS, JOIN_GAP_CHARS, MIN_REST_CHARS, OTHER_SPEAKER_RUN_CHARS, RUN_MARGIN, RUN_MIN_CHARS, join_for_quote,
+    longest_run,
 )
 from slidebox.usecases.diarized_pipeline import AttributionCounts, summary_line
 from slidebox.usecases.quotes import QUOTE_NOT_FOUND, locate_quote
@@ -323,3 +324,70 @@ def test_the_summary_line_says_how_many_points_were_found_by_anchoring_only_when
 
     assert "合併那幾輪" not in summary_line(AttributionCounts(**base))
     assert "其中 3 個的 quote 太長或跨了同一位說話者的幾輪" in summary_line(AttributionCounts(**base, anchored=3))
+
+
+# --- C 的頭尾：照抄得差不多、只差頭尾幾個字 ---
+
+BODY = "他呈現出來的是他對於這個花蓮市市政的熟悉他呈現出來的是他認真的把這一場政見發表會認真的把它準備完"
+
+
+def test_a_quote_with_a_few_extra_characters_at_an_edge_is_used_with_a_wider_span():
+    turns = [turn(0, "S1", OTHER), turn(1, "S1", f"因為宇文{BODY}而且在後面還有很多話")]
+
+    found = longest_run("戴宇文" + BODY + "標下來", turns[1], turns, CITABLE)
+
+    assert found is not None and found.edge and found.core == "宇文" + BODY
+    assert found.text.startswith("因為宇文") and found.text.endswith("而且在後面還")        # 頭尾各多取 EDGE_REST_CHARS 個字
+    assert len(found.text) >= len(found.core) + EDGE_REST_CHARS
+
+
+def test_the_wider_span_is_clamped_to_the_turn():
+    turns = [turn(0, "S1", OTHER), turn(1, "S1", BODY)]
+
+    found = longest_run("甲" + BODY, turns[1], turns, CITABLE)
+
+    assert found is not None and found.edge and found.text == BODY
+
+
+def test_more_than_the_edge_allowance_is_not_an_edge_run():
+    turns = [turn(0, "S1", OTHER), turn(1, "S1", BODY)]
+
+    assert longest_run("甲" * (EDGE_REST_CHARS + 1) + BODY, turns[1], turns, CITABLE) is None
+    assert longest_run("甲" * EDGE_REST_CHARS + BODY, turns[1], turns, CITABLE) is not None
+
+
+def test_a_rest_between_the_edge_allowance_and_the_minimum_is_still_refused():
+    turns = [turn(0, "S1", OTHER), turn(1, "S1", BODY)]
+
+    for size in range(EDGE_REST_CHARS + 1, MIN_REST_CHARS):
+        assert longest_run(BODY + "甲" * size, turns[1], turns, CITABLE) is None
+
+
+def one_edge_point(quote, said, text):
+    turns, good = with_anchors(("S1", OTHER), ("S1", said))
+    return run(RawPoint(1, text, quote=quote), turns=turns, good=good)
+
+
+def test_an_extra_word_at_the_end_of_a_quote_keeps_the_point_and_counts_it_as_anchored():
+    extra, result = one_edge_point("戴宇文" + BODY + "標下來", "因為宇文" + BODY + "而且還有別的話", "讚揚對市政熟悉且認真準備政見")
+
+    assert len(extra) == 1 and result.anchored == 1 and result.tolerated == 0
+
+
+def test_a_wrong_number_in_the_extra_edge_characters_still_drops_the_point():
+    extra, result = one_edge_point(BODY + "共三百萬", "因為" + BODY + "而且還有別的話", "讚揚對市政熟悉且認真準備政見")
+
+    assert not extra and "quote" in problems_of(result)
+
+
+def test_a_negation_in_the_extra_edge_characters_still_drops_the_point():
+    extra, _ = one_edge_point(BODY + "不是", "因為" + BODY + "而且還有別的話", "讚揚對市政熟悉且認真準備政見")
+
+    assert not extra
+
+
+def test_a_reported_frame_just_before_a_quote_with_a_wrong_first_character_is_still_caught():
+    said = "網友說" + BODY + "而且還有別的話"
+    extra, _ = one_edge_point("甲" + BODY, said, "讚揚對市政熟悉且認真準備政見")
+
+    assert not extra

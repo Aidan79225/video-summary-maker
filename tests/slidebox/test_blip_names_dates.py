@@ -155,3 +155,32 @@ def test_the_question_hints_fall_back_to_every_question_word_of_the_turn():
     point = DroppedPoint("question_stated_as_fact", "m", "完全不相干的 quote 內容很長", "完全不相干的重點文字", 1)
 
     assert "呢" in question_hints(anchor, point)
+
+
+# --- 第九次診斷（重放）：切在輪邊界上的職稱、「有教授」、話題的「呢」 ---
+
+def test_a_title_split_across_two_turns_is_still_part_of_the_word():
+    assert detect_names("他是江聰淵的主\n任秘書") == frozenset()
+
+
+@pytest.mark.parametrize("text", ["宜蘭市公所主任秘書", "他的主任秘書說", "沒有教授敢說", "有教授在說話"])
+def test_a_word_that_merely_ends_in_a_title_is_not_a_name(text):
+    assert detect_names(text) == frozenset()
+
+
+def test_a_topic_particle_ne_is_not_a_question():
+    from slidebox.usecases.conversation import _evidence, _grams
+    said = ("那大家一定要出門投票集中選票支持台灣民眾黨所推出來的候選人這件事情呢是最最最最最重要的事情"
+            "而且我們要一起把票投出來才行")
+    _, asked = _evidence(said, _grams("呼籲集中選票支持民眾黨候選人，視為最重要事項"))
+
+    assert asked is False
+
+
+def test_a_real_question_with_ne_is_still_a_question():
+    from slidebox.usecases.conversation import _evidence, _grams
+    said = ("那大家一定要出門投票集中選票支持台灣民眾黨所推出來的候選人你們覺得這件事情最重要的事情是什麼呢"
+            "而且我們要一起把票投出來才行")
+    _, asked = _evidence(said, _grams("呼籲集中選票支持民眾黨候選人，視為最重要事項"))
+
+    assert asked is True

@@ -23,7 +23,7 @@ from dataclasses import dataclass, replace
 from functools import lru_cache
 
 from ..domain.entities import Point, RawPoint, RawSlide, Slide, SpeakerInfo, Turn
-from .anchoring import join_for_quote, longest_run
+from .anchoring import EDGE_REST_CHARS, join_for_quote, longest_run
 from .names import detect_names
 from .numerals import PERCENT, mentions, number_problem
 from .quotes import (
@@ -441,6 +441,7 @@ _LEADING_QUESTION_WORDS = frozenset(
     {"請問", "請教", "想問", "為什麼", "為何", "難道", "何必", "怎麼可能", "您怎麼", "你怎麼", "怎麼看"})   # 問的內容在後面
 _TAIL_QUESTION_WORDS = frozenset({"嗎", "呢", "對吧", "是吧"})                                        # 問的內容在前面
 _QUESTION_MARKS = "？?"
+_TOPIC_FOLLOWERS = frozenset("是就也都才還會要有能可")       # 「呢」後面接這些字：話題的語氣詞
 _RESTATING_RE = re.compile(
     r"[？?]|嗎|呢|是不是|對不對|對吧|是吧|是否|有沒有|"
     r"剛才|剛剛|方才|您說|你說|妳說|您提到|你提到|他說|她說|他們說|所說|意思是|也就是說|換句話說|"
@@ -656,6 +657,10 @@ def _check_point(
         run = longest_run(raw.quote, cited, in_window, citable)                # C：只取最長的一段逐字吻合
         if run is not None:
             located = QuoteLocation(run.turn, excerpt=run.text)
+            if run.edge:                                                       # 只差頭尾幾個字：差的字不能是有意思的字
+                problem = _tolerance_problem(raw.quote, run.core, run.turn)
+                if problem:
+                    return PointCheck(problem=problem)
     if located.turn is None:
         return PointCheck(problem=Problem(BAD_QUOTE, located.problem or "quote 核對不過"))
     turn = located.turn                     # 說話者從這一輪查，不從模型填的編號查
@@ -717,6 +722,12 @@ def _check_point(
         anchor.text, claim, strict_question=_repeats_number_just_said(anchor, claim, earlier))
     problem = _reported_speech_problem(text, quote, anchor.text) or _polarity_flip_problem(
         text, f"{quote} {evidence}")
+    if problem is None and run is not None and run.edge:
+        # 頭幾個字可能是模型寫錯的：quote 其實是從往後 1～EDGE_REST_CHARS 個字才開始，前面的引言也要照每一種起點看一遍
+        for skip in range(1, EDGE_REST_CHARS + 1):
+            problem = _reported_speech_problem(text, quote[skip:], anchor.text)
+            if problem:
+                break
     if problem:
         return PointCheck(problem=_at(problem, anchor))
     problem = _question_problem(is_question, text)
@@ -1353,6 +1364,8 @@ def _is_question_clause(body: str, punct: str, claim: frozenset[str] | None) -> 
 def _asks_about(body: str, match: re.Match[str], claim: frozenset[str]) -> bool:
     """重點的內容有沒有落在這個問句字眼附近（前後各 QUESTION_REACH 個字，依字眼是開頭型、結尾型還是中間型）。"""
     word = match.group(0)
+    if word == "呢" and body[match.end():match.end() + 1] in _TOPIC_FOLLOWERS:
+        return False                                     # 「這件事情呢是最重要的」：話題的語氣詞，不是在問
     kind = "lead" if word in _LEADING_QUESTION_WORDS else "tail" if word in _TAIL_QUESTION_WORDS else "mid"
     before, after = QUESTION_REACH[kind]
     nearby = body[max(0, match.start() - before):match.end() + after]
