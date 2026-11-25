@@ -10,7 +10,9 @@ C（longest_run）：只取 quote 裡逐字吻合的最長一段來定位。這�
     2. 那一輪是可以引用的說話者；
     3. 模型填的輪和找到的輪是同一位說話者（它以為是誰說的，和程式找到的不能打架）；
     4. quote 沒對上的部分，不能有 OTHER_SPEAKER_RUN_CHARS 個字以上出現在別位說話者的輪裡（不同人的話拼起來的跡象）；
-    5. 沒對上的部分至少 MIN_REST_CHARS 個字：只差幾個字的 quote 歸 quotes._near_verbatim，它因為起點終點不確定而不用，這裡不能繞過。
+    5. 沒對上的部分要不是至少 MIN_REST_CHARS 個字，就是頭尾合計不超過 EDGE_REST_CHARS 個字（照抄得差不多、只差頭尾幾個字）。
+       後者的起點或終點可能差那幾個字（quotes._near_verbatim 因此不用），所以：找到的那一段往頭尾各多取 EDGE_REST_CHARS 個字（逐字稿裡的），
+       轉述字眼與前面的引言一個都不會因為差一兩個字而漏掉（頭尾各多取 EDGE_REST_CHARS 個字，比差的字數多）；而且 quote 和這一段的數字、否定、意思相反的用法要一樣（和照抄得差不多相同）。
     找到之後，往下的檢查（出處、數字、否定、問句、轉述…）一個都沒放寬，而且一律用逐字稿的那一段，不用模型寫的字。
 
 暫定值，用實際影片校正。
@@ -30,6 +32,7 @@ RUN_MIN_CHARS = 12
 RUN_MARGIN = 4
 OTHER_SPEAKER_RUN_CHARS = 8
 MIN_REST_CHARS = 10
+EDGE_REST_CHARS = 6
 
 
 def _chains(in_window: Sequence[Turn], citable: frozenset[str]) -> list[tuple[list[Turn], list[list[Turn]]]]:
@@ -119,9 +122,11 @@ def join_for_quote(quote: object, cited: Turn, in_window: Sequence[Turn], citabl
 
 @dataclass(frozen=True)
 class Run:
-    """turn 是有那一段的輪、text 是逐字稿裡的原文（連標點）。"""
+    """turn 是有那一段的輪、text 是逐字稿裡的原文（連標點）；edge 是只差頭尾幾個字的那一種（text 已經往頭尾各多取了 EDGE_REST_CHARS 個字，core 是沒多取的那一段）。"""
     turn: Turn
     text: str
+    edge: bool = False
+    core: str = ""
 
 
 def _longest(a: str, b: str) -> tuple[int, int, int]:
@@ -144,8 +149,10 @@ def longest_run(quote: object, cited: Turn, in_window: Sequence[Turn], citable: 
     size, start, at, turn = runs[0]
     if size < RUN_MIN_CHARS or turn.speaker not in citable or turn.speaker != cited.speaker:
         return None
-    if len(whole) - size < MIN_REST_CHARS:                # 只差頭尾幾個字是「照抄得差不多」的事（quotes._near_verbatim），
-        return None                                       # 它因為起點或終點不確定而不用的，這裡不能換個說法再用
+    rest_chars = len(whole) - size
+    edge = rest_chars <= EDGE_REST_CHARS
+    if not edge and rest_chars < MIN_REST_CHARS:          # 中間的 7–9 個字：既不像照抄，也不夠長到分得出是不是拼接
+        return None
     if len(runs) > 1 and runs[1][0] > size - RUN_MARGIN:
         return None
     rest = [part for part in (whole[:at], whole[at + size:]) if part]
@@ -158,4 +165,9 @@ def longest_run(quote: object, cited: Turn, in_window: Sequence[Turn], citable: 
     squashed, positions = squash_positions(flat_text)
     if squashed != squash(flat_text):                 # 位置對不上（組合字之類少見的狀況）：不用
         return None
+    core = flat_text[positions[start]:positions[start + size - 1] + 1]
+    if edge:        # 起點或終點可能差那幾個字（少寫一個字，缺的就多一個）：往頭尾各多取 EDGE_REST_CHARS 個，轉述字眼才不會漏掉
+        first = max(0, start - EDGE_REST_CHARS)
+        last = min(len(squashed) - 1, start + size - 1 + EDGE_REST_CHARS)
+        return Run(turn, flat_text[positions[first]:positions[last] + 1], edge=True, core=core)
     return Run(turn, flat_text[positions[start]:positions[start + size - 1] + 1])

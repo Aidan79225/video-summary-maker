@@ -23,14 +23,18 @@ _PERSON_TITLES = (
 _TITLED_RE = re.compile(rf"([一-鿿])({_PERSON_TITLES})")
 _ENDS_WITH_TITLE_RE = re.compile(rf"(?:{_PERSON_TITLES})$")
 # 職稱前面的這些字不是姓氏：「的教授」「這位老師」「總經理」「各位先生」…
-_NOT_A_NAME_CHAR = frozenset("的是這那個位請謝跟和與及讓給對向被把將於在到從由為各本前副總該每某老小阿一二兩三四五六七八九十")
+_NOT_A_NAME_CHAR = frozenset("的是這那個位請謝跟和與及讓給對向被把將於在到從由為各本前副總該每某老小阿一二兩三四五六七八九十有")
 # 動詞、名詞的最後一個字剛好接上職稱，也不是姓氏：看醫生、找老師、報告局長、學校老師、今天局長、覺得局長
 _ENDS_A_WORD = frozenset("看找問當做叫聘約見告天得校")
 # 「任」是姓氏（任委員），但前面接這些字就是任期的意思：前任、現任、歷任、新任、卸任、接任、擔任局長
-_TENURE_BEFORE = frozenset("前現歷繼新卸上下接出擔升兼調就改轉派")
+_TENURE_BEFORE = frozenset("前現歷繼新卸上下接出擔升兼調就改轉派主")      # 「主」：主任秘書（職稱的「任」不是姓）
 # 職稱其實是別的詞的一部分：職稱後面接這些字，就不是在稱呼人（實測：「推動委員會」被抓成「動委員」）
 _AFTER_CHANG = frozenset("期久遠度途輩假相")                   # 地區長期、城市長久、里長遠…：職稱的「長」是長短的長
 _BEFORE_ASSISTANT = frozenset("協幫輔資援贊求救補有無互")        # 協助理解、有助理解、資助理事會…：「X助」是一個詞
+# 地方首長的職稱（市長、縣長、區長、里長）前面的字，多半是地名的最後一個字（嘉義市長、花蓮縣長、宜蘭縣縣長、競選縣長）：
+# 只有前面是「稱呼人的人在說話的樣子」（句首、標點、或請謝問對這類字）才當成「姓＋職稱」。
+_LOCAL_HEAD_TITLES = frozenset({"市長", "縣長", "區長", "里長"})
+_BEFORE_A_NAME = frozenset("的是這那請謝問向跟和與及讓給對被把將於在到從由為各本位會稱找訪邀拜見告說講叫喊")
 _NICKNAME_RE = re.compile(
     r"(?:^|[\s，。！？、：「])((?:阿|小|老)[一-鿿])(?=你|您|妳|好|，|。|！|？|\s|$|大哥|大姊|哥|姐)")
 _THANKS_RE = re.compile(r"(?:謝謝|感謝|謝|請)((?:阿|小|老)[一-鿿])")
@@ -60,6 +64,8 @@ def _is_part_of_a_word(char: str, title: str, after: str) -> bool:
         return True                                       # 代表會主席、議會議員、委員會主席：機關的名字，不是「會＋職稱」
     if title == "委員":
         return after == "會"
+    if title == "主任":
+        return after == "秘"                              # 公所主任秘書、主任秘書：「所主任」不是人
     if title.endswith("長"):
         return after in _AFTER_CHANG
     if title == "助理":
@@ -67,11 +73,15 @@ def _is_part_of_a_word(char: str, title: str, after: str) -> bool:
     return False
 
 
+def _is_punct(char: str) -> bool:
+    return not char.strip() or not ("一" <= char <= "鿿" or char.isalnum())
+
+
 def detect_names(text: str) -> frozenset[str]:
     """這段逐字稿裡用來稱呼人的名字與稱謂（見模組說明）。"""
     found: set[str] = set()
     for match in _TITLED_RE.finditer(text):
-        char, before = match.group(1), text[max(0, match.start() - 1):match.start()]
+        char, before = match.group(1), text[:match.start()].rstrip()[-1:]       # 輪與輪之間的換行不算：「主」「任秘書」被切成兩輪還是主任秘書
         if _is_part_of_a_word(char, match.group(2), text[match.end():match.end() + 1]):
             continue
         if char == "告" and before == "報":
@@ -80,6 +90,10 @@ def detect_names(text: str) -> frozenset[str]:
             continue
         elif char == "任" and before in _TENURE_BEFORE:
             continue
+        elif char == "益" and before == "公":
+            continue                                          # 公益律師
+        elif match.group(2) in _LOCAL_HEAD_TITLES and before and before not in _BEFORE_A_NAME and not _is_punct(before):
+            continue                                          # 嘉義市長、宜蘭縣縣長、競選縣長：前面的字是地名或動詞的一部分
         else:
             found.add(match.group(0))
     for pattern in (_NICKNAME_RE, _THANKS_RE):

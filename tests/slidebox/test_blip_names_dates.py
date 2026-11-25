@@ -124,3 +124,63 @@ def test_the_diagnostic_says_so_when_a_reason_has_no_quoted_word():
 
 def test_nothing_is_listed_when_nothing_of_that_kind_was_dropped():
     assert _quoted_word_lines([], NAME_IN_TEXT, "名字或稱謂被丟", "字眼") == []
+
+
+# --- 名字：職稱前面的字其實是詞的一部分（第八次診斷：任秘書、益律師、縣縣長、選縣長、義市長）---
+
+@pytest.mark.parametrize("text", [
+    "我們的主任秘書說", "公益律師來了", "宜蘭縣縣長", "花蓮縣長候選人", "競選縣長", "參選縣長", "嘉義市長", "前市長",
+])
+def test_a_title_inside_a_longer_word_is_not_a_name(text):
+    assert detect_names(text) == frozenset()
+
+
+@pytest.mark.parametrize("text, name", [
+    ("請問邱市長", "邱市長"), ("李市長，你好", "李市長"), ("謝謝李縣長", "李縣長"), ("報告李區長", "李區長"),
+    ("各位好，王里長說", "王里長"), ("擔任劉秘書", "劉秘書"),
+])
+def test_a_family_name_and_a_local_head_title_said_to_a_person_is_still_a_name(text, name):
+    assert name in detect_names(text)
+
+
+def test_a_real_secretary_title_after_a_family_name_is_still_a_name():
+    assert "任秘書" in detect_names("好的，任秘書請說")
+
+
+# --- 診斷：問句字眼找不到觸發時，列出那一輪的字眼 ---
+
+def test_the_question_hints_fall_back_to_every_question_word_of_the_turn():
+    from slidebox.usecases.drop_analysis import question_hints
+    anchor = turn(1, "S1", "大家覺得怎麼樣呢" + "我們今年編了很多預算" * 10)
+    point = DroppedPoint("question_stated_as_fact", "m", "完全不相干的 quote 內容很長", "完全不相干的重點文字", 1)
+
+    assert "呢" in question_hints(anchor, point)
+
+
+# --- 第九次診斷（重放）：切在輪邊界上的職稱、「有教授」、話題的「呢」 ---
+
+def test_a_title_split_across_two_turns_is_still_part_of_the_word():
+    assert detect_names("他是江聰淵的主\n任秘書") == frozenset()
+
+
+@pytest.mark.parametrize("text", ["宜蘭市公所主任秘書", "他的主任秘書說", "沒有教授敢說", "有教授在說話"])
+def test_a_word_that_merely_ends_in_a_title_is_not_a_name(text):
+    assert detect_names(text) == frozenset()
+
+
+def test_a_topic_particle_ne_is_not_a_question():
+    from slidebox.usecases.conversation import _evidence, _grams
+    said = ("那大家一定要出門投票集中選票支持台灣民眾黨所推出來的候選人這件事情呢是最最最最最重要的事情"
+            "而且我們要一起把票投出來才行")
+    _, asked = _evidence(said, _grams("呼籲集中選票支持民眾黨候選人，視為最重要事項"))
+
+    assert asked is False
+
+
+def test_a_real_question_with_ne_is_still_a_question():
+    from slidebox.usecases.conversation import _evidence, _grams
+    said = ("那大家一定要出門投票集中選票支持台灣民眾黨所推出來的候選人你們覺得這件事情最重要的事情是什麼呢"
+            "而且我們要一起把票投出來才行")
+    _, asked = _evidence(said, _grams("呼籲集中選票支持民眾黨候選人，視為最重要事項"))
+
+    assert asked is True
